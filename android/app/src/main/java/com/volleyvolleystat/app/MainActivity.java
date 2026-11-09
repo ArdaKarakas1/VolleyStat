@@ -3,6 +3,7 @@ package com.volleyvolleystat.app;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
+import android.content.ClipData;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Color;
@@ -263,24 +264,58 @@ public final class MainActivity extends Activity {
     private void pick(boolean camera) {
         Intent intent = camera ? new Intent(MediaStore.ACTION_VIDEO_CAPTURE)
             : new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("video/*");
-        if (camera) intent.putExtra(MediaStore.EXTRA_VIDEO_QUALITY, 1);
         try {
+            if (camera) {
+                File capture = captureFile();
+                Files.createDirectories(capture.getParentFile().toPath());
+                Files.deleteIfExists(capture.toPath());
+                Uri output = CaptureFiles.getUriForFile(this, getPackageName() + ".capture", capture);
+                intent.putExtra(MediaStore.EXTRA_VIDEO_QUALITY, 1);
+                intent.putExtra(MediaStore.EXTRA_SIZE_LIMIT, MatchApi.MAX_VIDEO);
+                intent.putExtra(MediaStore.EXTRA_OUTPUT, output);
+                intent.setClipData(ClipData.newRawUri("VolleyStat video", output));
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            }
             startActivityForResult(intent, camera ? RECORD : IMPORT);
         } catch (ActivityNotFoundException error) {
             message.setText(camera ? "Kamera uygulaması bulunamadı. Video seçebilirsiniz." : "Dosya seçici bulunamadı.");
+        } catch (IOException error) {
+            message.setText("Kamera kaydı için yer ayrılamadı.");
         }
+    }
+
+    private File captureFile() {
+        return new File(getCacheDir(), "camera/" + matchId + ".mp4");
     }
 
     @Override
     protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
-        if ((request != IMPORT && request != RECORD) || result != RESULT_OK || matchId == null) return;
+        if ((request != IMPORT && request != RECORD) || matchId == null) return;
+        File capture = request == RECORD ? captureFile() : null;
+        if (result != RESULT_OK) {
+            if (capture != null) capture.delete();
+            return;
+        }
+        File destination = staged();
+        if (capture != null && capture.length() > 0) {
+            work("Kamera kaydı hazırlanıyor…", false, () -> {
+                try {
+                    if (capture.length() > MatchApi.MAX_VIDEO) throw new IOException("Video 4 GiB sınırını aşıyor.");
+                    Files.move(capture.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE,
+                        StandardCopyOption.REPLACE_EXISTING);
+                } finally {
+                    Files.deleteIfExists(capture.toPath());
+                }
+            });
+            return;
+        }
+        if (capture != null) capture.delete();
         Uri uri = data == null ? null : data.getData();
         if (uri == null) {
             message.setText("Kamera video dosyası döndürmedi. Kaydı dosyalardan seçin.");
             return;
         }
-        File destination = staged();
         work("Video telefona hazırlanıyor…", false, () -> {
             File partial = new File(destination + ".part");
             try (InputStream source = getContentResolver().openInputStream(uri);

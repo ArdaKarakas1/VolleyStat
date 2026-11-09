@@ -1,6 +1,6 @@
 # Pilot akışı
 
-Android, sistem kamerasının döndürdüğü videoyu veya sistem dosya seçicisinden alınan dosyayı uygulamanın özel dizinine kopyalar. Kopya, yükleme onaylanana kadar saklanır. Yükleme önce SHA-256 hesaplar, ardından dosyayı parçalar halinde aktarır. Bağlantı kesilirse aynı maç kimliğiyle aktarım yeniden denenebilir. Bir maçın başarıyla yüklenmiş videosu sabittir.
+Android, sistem kamerası için uygulamanın özel alanında geçici bir kayıt hedefi açar. Kamera kaydı veya sistem dosya seçicisinden alınan kopya, yükleme onaylanana kadar özel dizinde saklanır. Yükleme önce SHA-256 hesaplar, ardından dosyayı parçalar halinde aktarır. Bağlantı kesilirse aynı maç kimliğiyle aktarım yeniden denenebilir. Bir maçın başarıyla yüklenmiş videosu sabittir.
 
 `awaiting_upload → queued → analyzing → needs_review → reviewed`
 
