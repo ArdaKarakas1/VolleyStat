@@ -8,6 +8,10 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
+import android.content.res.ColorStateList;
+import android.widget.ImageView;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -44,9 +48,9 @@ import java.util.concurrent.Executors;
 public final class MainActivity extends Activity {
     private static final int IMPORT = 1;
     private static final int RECORD = 2;
-    private static final int INK = Color.rgb(17, 41, 37);
-    private static final int ACCENT = Color.rgb(0, 107, 95);
-    private static final int PAPER = Color.rgb(241, 246, 244);
+    private static final int INK = Color.rgb(22, 35, 64);
+    private static final int ACCENT = Color.rgb(158, 73, 27);
+    private static final int PAPER = Color.rgb(252, 247, 235);
     private static final int PAGE = 20;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -54,7 +58,7 @@ public final class MainActivity extends Activity {
     private final Runnable poll = () -> refresh(true);
     private SharedPreferences prefs;
     private LinearLayout root, actions, review, eventList;
-    private TextView status, message;
+    private TextView status, message, eyebrow;
     private VideoView player;
     private JSONObject snapshot;
     private String matchId, videoUrl;
@@ -87,16 +91,28 @@ public final class MainActivity extends Activity {
         root.setPadding(dp(20), dp(20), dp(20), dp(20));
         scroll.addView(root);
         setContentView(scroll);
-        label(root, "VOLEYBOL VE VELEYBOL", 12, true).setTextColor(ACCENT);
-        label(root, "VolleyStat", 36, true);
-        label(root, "Salon voleybolu · 6 × 6", 16, false);
-        status = label(root, "", 17, true);
-        status.setPadding(0, dp(18), 0, 0);
-        message = label(root, "", 14, false);
+        LinearLayout brand = new LinearLayout(this);
+        brand.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        ImageView logo = new ImageView(this);
+        logo.setImageResource(R.drawable.brand_logo);
+        logo.setContentDescription("Voleybol Ve Veleybol logosu");
+        brand.addView(logo, new LinearLayout.LayoutParams(dp(76), dp(76)));
+        LinearLayout brandText = column();
+        brandText.setPadding(dp(14), 0, 0, 0);
+        brand.addView(brandText, new LinearLayout.LayoutParams(0, -2, 1));
+        label(brandText, "VolleyStat", 30, true);
+        label(brandText, "Voleybol Ve Veleybol", 12, false);
+        root.addView(brand);
+        label(root, "SALON VOLEYBOLU  /  6 × 6", 11, true).setTextColor(ACCENT);
+        LinearLayout matchCard = card(root, Color.WHITE);
+        eyebrow = label(matchCard, "MAÇ MERKEZİ", 11, true);
+        eyebrow.setTextColor(ACCENT);
+        status = label(matchCard, "", 26, true);
+        message = label(matchCard, "", 14, false);
+        message.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
         actions = column();
-        root.addView(actions);
-        review = column();
-        root.addView(review);
+        matchCard.addView(actions);
+        review = card(root, Color.WHITE);
         buildReview();
         render();
     }
@@ -144,8 +160,45 @@ public final class MainActivity extends Activity {
         view.setTextSize(size);
         view.setTextColor(INK);
         if (strong) view.setTypeface(null, Typeface.BOLD);
+        view.setLineSpacing(dp(3), 1f);
+        view.setPadding(0, dp(4), 0, dp(6));
         parent.addView(view);
         return view;
+    }
+
+    private GradientDrawable rounded(int color, int radius) {
+        GradientDrawable shape = new GradientDrawable();
+        shape.setColor(color);
+        shape.setCornerRadius(dp(radius));
+        return shape;
+    }
+
+    private LinearLayout card(LinearLayout parent, int color) {
+        LinearLayout card = column();
+        card.setPadding(dp(18), dp(18), dp(18), dp(18));
+        card.setBackground(rounded(color, 24));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
+        params.topMargin = dp(18);
+        parent.addView(card, params);
+        return card;
+    }
+
+    private void guide(LinearLayout parent, String number, String title, String detail) {
+        LinearLayout row = new LinearLayout(this);
+        row.setPadding(0, dp(12), 0, dp(6));
+        TextView badge = new TextView(this);
+        badge.setText(number);
+        badge.setTextColor(ACCENT);
+        badge.setTextSize(15);
+        badge.setGravity(android.view.Gravity.CENTER);
+        badge.setBackground(rounded(PAPER, 12));
+        row.addView(badge, new LinearLayout.LayoutParams(dp(40), dp(40)));
+        LinearLayout copy = column();
+        copy.setPadding(dp(12), 0, 0, 0);
+        row.addView(copy, new LinearLayout.LayoutParams(0, -2, 1));
+        label(copy, title, 16, true);
+        label(copy, detail, 14, false).setTextColor(Color.rgb(83, 91, 107));
+        parent.addView(row);
     }
 
     private Button button(LinearLayout parent, String title, Runnable action) {
@@ -156,17 +209,42 @@ public final class MainActivity extends Activity {
         view.setOnClickListener(v -> {
             if (!busy) action.run();
         });
-        parent.addView(view);
+        view.setTextSize(15);
+        view.setTypeface(null, Typeface.BOLD);
+        view.setMinHeight(dp(52));
+        view.setPadding(dp(16), dp(10), dp(16), dp(10));
+        view.setTextColor(INK);
+        view.setBackgroundTintList(null);
+        view.setBackground(new RippleDrawable(ColorStateList.valueOf(0x22162340), rounded(PAPER, 14), null));
+        view.setAlpha(busy ? 0.5f : 1f);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
+        params.topMargin = dp(10);
+        parent.addView(view, params);
+        return view;
+    }
+
+    private Button primary(LinearLayout parent, String title, Runnable action) {
+        Button view = button(parent, title, action);
+        view.setTextColor(Color.WHITE);
+        view.setBackground(new RippleDrawable(ColorStateList.valueOf(0x44FFFFFF), rounded(INK, 14), null));
         return view;
     }
 
     private EditText input(LinearLayout parent, String hint, String value, boolean number) {
+        label(parent, hint, 13, true);
         EditText field = new EditText(this);
         field.setSingleLine(true);
         field.setHint(hint);
         field.setInputType(number ? InputType.TYPE_CLASS_NUMBER : InputType.TYPE_CLASS_TEXT);
         field.setText(value);
-        parent.addView(field);
+        field.setTextColor(INK);
+        field.setTextSize(16);
+        field.setMinHeight(dp(52));
+        field.setPadding(dp(12), dp(10), dp(12), dp(10));
+        field.setBackground(rounded(PAPER, 10));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
+        params.bottomMargin = dp(12);
+        parent.addView(field, params);
         return field;
     }
 
@@ -181,7 +259,7 @@ public final class MainActivity extends Activity {
         ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, values);
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         spinner.setAdapter(adapter);
-        spinner.setMinimumHeight(dp(44));
+        spinner.setMinimumHeight(dp(48));
     }
 
     private JSONObject fields(Object... pairs) throws Exception {
@@ -210,9 +288,11 @@ public final class MainActivity extends Activity {
         label(panel, "Bağlantı", 14, true);
         Spinner connection = choices(panel, new String[]{"Android emülatörü", "USB ile bağlı telefon"});
         connection.setSelection(physical ? 1 : 0);
+        ScrollView formScroll = new ScrollView(this);
+        formScroll.addView(panel);
         AlertDialog dialog = new AlertDialog.Builder(this)
             .setTitle(openExisting ? "Maçı yeniden aç" : "Yeni maç")
-            .setView(panel).setNegativeButton("Vazgeç", null).setPositiveButton("Devam", null).create();
+            .setView(formScroll).setNegativeButton("Vazgeç", null).setPositiveButton("Devam", null).create();
         dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
             String home = first.getText().toString().trim();
             String away = second == null ? "" : second.getText().toString().trim();
@@ -417,9 +497,15 @@ public final class MainActivity extends Activity {
     private void render() {
         actions.removeAllViews();
         if (matchId == null) {
-            status.setText("İlk maçını ekle");
-            button(actions, "Yeni maç", () -> newMatch(false));
+            eyebrow.setText("OYUNU BİRLİKTE OKUYALIM");
+            status.setText("Her rallide\nbir hikâye var.");
+            label(actions, "Maçını kaydet. Önemli anları incele.\nİki takımın performansını keşfet.", 16, false);
+            primary(actions, "+  Yeni maç", () -> newMatch(false));
             button(actions, "Maç kimliğiyle aç", () -> newMatch(true));
+            guide(actions, "01", "Videonu ekle", "Kamerayla kaydet veya telefonundan seç.");
+            guide(actions, "02", "Anları doğrula", "Videodaki servis, hücum ve diğer olayları işaretle.");
+            guide(actions, "03", "Performansı gör", "Doğruladığın olaylardan takım ve oyuncu istatistikleri oluşsun.");
+            label(actions, "Şu anda elle inceleme kullanılabilir. Otomatik AI analizi henüz etkin değil.", 12, false).setTextColor(ACCENT);
             renderReview(false);
             return;
         }
@@ -434,15 +520,19 @@ public final class MainActivity extends Activity {
             case "failed": detail = "Video incelemesi durdu"; break;
             default: detail = staged().isFile() ? "Video yüklemeye hazır" : "Video bekleniyor";
         }
-        status.setText(title + "\n" + detail);
+        eyebrow.setText("MAÇ MERKEZİ · " + detail);
+        status.setText(title);
+        int step = state.equals("reviewed") ? 3 : (state.equals("needs_review") ? 2 : 1);
+        label(actions, step + " / 3  ·  " + (step == 1 ? "Video ekle" : step == 2 ? "Anları doğrula" : "Performansı gör"), 14, true).setTextColor(ACCENT);
+        if (state.equals("awaiting_upload")) label(actions, "Tüm sahayı gören sabit bir açı kullan. Video hazır olduğunda yükleyip incelemeye geçebilirsin.", 14, false);
         if (state.equals("awaiting_upload")) {
             boolean locked = matchId.equals(prefs.getString("upload_id", ""));
             if (!locked) {
-                button(actions, "Kamerayla kaydet", () -> pick(true));
+                primary(actions, "Kamerayla kaydet", () -> pick(true));
                 button(actions, "Dosyalardan video seç", () -> pick(false));
             }
             if (locked || staged().isFile()) {
-                button(actions, locked ? "Yüklemeyi yeniden dene" : "Yükle ve incelemeyi başlat", this::upload);
+                primary(actions, locked ? "Yüklemeyi yeniden dene" : "Yükle ve incelemeyi başlat", this::upload);
             }
         }
         if (state.equals("failed")) {
@@ -465,6 +555,8 @@ public final class MainActivity extends Activity {
     }
 
     private void buildReview() {
+        label(review, "Video & olaylar", 22, true);
+        label(review, "Bir anı seç, olayı kaydet ve doğrula.", 14, false);
         player = new VideoView(this);
         player.setContentDescription("Maç videosu");
         review.addView(player, new LinearLayout.LayoutParams(-1, dp(200)));
@@ -506,13 +598,16 @@ public final class MainActivity extends Activity {
         if (pendingEdit) {
             button(eventList, "Bekleyen olay kaydını yeniden gönder", this::retryEdit);
         } else {
-            button(eventList, "Bu video anına olay ekle", () -> eventDialog(null));
+            primary(eventList, "+  Bu ana olay ekle", () -> eventDialog(null));
         }
         button(eventList, "İki takımın istatistikleri", () -> statistics(stats));
         if ("needs_review".equals(state()) && !pendingEdit) {
             button(eventList, "İncelemeyi tamamla", () -> command("POST", "/review/complete", null, "İnceleme tamamlanıyor…"));
         }
         label(eventList, stats.optInt("verified_events") + " doğrulanan · " + stats.optInt("pending_events") + " bekleyen", 15, true);
+        if (stats.optInt("verified_events") + stats.optInt("pending_events") == 0) {
+            label(eventList, "Henüz olay eklenmedi. Videoyu ilgili anda durdurup ilk olayı ekleyebilirsin.", 14, false);
+        }
         JSONArray events = snapshot.optJSONArray("events");
         java.util.List<JSONObject> ordered = new java.util.ArrayList<>();
         for (String filter : new String[]{"pending", "verified"}) {
@@ -529,14 +624,15 @@ public final class MainActivity extends Activity {
             String text = stamp(event.optLong("at_ms")) + " · " + team(event.optString("team")) + jersey + "\n"
                 + EventOptions.label(event.optString("kind"), event.optString("outcome"))
                 + ("pending".equals(event.optString("status")) ? " · Öneri" : " · Doğrulandı");
-            button(eventList, text, () -> {
+            LinearLayout eventCard = card(eventList, PAPER);
+            button(eventCard, text, () -> {
                 if (videoReady) {
                     player.seekTo((int) event.optLong("at_ms"));
                     player.start();
                     player.requestFocus();
                 }
             });
-            if (!pendingEdit) button(eventList, "Olayı incele", () -> eventDialog(event));
+            if (!pendingEdit) button(eventCard, "Olayı incele", () -> eventDialog(event));
         }
         if (page > 0) button(eventList, "Önceki olaylar", () -> { page--; renderReview(true); });
         if (end < ordered.size()) button(eventList, "Sonraki olaylar", () -> { page++; renderReview(true); });

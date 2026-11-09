@@ -2,7 +2,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application android:label="VolleyStat" android:theme="@style/AppTheme"
-        android:icon="@drawable/volley_icon" android:dataExtractionRules="@xml/data_extraction"
+        android:icon="@drawable/brand_logo" android:dataExtractionRules="@xml/data_extraction"
         android:allowBackup="false">
         <provider android:name=".CaptureFiles" android:authorities="${applicationId}.capture"
             android:exported="false" android:grantUriPermissions="true">
