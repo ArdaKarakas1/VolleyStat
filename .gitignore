@@ -1,0 +1,15 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.venv/
+data/
+media/
+.gradle/
+build/
+local.properties
+*.apk
+*.jks
+*.mp4
+*.mov
+*.mkv
+*.webm
