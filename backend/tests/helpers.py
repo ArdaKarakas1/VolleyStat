@@ -95,8 +95,13 @@ def wait_for_state(client, job_id, *states):
     return wait_for(lambda: (job := client.get(f"/v1/analyses/{job_id}").json())["state"] in states and job)
 
 
+def tiny_clip(make_clip):
+    """One second of test pattern at 320x180: enough for the routes, and cheap to encode."""
+    return make_clip("tiny.mp4", size="320x180")
+
+
 def ready_video(client, make_clip):
-    video = store(client, make_clip("hd.mp4"))
+    video = store(client, tiny_clip(make_clip))
     assert video["status"] == "READY"
     return video
 

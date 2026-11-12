@@ -342,7 +342,8 @@ class JobWorker:
             return _Failure("VIDEO_UNREADABLE", "The stored bytes of this video are missing")
         media_info = json.loads(run.video["media_json"])
         try:
-            proposals = analyzer.analyze(path, media_info, self._reporter(run))
+            # list(): an analyzer written as a generator only runs, and only fails, while it is consumed.
+            proposals = list(analyzer.analyze(path, media_info, self._reporter(run)))
         except Exception as error:
             if run.halted:
                 return run.halted

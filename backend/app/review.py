@@ -222,10 +222,13 @@ def router(connect) -> APIRouter:
             card = find_card(db, card_id)
             _check_version(card, payload.expectedVersion)
             if card["status"] == "OPEN":
+                # Nothing to undo: no version bump, no revision bump and no audit row.
                 job = find_job(db, card["job_id"])
-                return {"decisionId": None, "card": card_payload(card, is_mock(job)),
-                        "job": job_payload(db, job), "reportRevision": job["revision"]}
-            return _change(db, card, None, "REOPEN", None)
+                return {"card": card_payload(card, is_mock(job)), "job": job_payload(db, job), "reportRevision": job["revision"]}
+            response = _change(db, card, None, "REOPEN", None)
+            # The reopen is recorded in the audit table, but the contract returns no decisionId for it.
+            del response["decisionId"]
+            return response
 
     @api.get("/v1/matches/{match_id}/report")
     def match_report(match_id: str):

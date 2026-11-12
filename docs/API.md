@@ -1,9 +1,11 @@
-# Yerel geliştirme API'si (v0.3)
+# Yerel geliştirme API'si (v0.4)
 
 **Kök:** `http://127.0.0.1:8000/v1`. Android emülatöründen `http://10.0.2.2:8000/v1`.
 **Kapsam:** Yalnızca yerel geliştirme. Hesap sistemi ve TLS yoktur.
 
 Makinece okunur sözleşme: [openapi-local-dev.json](openapi-local-dev.json). Dosya `create_app().openapi()` çıktısıdır.
+
+Sürüm 0.4 analiz işlerini, rallileri, inceleme kartlarını, kanıt videosunu ve maç raporunu ekler. Bu uçların sözleşmesi [API_V1.md](API_V1.md) belgesindedir. Bu belge maç, yükleme ve video uçlarını anlatır.
 
 | Uç | Görev | Başarı | Hatalar |
 |---|---|---|---|
@@ -18,8 +20,8 @@ Makinece okunur sözleşme: [openapi-local-dev.json](openapi-local-dev.json). Do
 | `GET /videos/{id}` | Video durumu, hash ve kalite raporu | 200 | 404 |
 | `GET /videos/{id}/quality` | Yalnız kalite raporu | 200 | 404 |
 | `POST /videos/{id}/quality` | Doğrulanamamış videonun dosya kontrolünü yeniden çalıştırır | 200 | 404, 409 |
-| `DELETE /videos/{id}` | Videoyu ve kaydını siler | 204 | 404 |
-| `POST /videos/{id}/analyses` | Model olmadığını bildirir | **503** | 404, 409 |
+| `DELETE /videos/{id}` | Videoyu, kaydını ve o videonun analiz işlerini siler | 204 | 404 |
+| `POST /videos/{id}/analyses` | Analiz işi açar. Analizör seçili değilse bunu bildirir | 202 | 404, 409, **503** |
 
 ## Yükleme
 
@@ -78,7 +80,8 @@ Uyarılar videoyu reddetmez, daha düşük bir kalite katmanına koyar: `LOW_RES
 `POST /videos/{id}/analyses`:
 
 - Video `READY` değilse `409 VIDEO_NOT_READY`.
-- Video `READY` ise `503 MODEL_NOT_CONFIGURED`. Model yoktur ve sunucu tahmin üretmez.
+- Sunucuda analizör seçili değilse `503 MODEL_NOT_CONFIGURED`. Sunucu bu durumda tahmin üretmez. Varsayılan durum budur.
+- Analizör seçiliyse sunucu bir analiz işi açar. İşin durumları, inceleme kartları ve rapor [API_V1.md](API_V1.md) belgesindedir.
 
 ## Hata biçimi
 
@@ -93,5 +96,5 @@ Bütün hatalar bu zarfla döner. Tanımsız adres `NOT_FOUND`, yanlış yöntem
 - Tek süreç, tek bilgisayar. Eşzamanlı çok süreçli kullanım desteklenmez.
 - Terk edilen yüklemeler kendiliğinden silinmez. İstemci `DELETE /uploads/{id}` çağırır.
 - Dosya kontrolü videonun tamamını çözmez. Ortasındaki bozuk kareleri yakalamaz.
-- İndirme ve klip sunma ucu yoktur.
-- Nihai ürün sözleşmesi (`/api/v1/videos`, analiz işleri, inceleme kartları, rapor) bundan geniştir. Fark [GAP_ANALYSIS.md](GAP_ANALYSIS.md) içindedir.
+- Sunucu klip kesmez. `GET /videos/{id}/content` videonun tamamını `Range` desteğiyle sunar ve istemci klip aralığını kendisi oynatır.
+- Nihai ürün sözleşmesi bundan geniştir. Fark [GAP_ANALYSIS.md](GAP_ANALYSIS.md) içindedir.

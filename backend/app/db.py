@@ -92,6 +92,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS review_decisions_idempotency
 CREATE INDEX IF NOT EXISTS review_decisions_job ON review_decisions(job_id);
 CREATE TRIGGER IF NOT EXISTS review_decisions_append_only BEFORE UPDATE ON review_decisions
 BEGIN SELECT RAISE(ABORT, 'review_decisions is append-only'); END;
+-- Rows leave only together with their job (deleted video). The cascade runs after the job row is
+-- gone, so the WHEN clause lets it through and stops every other DELETE.
+CREATE TRIGGER IF NOT EXISTS review_decisions_keep_rows BEFORE DELETE ON review_decisions
+WHEN EXISTS (SELECT 1 FROM analysis_jobs WHERE id = OLD.job_id)
+BEGIN SELECT RAISE(ABORT, 'review_decisions is append-only'); END;
 """
 
 # Storage folders created by earlier previews lack the newer columns.
