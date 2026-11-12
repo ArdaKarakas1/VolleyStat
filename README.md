@@ -1,49 +1,71 @@
 # VolleyStat
 
-**Voleybol Ve Veleybol** · Amatör salon voleybolu için Android öncelikli 6 × 6 maç istatistiği.
+**Voleybol Ve Veleybol** · Amatör kapalı saha 6 × 6 voleybol maçları için Android uygulaması.
 
-İlk yerel pilot, kamera veya dosyadan alınan videoyu yükler ve otomatik olarak inceleme kuyruğuna alır. Arka uç videonun süresini ve görüntü bilgilerini okur. Bu sürümde model bağlı olmadığı için uygulama **Elle doğrulama** modunu gösterir. Maç olayları, video konumu ve iki takımdan biriyle kaydedilir. Oyuncu istatistiği için forma numarası eklenebilir.
+Hedef: Kullanıcı maçı telefonla kaydeder ya da galeriden seçer. Sunucu videoyu analiz eder ve iki takımın istatistiklerini çıkarır. Kullanıcı yalnızca modelin emin olamadığı anları doğrular.
 
-## Yerel kurulum
+Bu depo yalnızca Android uygulamasını ve onun arka ucunu içerir. Web sitesi ayrı bir depodadır (`voleybolveveleybol`) ve bu projeyle kod paylaşmaz.
 
-1. Python 3.9+, FFmpeg/FFprobe, Android Studio ve Android SDK 36 kurun. Arka uç ek Python paketi gerektirmez.
-2. Depo kökünde arka ucu başlatın.
+## Bugünkü durum (sürüm 0.2.0)
 
-   ```sh
-   python3 -m backend.server
-   ```
+| Parça | Durum |
+| --- | --- |
+| Video yükleme API'si (parçalı, kaldığı yerden devam, SHA-256) | Çalışıyor, testli |
+| Video dosya doğrulaması (ffprobe) | Çalışıyor, sentetik kliplerle testli |
+| Kotlin kural çekirdeği (set bitişi, servis sırası, skor) | Çalışıyor, testli |
+| Android uygulaması | Tek ekran: takım adları, video seçme ya da kaydetme, yükleme, dosya kontrol sonucu |
+| Yapay zekâ modeli | **Yok.** Analiz isteği `503 MODEL_NOT_CONFIGURED` döner. Uygulama istatistik üretmez. |
+| Hesap sistemi, HTTPS, bulut | Yok. Sunucu yalnızca geliştirme bilgisayarında çalışır. |
 
-3. Android Studio ile `android/` klasörünü açın. Gradle JDK olarak JDK 17 veya Gradle 8.13'ün desteklediği bir JDK seçin. `app` modülünün **debug** sürümünü çalıştırın.
-4. Uygulamada **Yeni maç** ile takım adlarını girin. Android emülatörü için bağlantı seçimini değiştirmeyin. USB ile bağlı telefonda önce `adb reverse tcp:8080 tcp:8080` çalıştırıp **USB ile bağlı telefon** seçeneğini kullanın.
-5. **Kamerayla kaydet** veya **Dosyalardan video seç** ile bir klip ekleyin. Ardından **Yükle ve incelemeyi başlat** seçeneğini kullanın. Pilot için H.264 MP4 tercih edin. Yükleme sınırı 4 GiB ve inceleme sınırı 12 saattir.
-6. Videoyu oynatın, bir konuma gidin ve **Bu video anına olay ekle** ile etiketleyin. Bir olayın zaman etiketine dokununca video o noktadan oynar. **Olayı incele** ile kaydı düzeltin veya çıkarın. Skor için her rallide bir **Ralli sayısı** kaydı girin. **İki takımın istatistikleri** ekranı girilen olayları özetler.
+Özellik bazında tam döküm: [docs/GAP_ANALYSIS.md](docs/GAP_ANALYSIS.md). Mimari kararlar: [docs/ADR.md](docs/ADR.md).
 
-Uygulama son maçı hatırlar. **Maç kimliği ve diğer maçlar** menüsündeki kimliği saklayarak önceki bir maçı yeniden açabilirsiniz. Yerel servis SQLite ve videoları `data/` altında saklar. Her veri dizini için tek arka uç süreci çalıştırın.
+## Yerel çalıştırma
 
-### Test ve derleme
+### Arka uç
 
-```sh
-python3 -m unittest discover -s backend/tests -v
+Python 3.12+ ve FFmpeg gerekir.
+
+```bash
+cd backend
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements-dev.txt
+uvicorn app.main:app --host 127.0.0.1 --port 8000
+pytest -q          # başka bir terminalde
+```
+
+Sunucuda hesap sistemi ve TLS yoktur. İnternete açmayın. Yalnızca sentetik ya da kullanım izni açık test videoları yükleyin.
+
+Test klibi üretmek için:
+
+```bash
+ffmpeg -f lavfi -i testsrc2=size=1280x720:rate=30 -t 5 -c:v libx264 -pix_fmt yuv420p ornek.mp4
+```
+
+### Android
+
+1. `android/` klasörünü Android Studio ile açın (JDK 17, Android SDK 36).
+2. Arka ucu `127.0.0.1:8000` adresinde başlatın. Emülatör bu adrese `10.0.2.2:8000` üzerinden ulaşır.
+3. `app` modülünün **debug** sürümünü çalıştırın. Release sürümünde sunucu adresi bilerek boştur.
+
+Komut satırı:
+
+```bash
 cd android
-./gradlew :app:assembleDebug :app:lintDebug
+./gradlew :core:test :app:testDebugUnitTest :app:assembleDebug :app:lintDebug
 ```
 
-Arka uç testleri geçici bir veri dizini ve yerel HTTP sunucusu kullanır. Kendi test klibinizi üretmek için:
+Her PR'da GitHub Actions bu komutları çalıştırır ve debug APK'yı artefakt olarak saklar.
 
-```sh
-mkdir -p data/imports
-ffmpeg -f lavfi -i testsrc2=size=640x360:rate=25 -t 5 \
-  -c:v libx264 -pix_fmt yuv420p -movflags +faststart data/imports/ornek.mp4
-```
+## Depoya girmeyenler
 
-### İzinli YouTube videosu
+Depo herkese açıktır. Maç videoları, oyuncu verileri, API anahtarları, veritabanları ve model ağırlıkları commit edilmez (`.gitignore`).
 
-YouTube aktarımı ayrı bir yerel hazırlık aracıdır. İndirme yetkisi olan bir video için kaynak ve izin kaydıyla çalıştırın. Araç H.264 MP4, SHA-256 ve FFprobe bilgilerini `data/imports/` altında saklar. Ardından MP4'ü Android uygulamasındaki dosya seçiciyle içe aktarabilirsiniz.
+`tools/import_youtube.py` yalnızca indirme ve kullanım hakkı belgelenmiş videolar içindir. Araç `--rights` ile bir lisans ya da yazılı izin referansı ister ve bunu videonun yanına kaydeder. Bir YouTube bağlantısının var olması eğitim hakkı vermez.
 
-```sh
-brew install yt-dlp ffmpeg deno
-python3 tools/import_youtube.py 'https://www.youtube.com/watch?v=VIDEO_ID' \
-  --rights 'Lisans bağlantısı veya yazılı izin referansı'
-```
+## Belgeler
 
-[API, istatistik kuralları ve model entegrasyonu](docs/pilot.md)
+- [docs/GAP_ANALYSIS.md](docs/GAP_ANALYSIS.md): Gereksinim ve kod farkı, sıradaki işler
+- [docs/ADR.md](docs/ADR.md): Mimari karar defteri
+- [docs/API.md](docs/API.md): Yerel API
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): Kod ağacı ve veri ayrımları
+- [docs/design.md](docs/design.md): Tasarım dili

@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = 'VolleyStat'
-include ':app'
+rootProject.name = "VolleyStatAndroid"
+include(":app", ":core")

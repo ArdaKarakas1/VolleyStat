@@ -1,15 +1,31 @@
-.DS_Store
+# Secrets
+.env
+.env.*
+!.env.example
+*.keystore
+*.jks
+# Android
+local.properties
+.gradle/
+build/
+.idea/
+*.iml
+*.apk
+# Python
 __pycache__/
 *.py[cod]
 .venv/
+.pytest_cache/
+# Local data, media and model weights never enter this public repository
 data/
 media/
-.gradle/
-build/
-local.properties
-*.apk
-*.jks
+storage/
+*.sqlite3*
 *.mp4
 *.mov
 *.mkv
 *.webm
+*.pt
+*.onnx
+*.tflite
+.DS_Store
