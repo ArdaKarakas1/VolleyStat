@@ -1,3 +1,252 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">VolleyStat</string>
+    <string name="brand_name">Voleybol Ve Veleybol</string>
+    <string name="logo_description">Voleybol Ve Veleybol logosu</string>
+
+    <!-- Navigation and shared actions -->
+    <string name="nav_home">Ana sayfa</string>
+    <string name="nav_matches">Maçlar</string>
+    <string name="nav_profile">Profil</string>
+    <string name="action_new_analysis">Yeni analiz</string>
+    <string name="action_continue">Devam</string>
+    <string name="action_back">Geri</string>
+    <string name="action_give_up">Vazgeç</string>
+    <string name="action_retry">Yeniden dene</string>
+    <string name="team_a_tag">A</string>
+    <string name="team_b_tag">B</string>
+    <string name="team_a_spoken">A takımı</string>
+    <string name="team_b_spoken">B takımı</string>
+    <string name="state_not_yet">Henüz yok</string>
+    <string name="state_working">Çalışıyor</string>
+    <string name="state_no_check">Kontrol yok</string>
+    <string name="state_unreadable">Okunamadı</string>
+
+    <!-- Home -->
+    <string name="home_empty_title">İlk maçını yükle</string>
+    <string name="home_empty_works">Uygulama bugün maç videosunu yükler ve sunucu dosyayı kontrol eder.</string>
+    <string name="home_empty_missing">Otomatik analiz ve istatistik henüz yok.</string>
+    <string name="home_capability">Otomatik analiz henüz yok. Şu an video yükleme ve dosya kontrolü çalışıyor.</string>
+    <string name="home_section_now">Şimdi</string>
+    <string name="home_section_recent">Son maçlar</string>
+    <string name="home_see_all">Tümünü gör</string>
+    <string name="home_draft_title">Yarım kalan kurulum</string>
+    <string name="home_draft_body">%1$s ve %2$s maçı video bekliyor.</string>
+    <string name="home_draft_body_unnamed">Bir maç kurulumu yarım kaldı.</string>
+    <string name="home_draft_action">Kuruluma dön</string>
+    <string name="home_guide_title">Maçı nasıl çekmelisin?</string>
+    <string name="home_guide_body">Beş kural, analizin göreceği görüntüyü belirler.</string>
+
+    <!-- Matches -->
+    <string name="matches_empty_title">Henüz maç yok</string>
+    <string name="matches_empty_body">Yüklediğin her maç bu listede durur.</string>
+    <string name="match_versus">%1$s ve %2$s</string>
+
+    <!-- Match status chips -->
+    <string name="status_upload_pending">Yükleme bekliyor</string>
+    <string name="status_uploading">Yükleniyor</string>
+    <string name="status_paused">Duraklamada</string>
+    <string name="status_upload_stopped">Yükleme durdu</string>
+    <string name="status_file_accepted">Dosya geçerli</string>
+    <string name="status_file_rejected">Dosya geçersiz</string>
+    <string name="status_file_unverified">Dosya kontrolü yarım</string>
+    <string name="status_analysis_none">Analiz henüz yok</string>
+
+    <!-- New analysis: teams -->
+    <string name="step_count">Adım %1$d / %2$d</string>
+    <string name="teams_title">Takımlar</string>
+    <string name="teams_label_a">A takımı</string>
+    <string name="teams_label_b">B takımı</string>
+    <string name="teams_helper">Şimdilik yalnızca iki takımın adı gerekiyor. Kadro ve forma numaraları sonraya kalır.</string>
+    <string name="teams_error_same">İki takımın adı farklı olmalı.</string>
+    <string name="teams_error_short">Takım adı en az iki harf olmalı.</string>
+
+    <!-- New analysis: source -->
+    <string name="source_title">Video</string>
+    <string name="source_gallery_title">Galeriden video seç</string>
+    <string name="source_gallery_body">Telefonundaki kayıtlı maç videosunu seçersin.</string>
+    <string name="source_camera_title">Kamerayla çek</string>
+    <string name="source_camera_body">Telefonun kamera uygulaması açılır. Kaydı bitirince bu ekrana dönersin.</string>
+    <string name="source_limits">Sunucu en çok 4 GB büyüklüğünde MP4, MOV, MKV ya da WebM videoyu kabul eder.</string>
+    <string name="source_guide_link">Maçı nasıl çekmeliyim?</string>
+    <string name="source_camera_missing">Bu telefonda video kaydeden bir kamera uygulaması yok.</string>
+    <string name="source_camera_cancelled">Kamera kayıt bırakmadı. Yeniden çekebilir ya da galeriden seçebilirsin.</string>
+    <string name="source_pick_failed">Uygulama seçtiğin videoyu okuyamadı. Başka bir video seç.</string>
+    <string name="source_reading">Telefon videoyu okuyor</string>
+
+    <!-- Filming guide -->
+    <string name="guide_title">Çekim rehberi</string>
+    <string name="guide_good">İyi kadraj</string>
+    <string name="guide_bad">Kötü kadraj</string>
+    <string name="guide_good_description">Çizim: Kamera dip çizgisinin arkasında ve yüksekte duruyor. Karşı sahanın dört köşesi görünüyor.</string>
+    <string name="guide_bad_description">Çizim: Kamera sahaya çok yakın ve alçakta duruyor. Karşı sahanın köşeleri kadrajın dışında kalıyor.</string>
+    <string name="guide_rule_1">Telefonu yatay tut ve normal lensi (1x) kullan.</string>
+    <string name="guide_rule_2">Telefonu tripoda ya da sabit bir yere bağla. Elde çekim görüntüyü sallar.</string>
+    <string name="guide_rule_3">Telefonu dip çizgisinin ortasının arkasına, olabildiğince yükseğe koy.</string>
+    <string name="guide_rule_4">Karşı sahanın dört köşesi kadrajda kalsın.</string>
+    <string name="guide_rule_5">Maçı tek parça kaydet.</string>
+    <string name="guide_note">Bu kurallar benzer uygulamaların çekim önerilerinden geliyor. VolleyStat bu kuralları kendi modeliyle henüz sınamadı.</string>
+
+    <!-- New analysis: confirm -->
+    <string name="confirm_title">Kontrol</string>
+    <string name="confirm_phone_checks">Telefonun okuduğu bilgiler</string>
+    <string name="confirm_not_checked">Uygulamanın henüz bakmadıkları</string>
+    <string name="confirm_not_checked_helper">Uygulama saha görünürlüğünü ve ışığı henüz kontrol etmiyor.</string>
+    <string name="check_orientation">Yön</string>
+    <string name="check_orientation_landscape">Yatay</string>
+    <string name="check_orientation_portrait">Dikey</string>
+    <string name="check_resolution">Çözünürlük</string>
+    <string name="check_duration">Süre</string>
+    <string name="check_size">Boyut</string>
+    <string name="check_type">Tür</string>
+    <string name="check_court">Saha görünürlüğü</string>
+    <string name="check_light">Işık</string>
+    <string name="confirm_block_size">Video 4 GB sınırını aşıyor. Daha kısa bir kayıt seç.</string>
+    <string name="confirm_block_type">Sunucu bu video türünü kabul etmiyor. MP4 biçiminde bir video seç.</string>
+    <string name="confirm_warn_portrait">Kamera videoyu dikey çekmiş. Sahanın tamamı kadraja girmeyebilir.</string>
+    <string name="confirm_warn_resolution">Çözünürlük 720p altında. Top ve forma numaraları net görünmez.</string>
+    <string name="confirm_rights">Bu videoyu analiz için yükleme hakkım ve iznim var.</string>
+    <string name="confirm_training_note">Uygulama videoyu model eğitimi için göndermez.</string>
+    <string name="confirm_provisional">Bu bilgiler yalnızca dosyanın özellikleridir. Analizin sonucunu göstermez.</string>
+    <string name="confirm_no_server">Bu sürümde sunucu adresi tanımlı değil. Yükleme yalnızca geliştirme sürümünde çalışır.</string>
+    <string name="action_start_upload">Yüklemeyi başlat</string>
+    <string name="action_change_video">Başka video seç</string>
+    <string name="thumbnail_description">Seçilen videodan bir kare</string>
+
+    <!-- Upload -->
+    <string name="upload_title">Yükleme</string>
+    <string name="phase_connecting">Uygulama sunucuya bağlanıyor</string>
+    <string name="phase_hashing">Telefon dosya özetini hesaplıyor</string>
+    <string name="phase_sending">Uygulama videoyu yüklüyor</string>
+    <string name="phase_verifying">Sunucu dosyayı kontrol ediyor</string>
+    <string name="upload_amount">%1$s / %2$s</string>
+    <string name="upload_percent">%%%1$d</string>
+    <string name="upload_keep_open">Yükleme bitene kadar uygulamayı açık tut. Yükleme yarıda kalırsa kaldığı yerden sürer.</string>
+    <string name="upload_keep_video">Yükleme bitene kadar videoyu telefonundan silme.</string>
+    <string name="upload_paused">Yüklemeyi sen duraklattın.</string>
+    <string name="upload_waiting">Yükleme başlamayı bekliyor.</string>
+    <string name="action_pause">Duraklat</string>
+    <string name="action_resume">Sürdür</string>
+    <string name="action_cancel_upload">Yüklemeyi iptal et</string>
+    <string name="upload_kept">Sunucu videonun %1$s kadarını aldı ve saklıyor.</string>
+    <string name="upload_error_unreachable">Uygulama sunucuya ulaşamadı.</string>
+    <string name="upload_error_too_large">Video sunucunun boyut sınırını aşıyor.</string>
+    <string name="upload_error_source">Uygulama videoyu telefondan okuyamadı. Video silinmiş ya da taşınmış olabilir.</string>
+    <string name="upload_error_refused">Sunucu yüklemeyi kabul etmedi (%1$s).</string>
+    <string name="upload_error_checksum">Sunucuya ulaşan dosya telefondaki dosyayla iki kez uyuşmadı.</string>
+    <string name="upload_busy">Uygulama aynı anda tek video yükler. Öteki yükleme bitince bu yüklemeyi başlat.</string>
+    <string name="upload_blocked">Bu video yüklenemez. Yüklemeyi iptal et ve başka bir videoyla yeni analiz başlat.</string>
+    <string name="removal_failed">Uygulama sunucuya ulaşamadı. Sunucudaki dosya ve maç kaydı duruyor.</string>
+    <string name="selected_video">Seçili video</string>
+    <string name="recorded_on">%1$s tarihinde oluşturdun</string>
+    <string name="cancel_title">Yüklemeyi iptal edeyim mi?</string>
+    <string name="cancel_body">Sunucu aldığı kısmı siler ve uygulama bu maçı listeden kaldırır. Video telefonunda kalır.</string>
+    <string name="cancel_confirm">İptal et</string>
+
+    <!-- Match detail -->
+    <string name="tab_summary">Özet</string>
+    <string name="tab_teams">Takımlar</string>
+    <string name="tab_players">Oyuncular</string>
+    <string name="tab_rallies">Ralliler</string>
+    <string name="tab_reliability">Güvenilirlik</string>
+    <string name="score_slot_none">Analiz henüz yok</string>
+    <string name="stages_title">Adımlar</string>
+    <string name="stage_upload">Video yükleme</string>
+    <string name="stage_upload_done">Sunucu videoyu aldı.</string>
+    <string name="stage_upload_pending">Sunucu videonun tamamını henüz almadı.</string>
+    <string name="stage_check">Dosya kontrolü</string>
+    <string name="stage_check_ok">Sunucu dosyayı doğruladı.</string>
+    <string name="stage_check_rejected">Sunucu dosyayı kabul etmedi.</string>
+    <string name="stage_check_unverified">Sunucu dosyayı kontrol edemedi.</string>
+    <string name="stage_check_waiting">Dosya kontrolü yüklemeden sonra başlar.</string>
+    <string name="stage_analysis">Otomatik analiz</string>
+    <string name="stage_analysis_none">Sunucuya bağlı bir analiz modeli yok. Uygulama bu maç için istatistik üretmedi.</string>
+    <string name="file_title">Dosya</string>
+    <string name="file_resolution">%1$d×%2$d</string>
+    <string name="file_fps">%1$s fps</string>
+    <string name="file_provisional">Sunucu yalnızca dosya biçimine baktı. Saha, top ve kamera sabitliği için ölçüm yok.</string>
+    <string name="warn_low_resolution">Çözünürlük 720p altında. Top ve forma numaraları net görünmez.</string>
+    <string name="warn_low_frame_rate">Kare hızı düşük. Hızlı toplar karelerin arasında kaybolabilir.</string>
+    <string name="warn_portrait">Kamera videoyu dikey çekmiş. Sahanın tamamı kadraja girmeyebilir.</string>
+    <string name="warn_variable_frame_rate">Kare hızı değişken. Zaman etiketleri kayabilir.</string>
+    <string name="warn_container_mismatch">Dosyanın uzantısı gerçek biçimiyle uyuşmuyor.</string>
+    <string name="reject_not_a_video">Dosya bir video değil ya da sunucu biçimini tanımadı.</string>
+    <string name="reject_corrupt">Dosya bozuk ya da yarım. Videoyu yeniden seçip yükle.</string>
+    <string name="reject_codec">Sunucu videonun kodlamasını desteklemiyor. Videoyu H.264 MP4 olarak kaydet.</string>
+    <string name="reject_duration">Sunucu videonun süresini okuyamadı ya da süre 12 saati aşıyor.</string>
+    <string name="reject_probe_unavailable">Sunucuda video inceleme aracı kurulu değil.</string>
+    <string name="reject_probe_timeout">Sunucunun dosya kontrolü süresinde bitmedi.</string>
+    <string name="reject_unknown">Sunucu bir neden bildirmedi.</string>
+    <string name="empty_summary_title">Rapor henüz yok</string>
+    <string name="empty_summary_body">Analiz çalıştığında bu sekme set skorlarını ve takımların sayıları nasıl kazandığını gösterecek.</string>
+    <string name="empty_teams_title">Takım karşılaştırması henüz yok</string>
+    <string name="empty_teams_body">Analiz çalıştığında bu sekme iki takımın servis, karşılama, hücum, blok, savunma ve pas sayılarını yan yana gösterecek.</string>
+    <string name="empty_players_title">Oyuncu istatistiği henüz yok</string>
+    <string name="empty_players_body">Analiz çalıştığında bu sekme oyuncuları forma numarasıyla listeleyecek.</string>
+    <string name="empty_rallies_title">Ralli listesi henüz yok</string>
+    <string name="empty_rallies_body">Analiz çalıştığında bu sekme rallileri sırayla listeleyecek ve her ralli kendi video anını açacak.</string>
+    <string name="empty_reliability_title">Bu maç için analiz çalışmadı</string>
+    <string name="empty_reliability_body">Otomatik analiz henüz yok. Bu yüzden ölçülen bir istatistik de yok.</string>
+    <string name="reliability_checked_title">Sunucunun bugün kontrol ettikleri</string>
+    <string name="reliability_file_format">Dosya biçimi</string>
+    <string name="reliability_ball">Top görünürlüğü</string>
+    <string name="reliability_camera">Kamera sabitliği</string>
+    <string name="action_delete_match">Maçı sil</string>
+    <string name="delete_title">Bu maçı sileyim mi?</string>
+    <string name="delete_body_uploaded">Uygulama maç kaydını ve sunucudaki videoyu siler. Telefonundaki video dosyası kalır.</string>
+    <string name="delete_body_local">Uygulama maç kaydını siler. Telefonundaki video dosyası kalır.</string>
+    <string name="delete_confirm">Sil</string>
+    <string name="action_open_upload">Yüklemeye git</string>
+
+    <!-- Profile -->
+    <string name="profile_today">Bugün ne çalışıyor</string>
+    <string name="feature_match">Maç oluşturma</string>
+    <string name="feature_video">Video seçme ve kaydetme</string>
+    <string name="feature_upload">Yükleme ve kaldığı yerden sürdürme</string>
+    <string name="feature_check">Sunucuda dosya kontrolü</string>
+    <string name="feature_analysis">Otomatik analiz</string>
+    <string name="feature_review">İnceleme kuyruğu</string>
+    <string name="feature_report">İstatistik raporu</string>
+    <string name="profile_privacy">Gizlilik</string>
+    <string name="privacy_server">Video yalnızca geliştirme bilgisayarındaki yerel sunucuya gider.</string>
+    <string name="privacy_picker">Uygulama yalnızca senin seçtiğin videoyu okur ve depolama izni istemez.</string>
+    <string name="privacy_training">Uygulama videoyu model eğitimi için göndermez.</string>
+    <string name="privacy_accounts">Yerel sunucuda hesap sistemi yok. Gerçek oyuncuların videolarını ve telifli yayınları yükleme.</string>
+    <string name="profile_server">Sunucu bağlantısı</string>
+    <string name="server_emulator">Emülatör</string>
+    <string name="server_emulator_body">Uygulama bilgisayardaki sunucuya 10.0.2.2:8000 adresinden bağlanır.</string>
+    <string name="server_usb">USB ile bağlı telefon</string>
+    <string name="server_usb_body">Önce bilgisayarda şu komutu çalıştır: adb reverse tcp:8000 tcp:8000</string>
+    <string name="action_test_server">Bağlantıyı dene</string>
+    <string name="server_ok">Sunucu yanıt verdi.</string>
+    <string name="server_ok_no_probe">Sunucu yanıt verdi. Sunucuda video inceleme aracı kurulu değil.</string>
+    <string name="server_unreachable">Uygulama sunucuya ulaşamadı.</string>
+    <string name="server_testing">Uygulama sunucuyu deniyor</string>
+    <string name="server_none">Bu sürümde sunucu adresi tanımlı değil.</string>
+    <string name="profile_recordings">Telefondaki kayıtlar</string>
+    <string name="recordings_empty">Uygulamanın tuttuğu kayıt yok.</string>
+    <string name="recordings_helper">Kamerayla çektiğin videolar burada durur. Galeriden seçtiğin videolar galeride kalır.</string>
+    <string name="recording_delete_description">%1$s kaydını sil</string>
+    <string name="recording_delete_title">Bu kaydı sileyim mi?</string>
+    <string name="recording_delete_body">Uygulama %1$s dosyasını telefondan siler. Dosyanın başka kopyası yoksa kayıt geri gelmez.</string>
+    <string name="profile_version">Sürüm %1$s</string>
+
+    <!-- Report and review designs. These need an analysis model and are not reachable in the app yet. -->
+    <string name="badge_ai">Yapay zekâ önerisi</string>
+    <string name="badge_user">Sen onayladın</string>
+    <string name="badge_verified">Kesinleşti</string>
+    <string name="value_not_measured">Ölçüm yok</string>
+    <string name="coverage">Ölçüm: %1$d / %2$d</string>
+    <string name="review_position">%1$d / %2$d</string>
+    <string name="review_question">Bu ralliyi hangi takım kazandı?</string>
+    <string name="review_unsure">Emin değilim</string>
+    <string name="review_undo">Son yanıtı geri al</string>
+    <string name="review_hint">Yapay zekâ önerisi: %1$s olabilir</string>
+    <string name="review_clip_description">Rallinin kısa video klibi</string>
+    <string name="points_title">Sayılar nasıl geldi</string>
+    <string name="points_attack">Hücum</string>
+    <string name="points_block">Blok</string>
+    <string name="points_ace">As</string>
+    <string name="points_opponent_error">Rakip hatası</string>
+    <string name="set_label">%1$d. set</string>
 </resources>
