@@ -46,45 +46,109 @@ data class UploadSession(
     val sentBytes: Long = 0,
 )
 
+/** Only a label. The app and the server never treat a match as an official record. */
+enum class MatchKind { TRAINING, OFFICIAL }
+
+data class Player(val id: String, val name: String, val jersey: Int?)
+
+/** A team the user saved on this phone. Player names never leave the phone. */
+data class Team(val id: String, val name: String, val players: List<Player> = emptyList())
+
+/** The last analysis job state the app saw, kept so lists can show it without a network call. */
+data class AnalysisSummary(
+    val jobId: String,
+    val state: String,
+    val mock: Boolean,
+    val reviewOpen: Int,
+    val reviewTotal: Int,
+    val failureCode: String? = null,
+) {
+    companion object {
+        const val QUEUED = "QUEUED"
+        const val PROCESSING = "PROCESSING"
+        const val NEEDS_REVIEW = "NEEDS_REVIEW"
+        const val COMPLETE = "COMPLETE"
+        const val FAILED = "FAILED"
+        const val CANCELLED = "CANCELLED"
+    }
+}
+
 data class MatchRecord(
     val localId: String,
-    val teamA: String,
-    val teamB: String,
+    val homeTeam: String,
+    val awayTeam: String,
     val createdAtMs: Long,
     val video: LocalVideo,
+    val name: String? = null,
+    /** ISO date (YYYY-MM-DD). */
+    val playedOn: String? = null,
+    val venue: String? = null,
+    val kind: MatchKind = MatchKind.TRAINING,
+    val homeTeamId: String? = null,
+    val awayTeamId: String? = null,
     val session: UploadSession = UploadSession(),
     val check: VideoCheck? = null,
     val checkedAtMs: Long? = null,
-)
+    val analysis: AnalysisSummary? = null,
+) {
+    val title: String get() = name?.takeIf { it.isNotBlank() } ?: "$homeTeam - $awayTeam"
+}
 
-/** Where a match stands. Analysis states do not exist yet because no model is connected. */
-enum class MatchStatus { UPLOAD_PENDING, FILE_ACCEPTED, FILE_REJECTED, FILE_UNVERIFIED }
+/** Where a match stands, from the least to the most advanced step. */
+enum class MatchStatus {
+    UPLOAD_PENDING, FILE_REJECTED, FILE_UNVERIFIED,
+    /** The file is fine and no analysis job exists (none requested, or the server has no analyzer). */
+    FILE_ACCEPTED,
+    ANALYZING, NEEDS_REVIEW, REPORT_READY, ANALYSIS_FAILED,
+}
 
 val MatchRecord.status: MatchStatus
     get() = when (check?.status) {
         null -> MatchStatus.UPLOAD_PENDING
-        VideoCheck.READY -> MatchStatus.FILE_ACCEPTED
         VideoCheck.QUARANTINED -> MatchStatus.FILE_REJECTED
+        VideoCheck.READY -> when (analysis?.state) {
+            AnalysisSummary.QUEUED, AnalysisSummary.PROCESSING -> MatchStatus.ANALYZING
+            AnalysisSummary.NEEDS_REVIEW -> MatchStatus.NEEDS_REVIEW
+            AnalysisSummary.COMPLETE -> MatchStatus.REPORT_READY
+            AnalysisSummary.FAILED -> MatchStatus.ANALYSIS_FAILED
+            else -> MatchStatus.FILE_ACCEPTED
+        }
         else -> MatchStatus.FILE_UNVERIFIED
     }
 
-/** The match being set up in the new-analysis flow. */
+/** The match being set up in the new-match flow. Only the two team names are required. */
 data class Draft(
-    val teamA: String = "",
-    val teamB: String = "",
+    val name: String = "",
+    /** ISO date; blank means "today" until the user picks another day. */
+    val playedOn: String = "",
+    val venue: String = "",
+    val kind: MatchKind = MatchKind.TRAINING,
+    val homeTeam: String = "",
+    val awayTeam: String = "",
+    val homeTeamId: String? = null,
+    val awayTeamId: String? = null,
     val video: LocalVideo? = null,
-    /** Camera target handed to the system camera; kept so a recreated activity can still claim it. */
+    /** Camera target handed to the recorder; kept so a recreated activity can still claim it. */
     val pendingCapturePath: String? = null,
-)
+) {
+    val started: Boolean get() = name.isNotBlank() || venue.isNotBlank() || homeTeam.isNotBlank() || awayTeam.isNotBlank() || video != null
+}
 
 enum class ServerTarget { EMULATOR, USB_DEVICE }
+
+data class Settings(
+    val serverTarget: ServerTarget = ServerTarget.EMULATOR,
+    /** Shown in the greeting when set. The app has no account system. */
+    val displayName: String = "",
+    val welcomeSeen: Boolean = false,
+)
 
 const val MAX_VIDEO_BYTES: Long = 4L * 1024 * 1024 * 1024
 
 /** Team names the server will accept: 2 to 80 characters after trimming, and different from each other. */
-fun teamNamesValid(teamA: String, teamB: String): Boolean {
-    val a = teamA.trim()
-    val b = teamB.trim()
+fun teamNamesValid(home: String, away: String): Boolean {
+    val a = home.trim()
+    val b = away.trim()
     return a.length in 2..80 && b.length in 2..80 && !a.equals(b, ignoreCase = true)
 }
 

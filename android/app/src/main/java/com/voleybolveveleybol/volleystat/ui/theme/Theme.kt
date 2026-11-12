@@ -2,7 +2,6 @@ package com.voleybolveveleybol.volleystat.ui.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
@@ -12,162 +11,156 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.voleybolveveleybol.volleystat.R
 
-// Brand colours measured from the Voleybol Ve Veleybol logo.
-val Cream = Color(0xFFFCF7EB)
-val Navy = Color(0xFF162340)
-val BurntOrange = Color(0xFF9E491B)
+// UI Design V1 tokens (04_DESIGN_TOKENS.json). Screens never write a colour or a size literal
+// for these roles; they read them from the theme.
+val Purple = Color(0xFF6A3DF0)
+val PurpleLight = Color(0xFF8B5CF6)
+val Lavender = Color(0xFFF5F3FF)
+val Ink = Color(0xFF111827)
 
-/** Colours the Material scheme has no role for. Status is never shown by colour alone. */
+/** Spacing and size tokens. The base unit is 8 dp. */
+object Dimens {
+    val screenPadding = 16.dp
+    val cardPadding = 16.dp
+    val gap = 8.dp
+    val gapLarge = 16.dp
+    val sectionGap = 24.dp
+    val touchTarget = 48.dp
+    val buttonHeight = 52.dp
+}
+
+/** Roles the Material scheme has no slot for. Status is always icon plus words, never colour alone. */
 @Immutable
-data class VsExtraColors(
-    val card: Color,
-    val cardLine: Color,
+data class VsColors(
+    val divider: Color,
     val positive: Color,
     val positiveContainer: Color,
+    val onPositiveContainer: Color,
     val caution: Color,
     val cautionContainer: Color,
-    val teamA: Color,
-    val onTeamA: Color,
-    val teamB: Color,
-    /** Background of a band header, when the direction uses one. */
-    val band: Color,
-    val onBand: Color,
-)
+    val onCautionContainer: Color,
+    /** The brand gradient behind the welcome screen and the "new match" card. */
+    val heroStart: Color,
+    val heroEnd: Color,
+    val onHero: Color,
+    /** Recording indicator. Red is kept for recording and errors only. */
+    val recording: Color,
+) {
+    val hero: Brush get() = Brush.linearGradient(listOf(heroStart, heroEnd))
+}
 
-/** The few knobs that distinguish one visual direction from another. */
-@Immutable
-data class VsTokens(
-    val titleFont: FontFamily,
-    val scoreFont: FontFamily,
-    val cardRadius: Dp,
-    val controlRadius: Dp,
-    /** Draw a brush-stroke rule under screen titles. */
-    val titleRule: Boolean,
-    /** Put top-level titles and match headers on a dark band. */
-    val headerBand: Boolean,
-    /** Paint soft colour washes behind screens that hold no data. */
-    val washes: Boolean,
-)
-
-val BarlowCondensed = FontFamily(
-    Font(R.font.barlow_condensed_semibold, FontWeight.SemiBold),
-    Font(R.font.barlow_condensed_bold, FontWeight.Bold),
-)
-
-val LocalVsColors = staticCompositionLocalOf<VsExtraColors> { error("VolleyStatTheme is missing") }
-val LocalVsTokens = staticCompositionLocalOf<VsTokens> { error("VolleyStatTheme is missing") }
+val LocalVsColors = staticCompositionLocalOf<VsColors> { error("VolleyStatTheme is missing") }
 
 private val LightScheme = lightColorScheme(
-    primary = BurntOrange, onPrimary = Color.White,
-    primaryContainer = Color(0xFFF8DEC9), onPrimaryContainer = Color(0xFF4A1F06),
-    secondary = Navy, onSecondary = Cream,
-    secondaryContainer = Color(0xFFEDE4CF), onSecondaryContainer = Navy,
-    tertiary = Navy, onTertiary = Cream,
-    background = Cream, onBackground = Navy,
-    surface = Cream, onSurface = Navy,
-    surfaceVariant = Color(0xFFF1E8D3), onSurfaceVariant = Color(0xFF4A5468),
-    surfaceContainerLowest = Color(0xFFFFFDF8), surfaceContainerLow = Color(0xFFFAF4E6),
-    surfaceContainer = Color(0xFFF6EEDC), surfaceContainerHigh = Color(0xFFF1E8D3),
-    surfaceContainerHighest = Color(0xFFEBE1CA),
-    outline = Color(0xFF7A7667), outlineVariant = Color(0xFFDFD4BA),
-    error = Color(0xFFA3261C), onError = Color.White,
-    errorContainer = Color(0xFFF8DAD5), onErrorContainer = Color(0xFF5C120C),
+    primary = Purple, onPrimary = Color.White,
+    primaryContainer = Color(0xFFEDE7FE), onPrimaryContainer = Color(0xFF3B1FA8),
+    secondary = PurpleLight, onSecondary = Color.White,
+    secondaryContainer = Color(0xFFF1ECFF), onSecondaryContainer = Color(0xFF3B1FA8),
+    tertiary = Ink, onTertiary = Color.White,
+    background = Lavender, onBackground = Ink,
+    surface = Color.White, onSurface = Ink,
+    surfaceVariant = Color(0xFFF3F4F6), onSurfaceVariant = Color(0xFF596174),
+    surfaceContainerLowest = Color.White, surfaceContainerLow = Color(0xFFFAF9FF),
+    surfaceContainer = Color.White, surfaceContainerHigh = Color(0xFFF3F4F6),
+    surfaceContainerHighest = Color(0xFFE9E3FD),
+    // #8A93A6 keeps a 3:1 contrast on white for borders that carry meaning.
+    outline = Color(0xFF8A93A6), outlineVariant = Color(0xFFE5E7EB),
+    error = Color(0xFFDC2626), onError = Color.White,
+    errorContainer = Color(0xFFFEE2E2), onErrorContainer = Color(0xFF991B1B),
+    scrim = Color(0xFF111827),
 )
 
-private val LightExtra = VsExtraColors(
-    card = Color(0xFFFFFDF8), cardLine = Color(0xFFDFD4BA),
-    positive = Color(0xFF2C6238), positiveContainer = Color(0xFFDDEAD9),
-    caution = Color(0xFF7A5200), cautionContainer = Color(0xFFF6E5BE),
-    teamA = Navy, onTeamA = Cream, teamB = BurntOrange,
-    band = Navy, onBand = Cream,
+private val LightExtra = VsColors(
+    divider = Color(0xFFE5E7EB),
+    positive = Color(0xFF16A34A), positiveContainer = Color(0xFFDCFCE7), onPositiveContainer = Color(0xFF166534),
+    // The token warning colour (#D97706) is 3.2:1 on white: fine for an icon, too weak for text.
+    caution = Color(0xFFD97706), cautionContainer = Color(0xFFFEF3C7), onCautionContainer = Color(0xFF92400E),
+    heroStart = Purple, heroEnd = PurpleLight, onHero = Color.White,
+    recording = Color(0xFFDC2626),
 )
 
-// The brand orange is too dark on navy (2.5:1), so dark surfaces use a lighter tone of it.
 private val DarkScheme = darkColorScheme(
-    primary = Color(0xFFF0A97A), onPrimary = Color(0xFF4A1F06),
-    primaryContainer = Color(0xFF6E3212), onPrimaryContainer = Color(0xFFFFDCC5),
-    secondary = Color(0xFFDCD3BD), onSecondary = Navy,
-    secondaryContainer = Color(0xFF2A3654), onSecondaryContainer = Color(0xFFF3EAD6),
-    tertiary = Color(0xFFDCD3BD), onTertiary = Navy,
-    background = Color(0xFF0F1A30), onBackground = Color(0xFFF3EAD6),
-    surface = Color(0xFF0F1A30), onSurface = Color(0xFFF3EAD6),
-    surfaceVariant = Color(0xFF233050), onSurfaceVariant = Color(0xFFBEC4D2),
-    surfaceContainerLowest = Color(0xFF0B1425), surfaceContainerLow = Color(0xFF142039),
-    surfaceContainer = Color(0xFF182541), surfaceContainerHigh = Color(0xFF1F2D4C),
-    surfaceContainerHighest = Color(0xFF283758),
-    outline = Color(0xFF8B92A3), outlineVariant = Color(0xFF34425F),
-    error = Color(0xFFFFB4AB), onError = Color(0xFF690005),
-    errorContainer = Color(0xFF7A1D15), onErrorContainer = Color(0xFFFFDAD6),
+    primary = Color(0xFFB9A6FF), onPrimary = Color(0xFF2A1470),
+    primaryContainer = Color(0xFF3F2A9E), onPrimaryContainer = Color(0xFFE9E3FD),
+    secondary = Color(0xFFA78BFA), onSecondary = Color(0xFF2A1470),
+    secondaryContainer = Color(0xFF2B2550), onSecondaryContainer = Color(0xFFE9E3FD),
+    tertiary = Color(0xFFF3F4F6), onTertiary = Ink,
+    background = Color(0xFF0F1020), onBackground = Color(0xFFF3F4F6),
+    surface = Color(0xFF1A1B2E), onSurface = Color(0xFFF3F4F6),
+    surfaceVariant = Color(0xFF25273D), onSurfaceVariant = Color(0xFFA8B0C0),
+    surfaceContainerLowest = Color(0xFF0B0C18), surfaceContainerLow = Color(0xFF15162A),
+    surfaceContainer = Color(0xFF1A1B2E), surfaceContainerHigh = Color(0xFF25273D),
+    surfaceContainerHighest = Color(0xFF30324B),
+    outline = Color(0xFF8A93A6), outlineVariant = Color(0xFF2B2D45),
+    error = Color(0xFFFCA5A5), onError = Color(0xFF7F1D1D),
+    errorContainer = Color(0xFF7F1D1D), onErrorContainer = Color(0xFFFEE2E2),
+    scrim = Color.Black,
 )
 
-private val DarkExtra = VsExtraColors(
-    card = Color(0xFF17233D), cardLine = Color(0xFF34425F),
-    positive = Color(0xFF9CD3A6), positiveContainer = Color(0xFF1E3D27),
-    caution = Color(0xFFEBC26A), cautionContainer = Color(0xFF4A3708),
-    teamA = Color(0xFFF3EAD6), onTeamA = Navy, teamB = Color(0xFFF0A97A),
-    band = Color(0xFF0B1425), onBand = Color(0xFFF3EAD6),
+private val DarkExtra = VsColors(
+    divider = Color(0xFF2B2D45),
+    positive = Color(0xFF4ADE80), positiveContainer = Color(0xFF14432A), onPositiveContainer = Color(0xFFBBF7D0),
+    caution = Color(0xFFFBBF24), cautionContainer = Color(0xFF4A3508), onCautionContainer = Color(0xFFFDE68A),
+    heroStart = Color(0xFF5B34D6), heroEnd = Color(0xFF7C4DEE), onHero = Color.White,
+    recording = Color(0xFFEF4444),
 )
 
-val DefaultTokens = VsTokens(
-    titleFont = BarlowCondensed, scoreFont = BarlowCondensed,
-    cardRadius = 16.dp, controlRadius = 14.dp,
-    titleRule = true, headerBand = false, washes = false,
+val Inter = FontFamily(
+    Font(R.font.inter_regular, FontWeight.Normal),
+    Font(R.font.inter_medium, FontWeight.Medium),
+    Font(R.font.inter_semibold, FontWeight.SemiBold),
+    Font(R.font.inter_bold, FontWeight.Bold),
 )
 
-private fun typography(tokens: VsTokens): Typography {
-    val base = Typography()
-    // Tabular figures keep changing numbers (megabytes, percent, scores) from jumping sideways.
-    val figures = "tnum"
-    return base.copy(
-        displayMedium = TextStyle(fontFamily = tokens.scoreFont, fontWeight = FontWeight.Bold, fontSize = 48.sp, lineHeight = 52.sp, fontFeatureSettings = figures),
-        headlineMedium = TextStyle(fontFamily = tokens.titleFont, fontWeight = FontWeight.Bold, fontSize = 30.sp, lineHeight = 36.sp),
-        headlineSmall = TextStyle(fontFamily = tokens.titleFont, fontWeight = FontWeight.SemiBold, fontSize = 24.sp, lineHeight = 30.sp),
-        titleLarge = TextStyle(fontFamily = tokens.titleFont, fontWeight = FontWeight.SemiBold, fontSize = 22.sp, lineHeight = 28.sp),
-        titleMedium = base.titleMedium.copy(fontWeight = FontWeight.SemiBold, fontSize = 17.sp, lineHeight = 24.sp, letterSpacing = 0.sp),
-        bodyLarge = base.bodyLarge.copy(fontSize = 16.sp, lineHeight = 24.sp, letterSpacing = 0.sp, fontFeatureSettings = figures),
-        bodyMedium = base.bodyMedium.copy(fontSize = 14.sp, lineHeight = 20.sp, letterSpacing = 0.sp, fontFeatureSettings = figures),
-        bodySmall = base.bodySmall.copy(fontSize = 13.sp, lineHeight = 18.sp, letterSpacing = 0.sp, fontFeatureSettings = figures),
-        labelLarge = base.labelLarge.copy(fontWeight = FontWeight.SemiBold, fontSize = 16.sp, lineHeight = 22.sp, letterSpacing = 0.sp),
-        labelMedium = base.labelMedium.copy(fontWeight = FontWeight.SemiBold, fontSize = 13.sp, lineHeight = 18.sp, letterSpacing = 0.sp),
-    )
-}
+// Tabular figures keep changing numbers (megabytes, percent, scores, table cells) from jumping sideways.
+private const val Figures = "tnum"
+
+private val VsTypography = Typography(
+    displayLarge = TextStyle(fontFamily = Inter, fontWeight = FontWeight.Bold, fontSize = 44.sp, lineHeight = 48.sp, fontFeatureSettings = Figures),
+    displayMedium = TextStyle(fontFamily = Inter, fontWeight = FontWeight.Bold, fontSize = 34.sp, lineHeight = 40.sp, fontFeatureSettings = Figures),
+    headlineLarge = TextStyle(fontFamily = Inter, fontWeight = FontWeight.Bold, fontSize = 30.sp, lineHeight = 36.sp),
+    headlineMedium = TextStyle(fontFamily = Inter, fontWeight = FontWeight.SemiBold, fontSize = 24.sp, lineHeight = 30.sp),
+    headlineSmall = TextStyle(fontFamily = Inter, fontWeight = FontWeight.SemiBold, fontSize = 20.sp, lineHeight = 26.sp),
+    titleLarge = TextStyle(fontFamily = Inter, fontWeight = FontWeight.SemiBold, fontSize = 20.sp, lineHeight = 26.sp),
+    titleMedium = TextStyle(fontFamily = Inter, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, lineHeight = 22.sp),
+    titleSmall = TextStyle(fontFamily = Inter, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, lineHeight = 20.sp),
+    bodyLarge = TextStyle(fontFamily = Inter, fontWeight = FontWeight.Normal, fontSize = 16.sp, lineHeight = 24.sp, fontFeatureSettings = Figures),
+    bodyMedium = TextStyle(fontFamily = Inter, fontWeight = FontWeight.Normal, fontSize = 14.sp, lineHeight = 20.sp, fontFeatureSettings = Figures),
+    bodySmall = TextStyle(fontFamily = Inter, fontWeight = FontWeight.Normal, fontSize = 12.sp, lineHeight = 16.sp, fontFeatureSettings = Figures),
+    labelLarge = TextStyle(fontFamily = Inter, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, lineHeight = 20.sp),
+    labelMedium = TextStyle(fontFamily = Inter, fontWeight = FontWeight.Medium, fontSize = 13.sp, lineHeight = 18.sp),
+    labelSmall = TextStyle(fontFamily = Inter, fontWeight = FontWeight.Medium, fontSize = 12.sp, lineHeight = 16.sp),
+)
+
+private val VsShapes = Shapes(
+    extraSmall = RoundedCornerShape(6.dp),
+    small = RoundedCornerShape(8.dp),
+    medium = RoundedCornerShape(12.dp),   // buttons, inputs
+    large = RoundedCornerShape(16.dp),    // cards
+    extraLarge = RoundedCornerShape(24.dp),
+)
 
 /**
  * One static brand theme in light and dark. Wallpaper-based dynamic colour is deliberately
- * not used: it would repaint the team and status colours.
+ * not used: it would repaint the brand and the status colours.
  */
 @Composable
-fun VolleyStatTheme(
-    dark: Boolean = isSystemInDarkTheme(),
-    tokens: VsTokens = DefaultTokens,
-    colors: ColorScheme? = null,
-    extra: VsExtraColors? = null,
-    content: @Composable () -> Unit,
-) {
-    CompositionLocalProvider(
-        LocalVsTokens provides tokens,
-        LocalVsColors provides (extra ?: if (dark) DarkExtra else LightExtra),
-    ) {
+fun VolleyStatTheme(dark: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
+    CompositionLocalProvider(LocalVsColors provides if (dark) DarkExtra else LightExtra) {
         MaterialTheme(
-            colorScheme = colors ?: if (dark) DarkScheme else LightScheme,
-            typography = typography(tokens),
-            shapes = Shapes(
-                extraSmall = RoundedCornerShape(6.dp),
-                small = RoundedCornerShape(10.dp),
-                medium = RoundedCornerShape(tokens.controlRadius),
-                large = RoundedCornerShape(tokens.cardRadius),
-                extraLarge = RoundedCornerShape(tokens.cardRadius + 8.dp),
-            ),
+            colorScheme = if (dark) DarkScheme else LightScheme,
+            typography = VsTypography,
+            shapes = VsShapes,
             content = content,
         )
     }

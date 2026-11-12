@@ -19,8 +19,13 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -29,16 +34,18 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
@@ -48,16 +55,16 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.voleybolveveleybol.volleystat.R
+import com.voleybolveveleybol.volleystat.ui.theme.Dimens
 import com.voleybolveveleybol.volleystat.ui.theme.LocalVsColors
-import com.voleybolveveleybol.volleystat.ui.theme.LocalVsTokens
 
-/** Dashed outline: the app's one visual sign for "this does not exist yet". */
+/** Dashed outline: the app's one visual sign for "this does not exist yet" or "not measured". */
 fun Modifier.dashedOutline(color: Color, radius: Dp, width: Dp = 1.5.dp): Modifier = drawBehind {
     val stroke = width.toPx()
     drawRoundRect(
         color = color,
         topLeft = Offset(stroke / 2, stroke / 2),
-        size = androidx.compose.ui.geometry.Size(size.width - stroke, size.height - stroke),
+        size = Size(size.width - stroke, size.height - stroke),
         cornerRadius = CornerRadius(radius.toPx()),
         style = Stroke(width = stroke, pathEffect = PathEffect.dashPathEffect(floatArrayOf(6.dp.toPx(), 5.dp.toPx()))),
     )
@@ -67,47 +74,53 @@ fun Modifier.dashedOutline(color: Color, radius: Dp, width: Dp = 1.5.dp): Modifi
 fun VsCard(
     modifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null,
-    onClickLabel: String? = null,
-    padding: PaddingValues = PaddingValues(16.dp),
+    padding: PaddingValues = PaddingValues(Dimens.cardPadding),
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val colors = LocalVsColors.current
     val shape = MaterialTheme.shapes.large
-    val border = BorderStroke(1.dp, colors.cardLine)
+    val border = BorderStroke(1.dp, LocalVsColors.current.divider)
     val body: @Composable () -> Unit = { Column(Modifier.padding(padding), content = content) }
     if (onClick == null) {
-        Surface(modifier.fillMaxWidth(), shape = shape, color = colors.card, border = border, content = body)
+        Surface(modifier.fillMaxWidth(), shape = shape, color = MaterialTheme.colorScheme.surface, border = border, content = body)
     } else {
-        Surface(
-            onClick = onClick,
-            modifier = modifier.fillMaxWidth().semantics { if (onClickLabel != null) contentDescription = onClickLabel },
-            shape = shape, color = colors.card, border = border, content = body,
-        )
+        Surface(onClick = onClick, modifier = modifier.fillMaxWidth(), shape = shape, color = MaterialTheme.colorScheme.surface, border = border, content = body)
     }
 }
 
-/** A screen's main title. The short brush stroke under it is the only decorative use of the accent. */
 @Composable
 fun ScreenTitle(text: String, modifier: Modifier = Modifier) {
-    val accent = MaterialTheme.colorScheme.primary
-    Column(modifier) {
-        Text(text, style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onBackground, modifier = Modifier.semantics { heading() })
-        if (LocalVsTokens.current.titleRule) {
-            Canvas(Modifier.padding(top = 4.dp).size(width = 56.dp, height = 8.dp)) {
-                val stroke = Path().apply {
-                    moveTo(2f, size.height * 0.6f)
-                    cubicTo(size.width * 0.3f, size.height * 0.1f, size.width * 0.6f, size.height * 0.95f, size.width - 2f, size.height * 0.35f)
-                }
-                drawPath(stroke, accent, style = Stroke(width = 4.dp.toPx(), cap = StrokeCap.Round))
-            }
-        }
-    }
+    Text(text, style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onBackground, modifier = modifier.semantics { heading() })
 }
 
 @Composable
 fun SectionTitle(text: String, modifier: Modifier = Modifier) {
     Text(text, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground, modifier = modifier.semantics { heading() })
 }
+
+/** Icon on a soft tinted tile, as in the home list rows of the design. */
+@Composable
+fun IconTile(icon: Int, modifier: Modifier = Modifier, size: Dp = 40.dp) {
+    Box(modifier.size(size).background(MaterialTheme.colorScheme.primaryContainer, MaterialTheme.shapes.medium), contentAlignment = Alignment.Center) {
+        Icon(painterResource(icon), contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(size * 0.55f))
+    }
+}
+
+@Composable
+fun ListRow(icon: Int, title: String, subtitle: String?, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Surface(onClick = onClick, color = Color.Transparent, modifier = modifier.fillMaxWidth()) {
+        Row(Modifier.heightIn(min = 64.dp).padding(horizontal = Dimens.cardPadding, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            IconTile(icon)
+            Column(Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleSmall)
+                if (subtitle != null) Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Icon(painterResource(R.drawable.ic_chevron_right), contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+fun RowDivider() = HorizontalDivider(color = LocalVsColors.current.divider, modifier = Modifier.padding(horizontal = Dimens.cardPadding))
 
 enum class Tone { POSITIVE, CAUTION, NEGATIVE, ACTIVE, NEUTRAL, NOT_YET }
 
@@ -117,14 +130,14 @@ fun StatusChip(text: String, tone: Tone, modifier: Modifier = Modifier) {
     val scheme = MaterialTheme.colorScheme
     val extra = LocalVsColors.current
     val (container, content, icon) = when (tone) {
-        Tone.POSITIVE -> Triple(extra.positiveContainer, extra.positive, R.drawable.ic_check_circle)
-        Tone.CAUTION -> Triple(extra.cautionContainer, extra.caution, R.drawable.ic_warning)
+        Tone.POSITIVE -> Triple(extra.positiveContainer, extra.onPositiveContainer, R.drawable.ic_check_circle)
+        Tone.CAUTION -> Triple(extra.cautionContainer, extra.onCautionContainer, R.drawable.ic_warning)
         Tone.NEGATIVE -> Triple(scheme.errorContainer, scheme.onErrorContainer, R.drawable.ic_error)
-        Tone.ACTIVE -> Triple(scheme.primaryContainer, scheme.onPrimaryContainer, R.drawable.ic_upload)
-        Tone.NEUTRAL -> Triple(scheme.surfaceContainerHigh, scheme.onSurface, R.drawable.ic_pending)
+        Tone.ACTIVE -> Triple(scheme.primaryContainer, scheme.onPrimaryContainer, R.drawable.ic_pending)
+        Tone.NEUTRAL -> Triple(scheme.surfaceVariant, scheme.onSurface, R.drawable.ic_schedule)
         Tone.NOT_YET -> Triple(Color.Transparent, scheme.onSurfaceVariant, R.drawable.ic_hourglass_empty)
     }
-    val outline = if (tone == Tone.NOT_YET) Modifier.dashedOutline(scheme.outline, 10.dp) else Modifier
+    val outline = if (tone == Tone.NOT_YET) Modifier.dashedOutline(scheme.outline, 8.dp) else Modifier
     Row(
         modifier.then(outline).background(container, MaterialTheme.shapes.small).padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -135,51 +148,30 @@ fun StatusChip(text: String, tone: Tone, modifier: Modifier = Modifier) {
     }
 }
 
-/** Team A is a solid tag, team B an outlined one. Position and letter carry identity; colour supports it. */
+/** Marks everything that comes from the demo analyzer. Shown on every screen that displays such data. */
 @Composable
-fun TeamTag(isTeamA: Boolean, modifier: Modifier = Modifier) {
+fun DemoBanner(modifier: Modifier = Modifier) {
     val extra = LocalVsColors.current
-    val spoken = stringResource(if (isTeamA) R.string.team_a_spoken else R.string.team_b_spoken)
-    val shape = MaterialTheme.shapes.extraSmall
-    val box = if (isTeamA) Modifier.background(extra.teamA, shape) else Modifier.border(2.dp, extra.teamB, shape)
-    Box(modifier.size(28.dp).then(box).clearAndSetSemantics { contentDescription = spoken }, contentAlignment = Alignment.Center) {
-        Text(
-            stringResource(if (isTeamA) R.string.team_a_tag else R.string.team_b_tag),
-            style = MaterialTheme.typography.labelLarge,
-            color = if (isTeamA) extra.onTeamA else extra.teamB,
-        )
-    }
-}
-
-/** Team A always on the left, team B always on the right, on every match surface. */
-@Composable
-fun MatchHeader(teamA: String, teamB: String, modifier: Modifier = Modifier, center: @Composable () -> Unit = {}) {
-    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TeamTag(isTeamA = true)
-                Text(teamA, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            }
-            Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
-                Text(teamB, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.End, modifier = Modifier.weight(1f, fill = false))
-                TeamTag(isTeamA = false)
-            }
-        }
-        center()
-    }
-}
-
-/** Section-level message for a feature that does not exist yet. Never a table of placeholders. */
-@Composable
-fun NotYetCard(title: String, body: String, modifier: Modifier = Modifier) {
-    val scheme = MaterialTheme.colorScheme
-    Column(
-        modifier.fillMaxWidth().dashedOutline(scheme.outline, LocalVsTokens.current.cardRadius).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+    Row(
+        modifier.fillMaxWidth().background(extra.cautionContainer, MaterialTheme.shapes.medium).padding(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        StatusChip(stringResource(R.string.state_not_yet), Tone.NOT_YET)
-        Text(title, style = MaterialTheme.typography.titleMedium, color = scheme.onSurface)
-        Text(body, style = MaterialTheme.typography.bodyMedium, color = scheme.onSurfaceVariant)
+        Icon(painterResource(R.drawable.ic_warning), contentDescription = null, tint = extra.caution, modifier = Modifier.padding(top = 2.dp).size(20.dp))
+        Column {
+            Text(stringResource(R.string.demo_title), style = MaterialTheme.typography.titleSmall, color = extra.onCautionContainer)
+            Text(stringResource(R.string.demo_body), style = MaterialTheme.typography.bodySmall, color = extra.onCautionContainer)
+        }
+    }
+}
+
+/** Home side is a filled badge, away side an outlined one. Position and words carry identity; colour supports it. */
+@Composable
+fun TeamBadge(home: Boolean, modifier: Modifier = Modifier, size: Dp = 40.dp) {
+    val scheme = MaterialTheme.colorScheme
+    val spoken = stringResource(if (home) R.string.team_home else R.string.team_away)
+    val box = if (home) Modifier.background(scheme.primary, CircleShape) else Modifier.background(scheme.surface, CircleShape).border(2.dp, scheme.primary, CircleShape)
+    Box(modifier.size(size).then(box).clearAndSetSemantics { contentDescription = spoken }, contentAlignment = Alignment.Center) {
+        Icon(painterResource(R.drawable.ic_apparel), contentDescription = null, tint = if (home) scheme.onPrimary else scheme.primary, modifier = Modifier.size(size * 0.55f))
     }
 }
 
@@ -189,9 +181,9 @@ fun Notice(text: String, tone: Tone, modifier: Modifier = Modifier) {
     val extra = LocalVsColors.current
     val (container, content, icon) = when (tone) {
         Tone.NEGATIVE -> Triple(scheme.errorContainer, scheme.onErrorContainer, R.drawable.ic_error)
-        Tone.CAUTION -> Triple(extra.cautionContainer, extra.caution, R.drawable.ic_warning)
-        Tone.POSITIVE -> Triple(extra.positiveContainer, extra.positive, R.drawable.ic_check_circle)
-        else -> Triple(scheme.surfaceContainerHigh, scheme.onSurface, R.drawable.ic_info)
+        Tone.CAUTION -> Triple(extra.cautionContainer, extra.onCautionContainer, R.drawable.ic_warning)
+        Tone.POSITIVE -> Triple(extra.positiveContainer, extra.onPositiveContainer, R.drawable.ic_check_circle)
+        else -> Triple(scheme.primaryContainer, scheme.onPrimaryContainer, R.drawable.ic_info)
     }
     Row(
         modifier.fillMaxWidth().background(container, MaterialTheme.shapes.medium).padding(12.dp),
@@ -202,10 +194,24 @@ fun Notice(text: String, tone: Tone, modifier: Modifier = Modifier) {
     }
 }
 
+/** Section-level message for a feature or a result that does not exist yet. Never a table of placeholders. */
+@Composable
+fun NotYetCard(title: String, body: String, modifier: Modifier = Modifier) {
+    val scheme = MaterialTheme.colorScheme
+    Column(
+        modifier.fillMaxWidth().dashedOutline(scheme.outline, 16.dp).padding(Dimens.cardPadding),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        StatusChip(stringResource(R.string.state_not_yet), Tone.NOT_YET)
+        Text(title, style = MaterialTheme.typography.titleMedium, color = scheme.onSurface)
+        Text(body, style = MaterialTheme.typography.bodyMedium, color = scheme.onSurfaceVariant)
+    }
+}
+
 /** Label on the left, value on the right; long values wrap under the label at large font sizes. */
 @Composable
 fun FactRow(label: String, modifier: Modifier = Modifier, value: @Composable () -> Unit) {
-    Row(modifier.fillMaxWidth().heightIn(min = 32.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+    Row(modifier.fillMaxWidth().heightIn(min = 36.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
         value()
     }
@@ -213,12 +219,12 @@ fun FactRow(label: String, modifier: Modifier = Modifier, value: @Composable () 
 
 @Composable
 fun FactRow(label: String, value: String, modifier: Modifier = Modifier) {
-    FactRow(label, modifier) { Text(value, style = MaterialTheme.typography.bodyLarge, textAlign = TextAlign.End) }
+    FactRow(label, modifier) { Text(value, style = MaterialTheme.typography.titleSmall, textAlign = TextAlign.End) }
 }
 
 @Composable
 fun PrimaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, icon: Int? = null) {
-    Button(onClick, modifier.fillMaxWidth().heightIn(min = 56.dp), enabled = enabled, shape = MaterialTheme.shapes.medium) {
+    Button(onClick, modifier.fillMaxWidth().heightIn(min = Dimens.buttonHeight), enabled = enabled, shape = MaterialTheme.shapes.medium) {
         if (icon != null) {
             Icon(painterResource(icon), contentDescription = null, modifier = Modifier.size(20.dp))
             Spacer(Modifier.width(8.dp))
@@ -228,49 +234,136 @@ fun PrimaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifi
 }
 
 @Composable
-fun SecondaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) {
+fun SecondaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, icon: Int? = null) {
+    val scheme = MaterialTheme.colorScheme
     OutlinedButton(
-        onClick, modifier.fillMaxWidth().heightIn(min = 56.dp), enabled = enabled, shape = MaterialTheme.shapes.medium,
-        border = BorderStroke(1.5.dp, if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outlineVariant),
+        onClick, modifier.fillMaxWidth().heightIn(min = Dimens.buttonHeight), enabled = enabled, shape = MaterialTheme.shapes.medium,
+        border = BorderStroke(1.dp, if (enabled) scheme.outline else scheme.outlineVariant),
+        colors = ButtonDefaults.outlinedButtonColors(containerColor = scheme.surface, contentColor = scheme.primary),
     ) {
-        Text(text, style = MaterialTheme.typography.labelLarge, color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline, textAlign = TextAlign.Center)
+        if (icon != null) {
+            Icon(painterResource(icon), contentDescription = null, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(8.dp))
+        }
+        Text(text, style = MaterialTheme.typography.labelLarge, textAlign = TextAlign.Center)
     }
 }
 
-enum class StageState { DONE, FAILED, CAUTION, WAITING, NOT_YET }
-
-class Stage(val title: String, val detail: String, val state: StageState, val moment: String? = null)
-
-/** Named steps with the time each one finished. No percentage, no countdown, no moving indicator. */
+/** A choice card with a radio mark, as on the video source screen. */
 @Composable
-fun StageTracker(stages: List<Stage>, modifier: Modifier = Modifier) {
+fun SelectCard(selected: Boolean, icon: Int, title: String, subtitle: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) {
+    val scheme = MaterialTheme.colorScheme
+    Surface(
+        modifier = modifier.fillMaxWidth().selectable(selected = selected, enabled = enabled, role = Role.RadioButton, onClick = onClick),
+        shape = MaterialTheme.shapes.large,
+        color = scheme.surface,
+        border = BorderStroke(if (selected) 2.dp else 1.dp, if (selected) scheme.primary else LocalVsColors.current.divider),
+    ) {
+        Row(Modifier.heightIn(min = 76.dp).padding(Dimens.cardPadding), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            IconTile(icon, size = 44.dp)
+            Column(Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleSmall)
+                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant)
+            }
+            // Drawn mark, so the whole card is one radio target instead of a nested control.
+            Box(Modifier.size(22.dp).border(2.dp, if (selected) scheme.primary else scheme.outline, CircleShape), contentAlignment = Alignment.Center) {
+                if (selected) Box(Modifier.size(12.dp).background(scheme.primary, CircleShape))
+            }
+        }
+    }
+}
+
+/** Two or three mutually exclusive options side by side. */
+@Composable
+fun SegmentedChoice(options: List<String>, selectedIndex: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
+    val scheme = MaterialTheme.colorScheme
+    Row(
+        modifier.fillMaxWidth().clip(MaterialTheme.shapes.medium).border(1.dp, scheme.outline, MaterialTheme.shapes.medium).selectableGroup(),
+    ) {
+        options.forEachIndexed { index, label ->
+            val selected = index == selectedIndex
+            Box(
+                Modifier.weight(1f).heightIn(min = Dimens.touchTarget)
+                    .background(if (selected) scheme.primary else scheme.surface)
+                    .selectable(selected = selected, role = Role.RadioButton, onClick = { onSelect(index) }),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(label, style = MaterialTheme.typography.labelLarge, color = if (selected) scheme.onPrimary else scheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
+}
+
+enum class StageState { DONE, ACTIVE, FAILED, CAUTION, WAITING, NOT_YET }
+
+class Stage(val title: String, val detail: String? = null, val state: StageState, val moment: String? = null)
+
+/**
+ * Named steps as on the analysis screen. Only a step whose work is really running gets a moving
+ * indicator; a step that has not started is a hollow circle, and one that can not happen says so.
+ */
+@Composable
+fun StageList(stages: List<Stage>, modifier: Modifier = Modifier) {
     val scheme = MaterialTheme.colorScheme
     val extra = LocalVsColors.current
     Column(modifier.fillMaxWidth()) {
         stages.forEachIndexed { index, stage ->
-            val (icon, tint) = when (stage.state) {
-                StageState.DONE -> R.drawable.ic_check_circle to extra.positive
-                StageState.FAILED -> R.drawable.ic_error to scheme.error
-                StageState.CAUTION -> R.drawable.ic_warning to extra.caution
-                StageState.WAITING -> R.drawable.ic_pending to scheme.onSurfaceVariant
-                StageState.NOT_YET -> R.drawable.ic_hourglass_empty to scheme.onSurfaceVariant
-            }
             Row(Modifier.height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Column(Modifier.fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(painterResource(icon), contentDescription = null, tint = tint, modifier = Modifier.size(24.dp))
+                    Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) {
+                        when (stage.state) {
+                            StageState.DONE -> Icon(painterResource(R.drawable.ic_check_circle), null, tint = extra.positive, modifier = Modifier.size(24.dp))
+                            StageState.FAILED -> Icon(painterResource(R.drawable.ic_error), null, tint = scheme.error, modifier = Modifier.size(24.dp))
+                            StageState.CAUTION -> Icon(painterResource(R.drawable.ic_warning), null, tint = extra.caution, modifier = Modifier.size(24.dp))
+                            StageState.ACTIVE -> CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.5.dp)
+                            StageState.WAITING -> Box(Modifier.size(20.dp).border(2.dp, scheme.outline, CircleShape))
+                            StageState.NOT_YET -> Icon(painterResource(R.drawable.ic_hourglass_empty), null, tint = scheme.onSurfaceVariant, modifier = Modifier.size(22.dp))
+                        }
+                    }
                     if (index < stages.lastIndex) {
-                        Box(Modifier.padding(vertical = 4.dp).width(2.dp).weight(1f).background(scheme.outlineVariant, CircleShape))
+                        Box(Modifier.padding(vertical = 4.dp).width(2.dp).weight(1f).background(extra.divider, CircleShape))
                     }
                 }
-                Column(Modifier.weight(1f).padding(bottom = if (index < stages.lastIndex) 12.dp else 0.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(stage.title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f, fill = false))
-                        if (stage.state == StageState.NOT_YET) StatusChip(stringResource(R.string.state_not_yet), Tone.NOT_YET)
-                    }
-                    Text(stage.detail, style = MaterialTheme.typography.bodyMedium, color = scheme.onSurfaceVariant)
+                Column(Modifier.weight(1f).padding(bottom = if (index < stages.lastIndex) 16.dp else 0.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        stage.title, style = MaterialTheme.typography.titleSmall,
+                        color = if (stage.state == StageState.WAITING) scheme.onSurfaceVariant else scheme.onSurface,
+                    )
+                    if (stage.detail != null) Text(stage.detail, style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant)
                     if (stage.moment != null) Text(stage.moment, style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant)
                 }
             }
         }
+    }
+}
+
+/**
+ * The ring of the analysis screen. [fraction] is a measured share of the work, or null when the
+ * amount of work is unknown; then the ring spins instead of showing a number nobody measured.
+ */
+@Composable
+fun ProgressRing(fraction: Float?, modifier: Modifier = Modifier, spinning: Boolean = fraction == null, content: @Composable () -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    Box(modifier.size(168.dp), contentAlignment = Alignment.Center) {
+        Canvas(Modifier.matchParentSize()) {
+            val stroke = 10.dp.toPx()
+            drawArc(scheme.primaryContainer, 0f, 360f, false, Offset(stroke / 2, stroke / 2), Size(size.width - stroke, size.height - stroke), style = Stroke(stroke))
+            if (fraction != null) {
+                drawArc(scheme.primary, -90f, 360f * fraction.coerceIn(0f, 1f), false, Offset(stroke / 2, stroke / 2), Size(size.width - stroke, size.height - stroke), style = Stroke(stroke, cap = StrokeCap.Round))
+            }
+        }
+        if (fraction == null && spinning) CircularProgressIndicator(Modifier.matchParentSize().padding(0.dp), strokeWidth = 10.dp, trackColor = Color.Transparent)
+        content()
+    }
+}
+
+/** An empty list with one way forward. */
+@Composable
+fun EmptyState(icon: Int, title: String, body: String, modifier: Modifier = Modifier, action: (@Composable () -> Unit)? = null) {
+    Column(modifier.fillMaxWidth().padding(vertical = 24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        IconTile(icon, size = 64.dp)
+        Text(title, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
+        Text(body, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+        if (action != null) action()
     }
 }

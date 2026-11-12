@@ -29,3 +29,4 @@ storage/
 *.onnx
 *.tflite
 .DS_Store
+.kotlin/

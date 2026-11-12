@@ -26,6 +26,19 @@ fun formatDuration(durationMs: Long): String {
     }
 }
 
+/** "12 Kasım 2026" from an ISO date; the raw text when it is not a date. */
+fun formatDay(isoDate: String): String = runCatching {
+    java.time.LocalDate.parse(isoDate).format(java.time.format.DateTimeFormatter.ofPattern("d MMMM yyyy", turkish))
+}.getOrDefault(isoDate)
+
+/** "12:36" or "1:02:36" for a running recording or a clip position. */
+fun formatClock(durationMs: Long): String {
+    val seconds = durationMs / 1000
+    val hours = seconds / 3600
+    val rest = String.format(turkish, "%02d:%02d", seconds % 3600 / 60, seconds % 60)
+    return if (hours > 0) "$hours:$rest" else rest
+}
+
 /** "12 Kas 21:40". */
 fun formatMoment(epochMs: Long): String = SimpleDateFormat("d MMM HH:mm", turkish).format(Date(epochMs))
 
