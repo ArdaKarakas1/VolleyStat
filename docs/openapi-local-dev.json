@@ -3,7 +3,7 @@
   "info": {
     "title": "VolleyStat Local Development API",
     "description": "LOCAL TEST DATA ONLY. No authentication, no trained AI. Never expose to the internet.",
-    "version": "0.2.0"
+    "version": "0.3.0"
   },
   "paths": {
     "/v1/health": {
@@ -177,6 +177,37 @@
             }
           }
         }
+      },
+      "delete": {
+        "summary": "Abort Upload",
+        "description": "Give up an unfinished upload and free its bytes.",
+        "operationId": "abort_upload_v1_uploads__upload_id__delete",
+        "parameters": [
+          {
+            "name": "upload_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Upload Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/v1/uploads/{upload_id}/chunks": {
@@ -333,6 +364,42 @@
       "get": {
         "summary": "Video Quality",
         "operationId": "video_quality_v1_videos__video_id__quality_get",
+        "parameters": [
+          {
+            "name": "video_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Video Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Recheck Quality",
+        "description": "Run the file check again for a video that could not be validated earlier.",
+        "operationId": "recheck_quality_v1_videos__video_id__quality_post",
         "parameters": [
           {
             "name": "video_id",

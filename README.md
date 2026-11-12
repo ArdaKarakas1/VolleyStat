@@ -6,7 +6,7 @@ Hedef: Kullanıcı maçı telefonla kaydeder ya da galeriden seçer. Sunucu vide
 
 Bu depo yalnızca Android uygulamasını ve onun arka ucunu içerir. Web sitesi ayrı bir depodadır (`voleybolveveleybol`) ve bu projeyle kod paylaşmaz.
 
-## Bugünkü durum (sürüm 0.2.0)
+## Bugünkü durum (sürüm 0.3.0)
 
 | Parça | Durum |
 | --- | --- |
@@ -29,7 +29,7 @@ Python 3.12+ ve FFmpeg gerekir.
 cd backend
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
-uvicorn app.main:app --host 127.0.0.1 --port 8000
+python -m app      # 127.0.0.1:8000, yalnız bu bilgisayardan erişilir
 pytest -q          # başka bir terminalde
 ```
 

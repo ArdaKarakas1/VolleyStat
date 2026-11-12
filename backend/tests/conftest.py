@@ -9,8 +9,13 @@ from app.main import create_app
 
 
 @pytest.fixture
-def client(tmp_path):
-    with TestClient(create_app(tmp_path)) as c:
+def storage(tmp_path):
+    return tmp_path
+
+
+@pytest.fixture
+def client(storage):
+    with TestClient(create_app(storage)) as c:
         yield c
 
 
@@ -24,14 +29,14 @@ def make_clip(tmp_path_factory):
     folder = tmp_path_factory.mktemp("clips")
     cache = {}
 
-    def build(name, size="1280x720", rate=30, codec=("-c:v", "libx264", "-pix_fmt", "yuv420p"), seconds=1):
+    def build(name, size="1280x720", rate="30", codec=("-c:v", "libx264", "-pix_fmt", "yuv420p"),
+              seconds=1, audio_seconds=None, output=()):
         if name not in cache:
             target = folder / name
-            subprocess.run(
-                ["ffmpeg", "-v", "error", "-f", "lavfi", "-i", f"testsrc2=size={size}:rate={rate}",
-                 "-t", str(seconds), *codec, str(target)],
-                check=True,
-            )
+            command = ["ffmpeg", "-v", "error", "-f", "lavfi", "-t", str(seconds), "-i", f"testsrc2=size={size}:rate={rate}"]
+            if audio_seconds:
+                command += ["-f", "lavfi", "-t", str(audio_seconds), "-i", "sine=frequency=440", "-c:a", "aac"]
+            subprocess.run([*command, *codec, *output, str(target)], check=True)
             cache[name] = target.read_bytes()
         return cache[name]
 
