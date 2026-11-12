@@ -1,16 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
-
-    <application android:label="VolleyStat" android:theme="@style/AppTheme"
-        android:icon="@drawable/brand_logo" android:dataExtractionRules="@xml/data_extraction"
-        android:allowBackup="false">
-        <provider android:name=".CaptureFiles" android:authorities="${applicationId}.capture"
-            android:exported="false" android:grantUriPermissions="true">
-            <meta-data android:name="android.support.FILE_PROVIDER_PATHS"
-                android:resource="@xml/capture_paths" />
+    <!-- System Photo Picker / external camera app require no storage/camera runtime permission. -->
+    <application
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction"
+        android:icon="@drawable/brand_logo"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar"
+        android:usesCleartextTraffic="false">
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths" />
         </provider>
-        <activity android:name=".MainActivity" android:exported="true"
-            android:configChanges="orientation|screenSize">
+        <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

@@ -1,3 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Debug only: cleartext is limited to the two local development hosts in local_network.xml. -->
     <application android:networkSecurityConfig="@xml/local_network" />
 </manifest>
