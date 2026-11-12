@@ -13,9 +13,10 @@ Two layers:
      states an uncertaintyReason
    - at most one action per rally is flagged as the end event (`endEvent: true`)
 
-`sequence`, `setNumber` and `endEvent` are not part of the JSON schema. They are the
-JSON spelling of the `sequence`, `set_number` and `end_event` columns of the CSV
-templates, and the schema allows additional properties.
+`sequence`, `setNumber` and `endEvent` are not part of the JSON schema, which allows
+additional properties. They are the JSON spelling of CSV columns of the handover
+templates: `sequence` and `set_number` of 03_RALLI_GOLD.csv, and `end_event` of
+04_AKSIYON_GOLD.csv (that template is not copied into schemas/).
 
 Every error is one string that starts with the location of the problem.
 """

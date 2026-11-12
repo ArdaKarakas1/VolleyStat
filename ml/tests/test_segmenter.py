@@ -1,13 +1,23 @@
 """Segmenter tests. The clips are synthetic, so these tests prove the plumbing only."""
+import contextlib
+import os
+import signal
+import subprocess
+import tracemalloc
+from pathlib import Path
+
 import numpy as np
 import pytest
 
 from volleystat_ml import segmenter
 from volleystat_ml.metrics import evaluate_boundaries
-from volleystat_ml.segmenter import Interval, SegmenterParams, intervals_from_energy, segment_video
+from volleystat_ml.segmenter import (
+    Interval, SegmenterParams, decode_motion_energy, intervals_from_energy, segment_video,
+)
 
 PARAMS = SegmenterParams()
 PERIOD_MS = 200  # one energy sample at the default 5 fps
+FRAME_BYTES = PARAMS.frame_width * PARAMS.frame_height
 
 
 def energy_of(*stretches):
@@ -103,6 +113,100 @@ def test_error_in_the_progress_callback_stops_the_run(clips):
 
     with pytest.raises(RuntimeError, match="cancelled"):
         segment_video(clips.moving_box, progress=cancel)
+
+
+# --- decoder process -------------------------------------------------------------------
+# A shell script stands in for ffmpeg here. It produces what no real clip produces on
+# demand: megabytes of messages, a stream that never ends, a stream far longer than the
+# test clips. Only the pipe handling is under test; nothing is decoded.
+
+needs_posix_shell = pytest.mark.skipif(os.name != "posix", reason="the stand-in decoder is a shell script")
+
+
+@pytest.fixture
+def stand_in_decoder(tmp_path, monkeypatch):
+    def install(script):
+        folder = tmp_path / "bin"
+        folder.mkdir(exist_ok=True)
+        target = folder / "ffmpeg"
+        target.write_text(f"#!/bin/sh\n{script}\n", encoding="utf-8")
+        target.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{folder}{os.pathsep}{os.environ['PATH']}")
+
+    return install
+
+
+@contextlib.contextmanager
+def time_limit(seconds):
+    """Fail instead of hanging: a blocked pipe would otherwise stall the whole test run."""
+    def expired(signal_number, frame):
+        raise TimeoutError(f"no result within {seconds} s")
+
+    previous = signal.signal(signal.SIGALRM, expired)
+    signal.alarm(seconds)
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+@needs_posix_shell
+def test_megabytes_of_decoder_messages_do_not_block_the_frames(stand_in_decoder):
+    # A pipe holds about 64 KB. If nobody drained the messages, the decoder would stop
+    # before its first frame and the reader would wait for that frame forever.
+    stand_in_decoder(f'yes "damaged frame" | head -n 150000 >&2\nhead -c {10 * FRAME_BYTES} /dev/zero')
+    with time_limit(60):
+        energy, done, expected = decode_motion_energy(Path("unused.mp4"), PARAMS, duration_ms=2000)
+    assert (done, expected, energy.size) == (10, 10, 9)
+
+
+@needs_posix_shell
+def test_failed_decode_reports_the_last_message_however_long_the_log_is(stand_in_decoder):
+    stand_in_decoder('yes "damaged frame" | head -n 150000 >&2\necho "moov atom not found" >&2\nexit 1')
+    with time_limit(60), pytest.raises(segmenter.DecodeError, match="could not decode the video: moov atom not found$"):
+        decode_motion_energy(Path("unused.mp4"), PARAMS, duration_ms=2000)
+
+
+@needs_posix_shell
+def test_decoder_is_killed_and_reaped_when_the_run_stops_early(stand_in_decoder, monkeypatch):
+    stand_in_decoder("exec cat /dev/zero")   # never ends on its own
+    started = []
+    popen = subprocess.Popen
+
+    def recording_popen(*arguments, **options):
+        started.append(popen(*arguments, **options))
+        return started[-1]
+
+    monkeypatch.setattr(segmenter.subprocess, "Popen", recording_popen)
+
+    def cancel(done, total):
+        raise RuntimeError("cancelled")
+
+    with time_limit(60), pytest.raises(RuntimeError, match="cancelled"):
+        decode_motion_energy(Path("unused.mp4"), PARAMS, duration_ms=2000, progress=cancel)
+    (process,) = started
+    # A return code is only known after the parent waited for the child, so the child is
+    # neither running nor left behind as a zombie.
+    assert process.returncode == -signal.SIGKILL
+    assert process.stdout.closed
+
+
+@needs_posix_shell
+def test_long_stream_is_processed_with_a_small_rolling_window(stand_in_decoder):
+    frames = 20000   # more than an hour at 5 sampled frames per second, 104 MB of pixels
+    stand_in_decoder(f"exec head -c {frames * FRAME_BYTES} /dev/zero")
+    tracemalloc.start()
+    try:
+        with time_limit(120):
+            energy, done, _ = decode_motion_energy(Path("unused.mp4"), PARAMS, duration_ms=frames * PERIOD_MS)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert (done, energy.size) == (frames, frames - 1)
+    # Holding the stream would need at least frames * FRAME_BYTES. The peak has to stay
+    # near a few chunks of frames whatever the length of the video.
+    assert peak < 8 * 1024 * 1024 < frames * FRAME_BYTES
 
 
 # --- energy series ---------------------------------------------------------------------

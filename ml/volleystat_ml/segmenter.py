@@ -13,11 +13,12 @@ confidence value.
 from __future__ import annotations
 
 import math
+import os
 import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, NamedTuple
+from typing import IO, Callable, NamedTuple
 
 import numpy as np
 
@@ -38,6 +39,8 @@ ONLY_SHORT_RUNS = "ONLY_SHORT_RUNS"
 PROBE_TIMEOUT_SECONDS = 90
 # Frames read from the pipe per step; also how often progress is reported.
 _CHUNK_FRAMES = 32
+# How much of the end of ffmpeg's messages is read back for an error text.
+_MESSAGE_TAIL_BYTES = 4096
 
 # progress(frames_done, frames_total), both in sampled frames.
 ProgressCallback = Callable[[int, int], None]
@@ -214,8 +217,7 @@ def decode_motion_energy(
                 process.kill()
                 process.wait()
             process.stdout.close()
-        messages.seek(0)
-        detail = _last_line(messages.read().decode("utf-8", errors="replace"))
+        detail = _last_line(_tail(messages))
 
     if return_code != 0:
         raise DecodeError(f"ffmpeg could not decode the video: {detail}")
@@ -305,6 +307,14 @@ def segment_video(
         active_energy=active,
         contrast_ratio=contrast,
     )
+
+
+def _tail(messages: IO[bytes]) -> str:
+    # A damaged video can make ffmpeg log a line for every frame. Only the end of that
+    # log goes into the error text, so only the end is read into memory.
+    size = messages.seek(0, os.SEEK_END)
+    messages.seek(max(0, size - _MESSAGE_TAIL_BYTES))
+    return messages.read().decode("utf-8", errors="replace")
 
 
 def _last_line(text: str) -> str:

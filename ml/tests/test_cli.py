@@ -134,7 +134,12 @@ def test_percentages_are_printed_from_thirty_gold_rallies_on(tmp_path, capsys):
     assert "F1:        0.923" in out
     assert "below 30" not in out
     assert "recall 95% bootstrap interval: " in out and "seed 11" in out
-    assert "start error over 36 matched pair(s): median 150 ms, p90 300 ms" in out
+    # 20 of the 36 matched pairs are 300 ms late and 16 are exact. More than half of the
+    # sorted errors are 300, so the two middle values (18th and 19th) are both 300.
+    assert "start error over 36 matched pair(s): median 300 ms, p90 300 ms" in out
+    assert "end error over 36 matched pair(s):   median 300 ms, p90 300 ms" in out
+    # A late pair overlaps 7700 of 8300 ms: (20 * 7700 / 8300 + 16 * 1) / 36 = 0.9598.
+    assert "mean interval IoU of matched pairs: 0.960" in out
 
     first = run(capsys, "evaluate", "--gold", gold, "--pred", pred, "--seed", 11, "--json")[1]
     assert first == run(capsys, "evaluate", "--gold", gold, "--pred", pred, "--seed", 11, "--json")[1]
@@ -273,3 +278,15 @@ def test_a_command_is_required():
     with pytest.raises(SystemExit) as stopped:
         cli.main([])
     assert stopped.value.code == 2
+
+
+@pytest.mark.parametrize("command", ["segment", "evaluate", "validate-labels", "make-splits", "check-leakage"])
+def test_every_subcommand_is_reachable_through_the_module(command):
+    completed = subprocess.run([sys.executable, "-m", "volleystat_ml", command, "--help"], capture_output=True, text=True)
+    assert completed.returncode == 0, completed.stderr
+    assert f"usage: python -m volleystat_ml {command}" in completed.stdout
+
+
+def test_unknown_subcommand_is_refused_by_the_module():
+    completed = subprocess.run([sys.executable, "-m", "volleystat_ml", "train"], capture_output=True, text=True)
+    assert completed.returncode == 2 and "invalid choice: 'train'" in completed.stderr

@@ -1,0 +1,38 @@
+name: ML tests
+on:
+  push:
+    branches: [main]
+    # base.py and __init__.py are the interface and the registry the adapter test imports;
+    # only this workflow runs that test, because backend-tests does not install volleystat_ml.
+    paths:
+      - "ml/**"
+      - "backend/app/analyzers/motion_baseline.py"
+      - "backend/app/analyzers/base.py"
+      - "backend/app/analyzers/__init__.py"
+      - ".github/workflows/ml-tests.yml"
+  pull_request:
+    paths:
+      - "ml/**"
+      - "backend/app/analyzers/motion_baseline.py"
+      - "backend/app/analyzers/base.py"
+      - "backend/app/analyzers/__init__.py"
+      - ".github/workflows/ml-tests.yml"
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ml
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ffmpeg (the segmenter tests decode synthetic clips)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - run: pip install -e ".[test]"
+      - run: python -m pytest -q
+        env:
+          VOLLEYSTAT_REQUIRE_FFMPEG: "1"
