@@ -17,7 +17,6 @@
     <string name="action_retry">Yeniden Dene</string>
     <string name="action_add">Ekle</string>
     <string name="action_delete">Sil</string>
-    <string name="action_close">Kapat</string>
     <string name="team_home">Ev sahibi takım</string>
     <string name="team_away">Misafir takım</string>
     <string name="state_not_yet">Henüz yok</string>
@@ -183,7 +182,6 @@
     <string name="action_change_video">Başka Video Seç</string>
     <string name="thumbnail_description">Seçilen videodan bir kare</string>
     <string name="file_resolution">%1$d×%2$d</string>
-    <string name="file_fps">%1$s fps</string>
 
     <!-- 06 Recording -->
     <string name="record_permission_title">Kamera izni gerekiyor</string>
@@ -242,7 +240,6 @@
     <string name="stage_check_ok">Sunucu dosyayı doğruladı.</string>
     <string name="stage_check_rejected">Sunucu dosyayı kabul etmedi.</string>
     <string name="stage_check_unverified">Sunucu dosyayı kontrol edemedi.</string>
-    <string name="stage_queue">Analiz sırası</string>
     <string name="stage_queue_waiting">İş sunucuda sırasını bekliyor.</string>
     <string name="stage_rallies">Ralli tespiti</string>
     <string name="stage_rallies_running">Sunucu videodaki ralli aralıklarını arıyor.</string>
@@ -327,7 +324,6 @@
     <string name="report_rules">Skor kuralı: 25 sayı, karar setinde 15, iki fark.</string>
     <string name="report_set_open">%1$d. set sürüyor</string>
     <string name="report_stats">Maç İstatistikleri</string>
-    <string name="report_summary">Maç Özeti</string>
     <string name="report_team_stats">Takım İstatistikleri</string>
     <string name="report_player_stats">Oyuncu İstatistikleri</string>
     <string name="report_coverage">Veri Güvenilirliği</string>

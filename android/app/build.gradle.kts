@@ -13,8 +13,9 @@ android {
         applicationId = "com.voleybolveveleybol.volleystat"
         minSdk = 26
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.3.0"
+        versionCode = 4
+        versionName = "0.4.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildFeatures {
         compose = true
@@ -78,4 +79,10 @@ dependencies {
     testImplementation("androidx.compose.ui:ui-test-junit4")
     testImplementation("io.github.takahirom.roborazzi:roborazzi:1.50.0")
     testImplementation("io.github.takahirom.roborazzi:roborazzi-compose:1.50.0")
+    // Device tests: the camera, real playback and the journey against a backend.
+    androidTestImplementation(platform("androidx.compose:compose-bom:2025.09.00"))
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test:rules:1.7.0")
 }
