@@ -61,7 +61,7 @@ Bir videonun aynı anda tek süren işi olur. `Idempotency-Key` başlığı iste
   "state": "PROCESSING",
   "stage": "DETECTING_RALLIES",
   "progress": {"done": 1200, "total": 5400, "unit": "FRAMES"},
-  "analyzer": {"id": "motion-baseline", "version": "0.1", "kind": "BASELINE"},
+  "analyzer": {"id": "motion-baseline", "version": "0.2", "kind": "BASELINE"},
   "mock": false,
   "failure": null,
   "counts": {"rallies": 0, "reviewOpen": 0, "reviewTotal": 0},
@@ -146,7 +146,7 @@ Bir videonun aynı anda tek süren işi olur. `Idempotency-Key` başlığı iste
 ```json
 {
   "matchId": "…", "jobId": "…", "revision": 4,
-  "analyzer": {"id": "motion-baseline", "version": "0.1", "kind": "BASELINE"}, "mock": false,
+  "analyzer": {"id": "motion-baseline", "version": "0.2", "kind": "BASELINE"}, "mock": false,
   "verificationStatus": "PARTIALLY_VERIFIED",
   "rallies": {"proposed": 18, "verified": 7, "rejected": 1, "unresolved": 0, "open": 10},
   "ralliesMayBeMissing": true,
