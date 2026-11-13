@@ -5,21 +5,24 @@ import hashlib
 import json
 import os
 import re
-import sqlite3
 import time
-import uuid
-from contextlib import contextmanager
+from contextlib import asynccontextmanager
+from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import media
+from . import content, jobs, media, review
+from .analyzers import load_analyzer
+from .analyzers.base import MODEL, Analyzer
+from .db import connector, find_video, migrate, new_id
+from .errors import fail
 
 CHUNK_SIZE = 4 * 1024 * 1024
 MAX_VIDEO_BYTES = 4 * 1024 * 1024 * 1024
@@ -29,15 +32,33 @@ ALLOWED_MIMES = {"video/mp4", "video/quicktime", "video/webm", "video/x-matroska
 FINALIZE_STALE_SECONDS = 15 * 60
 
 
-def fail(code: str, message: str, status: int, **details: Any) -> None:
-    raise HTTPException(status_code=status, detail={"code": code, "message": message, "details": details})
-
-
 class MatchInput(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     homeTeamName: str = Field(min_length=2, max_length=80)
     awayTeamName: str = Field(min_length=2, max_length=80)
+    name: str | None = Field(default=None, max_length=80)
+    playedOn: str | None = Field(default=None, pattern=r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+    venue: str | None = Field(default=None, max_length=80)
+    # A label chosen by the user. The server never claims that a match was official.
+    kind: Literal["TRAINING", "OFFICIAL"] = "TRAINING"
+
+    @field_validator("name", "playedOn", "venue", mode="before")
+    @classmethod
+    def blank_is_missing(cls, value):
+        return None if isinstance(value, str) and not value.strip() else value
+
+    @field_validator("kind", mode="before")
+    @classmethod
+    def missing_kind_is_training(cls, value):
+        return "TRAINING" if value is None else value
+
+    @field_validator("playedOn")
+    @classmethod
+    def real_calendar_date(cls, value):
+        if value is not None:
+            date.fromisoformat(value)
+        return value
 
     @model_validator(mode="after")
     def different_teams(self):
@@ -67,71 +88,32 @@ class UploadInput(BaseModel):
         return self
 
 
-def new_id() -> str:
-    return str(uuid.uuid4())
+def match_payload(match) -> dict[str, Any]:
+    return {
+        "id": match["id"], "homeTeamName": match["home_team"], "awayTeamName": match["away_team"],
+        "name": match["name"], "playedOn": match["played_on"], "venue": match["venue"], "kind": match["kind"],
+        "status": "DRAFT",
+    }
 
 
-def create_app(storage_root: str | Path | None = None) -> FastAPI:
+def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str | None = None,
+               start_worker: bool = True) -> FastAPI:
+    """Build the API over one storage folder.
+
+    `analyzer` is an analyzer object or a registry name ("none" for no analyzer); None reads
+    VOLLEYSTAT_ANALYZER. `start_worker=False` keeps the background thread off so that a test can
+    step the job queue itself through `app.state.worker.run_pending()`.
+    """
+    # Resolved before storage is touched: an unknown analyzer name must stop the start-up.
+    if analyzer is None or isinstance(analyzer, str):
+        analyzer = load_analyzer(analyzer if analyzer is not None else os.environ.get("VOLLEYSTAT_ANALYZER"))
     storage = Path(storage_root or os.environ.get("VOLLEYSTAT_STORAGE") or (Path(__file__).parent.parent / "storage")).resolve()
     storage.mkdir(parents=True, exist_ok=True, mode=0o700)
     (storage / "media").mkdir(exist_ok=True, mode=0o700)
     db_path = storage / "volleystat.sqlite3"
 
-    @contextmanager
-    def connect(write: bool = False):
-        conn = sqlite3.connect(db_path, timeout=30, isolation_level=None)
-        conn.row_factory = sqlite3.Row
-        try:
-            conn.execute("PRAGMA foreign_keys=ON")
-            # Readers take a snapshot and never wait for a writer (WAL).
-            conn.execute("BEGIN IMMEDIATE" if write else "BEGIN")
-            yield conn
-            conn.execute("COMMIT")
-        except BaseException:
-            if conn.in_transaction:
-                conn.execute("ROLLBACK")
-            raise
-        finally:
-            conn.close()
-
-    setup = sqlite3.connect(db_path, timeout=30)
-    try:
-        setup.execute("PRAGMA journal_mode=WAL")
-        setup.executescript("""
-        CREATE TABLE IF NOT EXISTS matches (
-          id TEXT PRIMARY KEY, home_team TEXT NOT NULL, away_team TEXT NOT NULL,
-          created_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-        CREATE TABLE IF NOT EXISTS uploads (
-          id TEXT PRIMARY KEY, match_id TEXT NOT NULL REFERENCES matches(id),
-          file_name TEXT NOT NULL, mime_type TEXT NOT NULL, expected_size INTEGER NOT NULL,
-          next_offset INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'UPLOADING',
-          video_id TEXT UNIQUE, created_at TEXT NOT NULL DEFAULT (datetime('now')),
-          client_sha256 TEXT, finalize_started_at REAL
-        );
-        CREATE TABLE IF NOT EXISTS videos (
-          id TEXT PRIMARY KEY, match_id TEXT NOT NULL REFERENCES matches(id),
-          upload_id TEXT NOT NULL UNIQUE REFERENCES uploads(id),
-          size_bytes INTEGER NOT NULL, sha256 TEXT NOT NULL, mime_type TEXT NOT NULL,
-          status TEXT NOT NULL DEFAULT 'STORED_UNVALIDATED',
-          created_at TEXT NOT NULL DEFAULT (datetime('now')),
-          reject_code TEXT, media_json TEXT, warnings_json TEXT, probe_version TEXT,
-          storage_key TEXT
-        );
-        """)
-        # Storage folders created by earlier previews lack the newer columns.
-        for table, columns in (
-            ("uploads", (("client_sha256", "TEXT"), ("finalize_started_at", "REAL"))),
-            ("videos", (("reject_code", "TEXT"), ("media_json", "TEXT"), ("warnings_json", "TEXT"),
-                        ("probe_version", "TEXT"), ("storage_key", "TEXT"))),
-        ):
-            present = {row[1] for row in setup.execute(f"PRAGMA table_info({table})")}
-            for column, kind in columns:
-                if column not in present:
-                    setup.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
-        setup.commit()
-    finally:
-        setup.close()
+    migrate(db_path)
+    connect = connector(db_path)
 
     def upload_path(upload_id: str) -> Path:
         """One file per upload for its whole life: finalizing never moves it."""
@@ -163,20 +145,28 @@ def create_app(storage_root: str | Path | None = None) -> FastAPI:
             },
         }
 
-    def find_video(db, video_id: str):
-        record = db.execute("SELECT * FROM videos WHERE id=?", (video_id,)).fetchone()
-        if not record:
-            fail("VIDEO_NOT_FOUND", "Video does not exist", 404)
-        return record
-
     def find_upload(db, upload_id: str):
         record = db.execute("SELECT * FROM uploads WHERE id=?", (upload_id,)).fetchone()
         if not record:
             fail("UPLOAD_NOT_FOUND", "Upload does not exist", 404)
         return record
 
-    app = FastAPI(title="VolleyStat Local Development API", version="0.3.0",
+    worker = jobs.JobWorker(connect, analyzer, video_path)
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        if start_worker:
+            worker.start()
+        try:
+            yield
+        finally:
+            if start_worker:
+                # Joining the thread can wait for a running analyzer to notice the stop signal.
+                await run_in_threadpool(worker.stop)
+
+    app = FastAPI(title="VolleyStat Local Development API", version="0.4.0", lifespan=lifespan,
                   description="LOCAL TEST DATA ONLY. No authentication, no trained AI. Never expose to the internet.")
+    app.state.worker = worker
 
     @app.exception_handler(StarletteHTTPException)
     async def http_error(_request: Request, exc: StarletteHTTPException):
@@ -185,7 +175,7 @@ def create_app(storage_root: str | Path | None = None) -> FastAPI:
         else:
             code = {404: "NOT_FOUND", 405: "METHOD_NOT_ALLOWED"}.get(exc.status_code, "HTTP_ERROR")
             detail = {"code": code, "message": str(exc.detail), "details": {}}
-        return JSONResponse(status_code=exc.status_code, content={"error": detail})
+        return JSONResponse(status_code=exc.status_code, content={"error": detail}, headers=getattr(exc, "headers", None))
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(_request: Request, exc: RequestValidationError):
@@ -193,7 +183,11 @@ def create_app(storage_root: str | Path | None = None) -> FastAPI:
 
     @app.get("/v1/health")
     def health():
-        return {"status": "ok", "mode": "local-dev", "ai": "not-configured",
+        info = analyzer.info if analyzer is not None else None
+        return {"status": "ok", "mode": "local-dev",
+                # A mock or an unmeasured baseline is not a trained model.
+                "ai": "configured" if info is not None and info.kind == MODEL else "not-configured",
+                "analyzer": {"id": info.id, "version": info.version, "kind": info.kind} if info is not None else None,
                 "mediaProbe": "available" if media.probe_available() else "unavailable",
                 "maxVideoBytes": MAX_VIDEO_BYTES, "chunkSizeBytes": CHUNK_SIZE}
 
@@ -201,8 +195,11 @@ def create_app(storage_root: str | Path | None = None) -> FastAPI:
     def create_match(payload: MatchInput):
         match_id = new_id()
         with connect(write=True) as db:
-            db.execute("INSERT INTO matches(id, home_team, away_team) VALUES(?,?,?)", (match_id, payload.homeTeamName, payload.awayTeamName))
-        return {"id": match_id, "homeTeamName": payload.homeTeamName, "awayTeamName": payload.awayTeamName, "status": "DRAFT"}
+            db.execute(
+                "INSERT INTO matches(id, home_team, away_team, name, played_on, venue, kind) VALUES(?,?,?,?,?,?,?)",
+                (match_id, payload.homeTeamName, payload.awayTeamName, payload.name, payload.playedOn, payload.venue, payload.kind),
+            )
+            return match_payload(db.execute("SELECT * FROM matches WHERE id=?", (match_id,)).fetchone())
 
     @app.get("/v1/matches/{match_id}")
     def get_match(match_id: str):
@@ -210,7 +207,7 @@ def create_app(storage_root: str | Path | None = None) -> FastAPI:
             match = db.execute("SELECT * FROM matches WHERE id=?", (match_id,)).fetchone()
             if not match:
                 fail("MATCH_NOT_FOUND", "Match does not exist", 404)
-        return {"id": match["id"], "homeTeamName": match["home_team"], "awayTeamName": match["away_team"], "status": "DRAFT"}
+        return match_payload(match)
 
     @app.post("/v1/matches/{match_id}/uploads", status_code=201)
     def initiate_upload(match_id: str, payload: UploadInput):
@@ -389,21 +386,38 @@ def create_app(storage_root: str | Path | None = None) -> FastAPI:
             )
             return quality_payload(find_video(db, video_id))
 
+    @app.get("/v1/videos/{video_id}/content", response_class=StreamingResponse, responses={
+        200: {"description": "The whole video", "content": {"video/*": {}}},
+        206: {"description": "The requested byte range", "content": {"video/*": {}}},
+    })
+    def video_content(video_id: str, range_header: str | None = Header(default=None, alias="Range"),
+                      if_range: str | None = Header(default=None, alias="If-Range")):
+        """Evidence playback: the client plays the clip of a review card from these bytes."""
+        with connect() as db:
+            record = find_video(db, video_id)
+        if record["status"] != media.READY:
+            fail("VIDEO_NOT_READY", "Only a video that passed media validation can be played", 409, videoStatus=record["status"], rejectCode=record["reject_code"])
+        try:
+            handle = video_path(record).open("rb")
+        except FileNotFoundError:
+            fail("VIDEO_FILE_MISSING", "Stored bytes for this video are missing", 409)
+        return content.stream_file(handle, os.fstat(handle.fileno()).st_size, json.loads(record["media_json"])["container"], range_header, if_range)
+
     @app.delete("/v1/videos/{video_id}", status_code=204)
     def delete_video(video_id: str):
         with connect(write=True) as db:
             record = find_video(db, video_id)
+            pending = [row["id"] for row in db.execute(
+                "SELECT id FROM analysis_jobs WHERE video_id=? AND state IN (?,?)", (video_id, *jobs.ACTIVE_STATES))]
             db.execute("UPDATE uploads SET video_id=NULL,status='DELETED' WHERE id=?", (record["upload_id"],))
+            # The jobs of the video and their rallies, cards and decisions go with it (ON DELETE CASCADE).
             db.execute("DELETE FROM videos WHERE id=?", (video_id,))
             # Remove the bytes before the commit: a deletion must never leave the file behind.
             video_path(record).unlink(missing_ok=True)
+        # A run in progress has lost its job row and can write nothing; this only makes it stop sooner.
+        for job_id in pending:
+            worker.release(job_id)
 
-    @app.post("/v1/videos/{video_id}/analyses")
-    def request_analysis(video_id: str):
-        with connect() as db:
-            record = find_video(db, video_id)
-        if record["status"] != media.READY:
-            fail("VIDEO_NOT_READY", "Video did not pass media validation and can not be analysed", 409, videoStatus=record["status"], rejectCode=record["reject_code"])
-        fail("MODEL_NOT_CONFIGURED", "Volleyball computer vision pipeline is not installed. No statistics have been inferred.", 503)
-
+    app.include_router(jobs.router(connect, analyzer, worker))
+    app.include_router(review.router(connect))
     return app

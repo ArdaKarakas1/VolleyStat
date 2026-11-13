@@ -8,6 +8,12 @@ from fastapi.testclient import TestClient
 from app.main import create_app
 
 
+@pytest.fixture(autouse=True)
+def no_analyzer_from_the_shell(monkeypatch):
+    # A developer shell may export VOLLEYSTAT_ANALYZER. Each test names its analyzer itself.
+    monkeypatch.delenv("VOLLEYSTAT_ANALYZER", raising=False)
+
+
 @pytest.fixture
 def storage(tmp_path):
     return tmp_path
