@@ -10,9 +10,10 @@ Bu algoritmanın gerçek voleybol videosundaki doğruluğunu kimse ölçmedi. "D
 |---|---|
 | `volleystat_ml/segmenter.py` | Segmenter videodaki hareket enerjisinden ralli aralığı önerir. |
 | `volleystat_ml/metrics.py` | Bu modül tahmin aralıklarını gold aralıklarla karşılaştırır. |
+| `volleystat_ml/agreement.py` | Bu modül iki anotatörün aynı videolara verdiği etiketleri karşılaştırır: ralli sınırı, kazanan taraf ve servis tarafı. |
 | `volleystat_ml/labels.py` | Bu modül etiket dosyasını V3 şemasına ve alan kurallarına göre denetler. |
 | `volleystat_ml/splits.py` | Bu modül videoları maç grubuna göre train, validation ve test kümelerine ayırır, sızıntı arar ve kilit manifestini yazar. |
-| `volleystat_ml/cli.py` | Bu modül beş alt komutu çalıştırır. |
+| `volleystat_ml/cli.py` | Bu modül altı alt komutu çalıştırır. |
 | `schemas/` | Bu klasör devir paketindeki şemanın ve üç CSV şablonunun değişmemiş kopyalarını tutar. |
 | `tests/` | Bu klasör sentetik kliplerle çalışan testleri tutar. |
 
@@ -63,7 +64,7 @@ Sentetik testler yalnızca tesisatın çalıştığını kanıtlar. Testler şun
 - Segmenter zaman damgası boşluğunu durgun düzey saymaz ve aralıkları videonun ilk karesinden sayar.
 - Segmenter tamamen durağan bir dinlenme görüntüsünü durgun düzey sayar ve tek tek gelen kopya kareleri ikinci bir düzey saymaz.
 - Segmenter ilerlemeyi gerçek kare sayısıyla bildirir, `ffmpeg` sürecini her durumda kapatır ve videoyu belleğe yığmaz.
-- Metrik, etiket ve küme araçları kendi kurallarını uygular.
+- Metrik, uyum, etiket ve küme araçları kendi kurallarını uygular.
 
 Testler algoritmanın gerçek bir voleybol maçında ralli bulduğunu göstermez. Gerçek voleybol videosundaki doğruluğu kimse ölçmedi: Kimse bu algoritmayı gerçek maç videosunda çalıştırıp sonucu gold etiketlerle karşılaştırmadı. Bu yüzden bu belge gerçek maç için doğruluk, isabet ya da hata oranı vermez. Sentetik kliplerden çıkan sayılar gerçek maç hakkında bilgi taşımaz.
 
@@ -91,7 +92,7 @@ Algoritma yalnızca görüntünün ne kadar değiştiğini ölçer ve hareketi k
 ### Gerçek ölçüm için gereken adımlar
 
 1. Ekip kullanım izni olan gerçek maç videolarını envantere (`01_VIDEO_ENVANTERI.csv`) yazar.
-2. Anotatörler ralli sınırlarını `03_RALLI_GOLD.csv` ya da V3 JSON biçiminde etiketler. `validate-labels` komutu etiketleri denetler.
+2. Anotatörler ralli sınırlarını `03_RALLI_GOLD.csv` ya da V3 JSON biçiminde etiketler. `validate-labels` komutu etiketleri denetler. İki anotatör aynı videoları birbirinden bağımsız etiketlerse `agreement` komutu iki etiket setinin uyumunu ölçer.
 3. `make-splits` komutu test kümesini maç grubuna göre ayırır ve kilitler. Ekip komutun yazdığı `content_sha256` değerini dosyanın dışında bir yere, örneğin deney kaydına yazar. Envantere video eklenince ekip yeni kilidi `--previous` seçeneğiyle üretir ve iki kilidi `check-leakage` komutuyla karşılaştırır.
 4. `segment` komutu test videolarını işler. `evaluate` komutu tahminleri gold etiketlerle karşılaştırır.
 
@@ -160,6 +161,31 @@ Komut şu kuralları uygular:
 - Komut başlıktan fazla hücre taşıyan CSV satırını reddeder.
 - Komut yalnız bir tarafta bulunan videoyu listeler ve sayıma katmaz.
 - Argüman ayrıştırıcı `--tolerance-ms` (en az 0), `--resamples` (en az 1) ve `--seed` (en az 0) değerlerini denetler.
+
+### agreement
+
+```bash
+python -m volleystat_ml agreement --a anotator_a.csv --b anotator_b.csv
+python -m volleystat_ml agreement --a A_V001.json A_V002.json --b anotator_b.csv --tolerance-ms 1000 --out uyusmazliklar.csv --json
+```
+
+Komut iki anotatörün aynı videolara verdiği etiketleri karşılaştırır. Ekip B0 deneyini bu komutla ölçer (`docs/AI_PLAN.md`, bölüm 3 ve 4.3). `--a` seçeneği A anotatörünün dosyalarını, `--b` seçeneği B anotatörünün dosyalarını alır. Her dosya bir V3 etiket JSON'u ya da `03_RALLI_GOLD.csv` düzeninde bir CSV olabilir. CSV dosyası `video_id`, `start_ms` ve `end_ms` sütunlarını taşır. Komut `serving_side`, `winning_side` ve `observation_status` sütunlarını dosyada bulursa kullanır. İki seçenek de birden çok dosya kabul eder ve kullanıcı iki biçimi bir arada verebilir.
+
+Komut şu kuralları uygular:
+
+- Komut iki anotatörün dosyalarına `evaluate` komutunun gold kurallarını uygular. Komut kuralı bozan satırların numarasını yazar ve `2` koduyla çıkar.
+- Komut ralli çiftlerini `evaluate` komutunun eşlemesiyle kurar. İki ralli, başlangıçları ve bitişleri ayrı ayrı `--tolerance-ms` değerinin içinde kalırsa bir çift oluşturur. Varsayılan tolerans 1000 ms'dir ve eşleşme bire birdir. Komut A'nın ralli sayısını, B'nin ralli sayısını, çift sayısını, yalnız A'da kalan ve yalnız B'de kalan ralli sayısını yazar.
+- Komut çiftlerde başlangıç farkının ve bitiş farkının medyanını ve 90. yüzdeliğini, ayrıca ortalama aralık IoU değerini yazar.
+- Komut kazanan tarafı (`winning_side`, JSON'da `winningSide`) ve servis tarafını (`serving_side`, JSON'da `servingSide`) yalnız iki anotatörün de doldurduğu çiftlerde karşılaştırır. Komut değerleri dosyadaki yazımıyla karşılaştırır ve `UNKNOWN` değerini de `HOME` gibi bir değer olarak ele alır. Komut CSV dosyasında `serving_side`, `winning_side` ve `observation_status` sütunlarında yalnız şemanın değerlerini ve boş hücreyi kabul eder. Komut başka bir yazımı (`home` gibi) satır numarasıyla bildirir ve `2` koduyla çıkar. Komut her alan için karşılaştırdığı çift sayısını, aynı değeri taşıyan çift sayısını, uyum oranını ve Cohen's kappa değerini yazar. Komut kappa değerini videoların toplamında bütün çiftler üzerinden yeniden hesaplar.
+- Bir anotatör alanı boş bıraktıysa komut o çifti karşılaştırmaz ve ayrı bir sayıda gösterir (`notComparable`). İki anotatör de alanı boş bıraktıysa komut o çifti başka bir sayıda gösterir (`bothEmpty`). `observation_status` (JSON'da `observationStatus`) değeri `NOT_ANNOTATED` olan rallide komut kazanan alanını boş sayar. Şema `winningSide` alanını zorunlu tutar, bu yüzden anotatör kazananı etiketlemediğinde de bu alana bir değer yazar.
+- İki anotatör de her çifte aynı tek değeri verdiyse beklenen uyum 1 olur ve kappa tanımsız kalır. Komut bu durumda kappa yerine nedeni yazar. Komut nedeni çift sayısı 30'un altındayken de yazar. `--json` çıktısı `kappa` alanına `null` yazar ve nedeni `kappaUndefinedReason` alanında taşır. Komut tanımsız kappa için 0 ya da 1 yazmaz.
+- Karşılaştırılan çift sayısı 30'un altındaysa komut uyum oranını ve kappa değerini yazmaz. Metin çıktısı bu durumda ham sayıyı (`18/20 agree` gibi) ve örneklemin küçük olduğunu söyleyen bir uyarıyı yazar. `--json` çıktısı `agreementRate` ve `kappa` alanlarına `null` yazar ve `percentagesReliable: false` ile `minReliable: 30` alanlarını taşır. Komut aynı kuralı `videos` altındaki her videoya ayrı uygular.
+- Komut birden çok videoyu karşılaştırdığında metin çıktısına her video için ralli sayılarını ve alan başına ham sayıları yazar. Komut video başına sınır farklarını ve oranları yalnız `--json` çıktısındaki `videos` alanına yazar.
+- Komut yalnız bir anotatörün etiketlediği videoyu listeler ve hiçbir sayıma katmaz. İki anotatörün ortak videosu yoksa komut `2` koduyla çıkar.
+- `--out` seçeneği hakem için bir CSV dosyası yazar. Dosyanın her satırı bir uyuşmazlığı gösterir ve şu sütunları taşır: `video_id`, `kind`, `a_start_ms`, `a_end_ms`, `b_start_ms`, `b_end_ms`, `a_value`, `b_value`. `kind` sütunu `ONLY_A`, `ONLY_B`, `WINNER` ya da `SERVING` değerini taşır. Toleransın dışında kalan bir sınır farkı bir `ONLY_A` ve bir `ONLY_B` satırı üretir. Bir anotatörün boş bıraktığı alan satır üretmez. Komut satırları video kimliğine ve zamana göre sıralar.
+- Komut var olan bir dosyanın üstüne yazmaz. Komut olmayan bir klasörü de reddeder ve `2` koduyla çıkar.
+- Karşılaştırma çalıştıysa komut uyum düzeyi ne olursa olsun `0` koduyla çıkar. Komut bir eşik uygulamaz ve uyumu "iyi" ya da "yeterli" diye nitelemez. Kararı ürün sahibi verir.
+- Argüman ayrıştırıcı `--tolerance-ms` (en az 0) değerini denetler.
 
 ### validate-labels
 

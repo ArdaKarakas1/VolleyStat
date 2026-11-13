@@ -1,4 +1,4 @@
-"""Command line: python -m volleystat_ml <segment|evaluate|validate-labels|make-splits|check-leakage>.
+"""Command line: python -m volleystat_ml <segment|evaluate|agreement|validate-labels|make-splits|check-leakage>.
 
 Exit codes: 0 success, 1 the check found problems, 2 the input could not be used.
 Input that can not be used is reported on standard error as "error: ..." without a
@@ -8,6 +8,7 @@ the rows of a file break a rule.
 from __future__ import annotations
 
 import argparse
+import csv
 import dataclasses
 import json
 import math
@@ -19,7 +20,7 @@ from typing import Any, Callable, NoReturn, Sequence
 
 import numpy as np
 
-from . import labels, metrics, segmenter, splits
+from . import agreement, labels, metrics, segmenter, splits
 
 EXIT_OK, EXIT_FOUND, EXIT_UNUSABLE = 0, 1, 2
 
@@ -133,6 +134,19 @@ def _parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--json", action="store_true",
                           help="print JSON instead of text; below 30 gold rallies its ratios are null")
     evaluate.set_defaults(run=_evaluate)
+
+    agree = commands.add_parser(
+        "agreement", help="measure how well two annotators agree on the same videos (experiment B0)")
+    agree.add_argument("--a", type=Path, nargs="+", required=True,
+                       help="label files of annotator A: annotation JSON (V3) or CSV in the 03_RALLI_GOLD layout")
+    agree.add_argument("--b", type=Path, nargs="+", required=True, help="label files of annotator B, same formats")
+    agree.add_argument("--tolerance-ms", type=_in_range(int, minimum=0), default=agreement.DEFAULT_TOLERANCE_MS,
+                       help="two rallies pair when start and end are each within this many ms")
+    agree.add_argument("--out", type=Path,
+                       help="CSV to create with one row per disagreement; an existing file is never overwritten")
+    agree.add_argument("--json", action="store_true",
+                       help="print JSON instead of text; below 30 compared pairs its agreement rate and kappa are null")
+    agree.set_defaults(run=_agreement)
 
     validate = commands.add_parser("validate-labels", help="check an annotation JSON file against schema V3 and the domain rules")
     validate.add_argument("file", type=Path)
@@ -292,18 +306,47 @@ def _ratio(value: float | None, reliable: bool) -> str:
     return f" ({value:.3f})" if reliable and value is not None else ""
 
 
+# The roles whose files must pass the label rules (order, overlap, duplicates), and how a
+# refusal names the file. Predictions are not held to them: a segmenter that proposes a
+# rally twice has to be counted, not refused.
+# The roles whose categorical labels are compared, so their CSV values must be schema values.
+# A gold file of `evaluate` is read for its intervals only.
+_COMPARED_ROLES = ("annotator A", "annotator B")
+
+
+def _label_values() -> dict[str, list[str]]:
+    """The values each categorical CSV column may carry: those of the annotation schema."""
+    rally = labels.load_schema()["properties"]["rallies"]["items"]["properties"]
+    return {"serving_side": rally["servingSide"]["enum"], "winning_side": rally["winningSide"]["enum"],
+            "observation_status": rally["observationStatus"]["enum"]}
+
+
+_LABEL_RULES = {
+    "gold": ("the gold annotation is", "the gold intervals are"),
+    "annotator A": ("the annotation of annotator A is", "the intervals of annotator A are"),
+    "annotator B": ("the annotation of annotator B is", "the intervals of annotator B are"),
+}
+
+
 def _load_intervals(paths: Sequence[Path], role: str) -> dict[str, list[tuple[int, int]]]:
-    loaded: dict[str, list[tuple[int, int]]] = {}
+    return {
+        video_id: [(rally.start_ms, rally.end_ms) for rally in rallies]
+        for video_id, rallies in _load_rallies(paths, role).items()
+    }
+
+
+def _load_rallies(paths: Sequence[Path], role: str) -> dict[str, list[agreement.Rally]]:
+    loaded: dict[str, list[agreement.Rally]] = {}
     for path in paths:
         if path.suffix.lower() == ".json":
-            video_id, intervals = _intervals_from_json(path, role)
-            groups = {video_id: intervals}
+            video_id, rallies = _rallies_from_json(path, role)
+            groups = {video_id: rallies}
         else:
-            groups = _intervals_from_csv(path, role)
-        for video_id, intervals in groups.items():
+            groups = _rallies_from_csv(path, role)
+        for video_id, rallies in groups.items():
             if video_id in loaded:
                 raise InputError(f"{path}: video id '{video_id}' was already read from another {role} file")
-            loaded[video_id] = intervals
+            loaded[video_id] = rallies
     return loaded
 
 
@@ -323,50 +366,70 @@ def _read_json(path: Path) -> Any:
         raise InputError(f"{path}: not valid JSON (line {error.lineno}, column {error.colno}): {error.msg}") from error
 
 
-def _intervals_from_json(path: Path, role: str) -> tuple[str, list[tuple[int, int]]]:
+def _rallies_from_json(path: Path, role: str) -> tuple[str, list[agreement.Rally]]:
     document = _read_json(path)
-    if role == "gold":
-        # Metrics computed against broken gold labels are worthless, so gold must validate first.
+    if role in _LABEL_RULES:
+        # Metrics computed against broken labels are worthless, so labels must validate first.
         problems = labels.validate_annotation(document)
         if problems:
-            raise InputError(f"{path}: the gold annotation is not valid:\n  " + "\n  ".join(problems))
+            raise InputError(f"{path}: {_LABEL_RULES[role][0]} not valid:\n  " + "\n  ".join(problems))
     try:
-        intervals = [(int(rally["startMs"]), int(rally["endMs"])) for rally in document["rallies"]]
+        rallies = [
+            agreement.Rally(int(rally["startMs"]), int(rally["endMs"]), rally.get("winningSide"),
+                            rally.get("servingSide"), rally.get("observationStatus"))
+            for rally in document["rallies"]
+        ]
         video_id = str(document["videoId"])
-    except (KeyError, TypeError, ValueError) as error:
+    except (KeyError, TypeError, ValueError, AttributeError) as error:
         raise InputError(f"{path}: expected an object with videoId and rallies[].startMs/endMs") from error
-    return video_id, _checked(intervals, str(path))
+    _checked([(rally.start_ms, rally.end_ms) for rally in rallies], str(path))
+    return video_id, rallies
 
 
-def _intervals_from_csv(path: Path, role: str) -> dict[str, list[tuple[int, int]]]:
+def _rallies_from_csv(path: Path, role: str) -> dict[str, list[agreement.Rally]]:
     columns, rows, shape_problems = splits.read_csv(_named(path, splits.read_text))
     missing = [name for name in ("video_id", "start_ms", "end_ms") if name not in columns]
     if missing:
         raise InputError(f"{path}: missing column(s): {', '.join(missing)}")
     if shape_problems:
         raise InputError(f"{path}: {'; '.join(shape_problems)}")
-    groups: dict[str, list[tuple[int, int]]] = {}
+    groups: dict[str, list[agreement.Rally]] = {}
     row_numbers: dict[str, list[int]] = {}
+    value_problems: list[str] = []
     for number, row in enumerate(rows, start=2):
         try:
-            interval = (int(row["start_ms"]), int(row["end_ms"]))
+            start, end = int(row["start_ms"]), int(row["end_ms"])
         except ValueError as error:
             raise InputError(f"{path} row {number}: start_ms and end_ms must be whole milliseconds") from error
         if not row["video_id"]:
             raise InputError(f"{path} row {number}: video_id is empty")
-        groups.setdefault(row["video_id"], []).append(interval)
+        if role in _COMPARED_ROLES:
+            # A misspelt value would be compared as a category of its own, and a misspelt
+            # NOT_ANNOTATED would turn a placeholder winner into a disagreement.
+            for column, allowed in _label_values().items():
+                value = (row.get(column) or "").strip()
+                if value and value not in allowed:
+                    value_problems.append(f"row {number}: {column} must be one of {', '.join(allowed)} or empty, found {value!r}")
+        # A column the file does not have and an empty cell both mean "no value given".
+        groups.setdefault(row["video_id"], []).append(agreement.Rally(
+            start, end, row.get("winning_side"), row.get("serving_side"), row.get("observation_status")))
         row_numbers.setdefault(row["video_id"], []).append(number)
-    if role == "gold":
-        # The same rules as for a gold JSON file: a rally listed twice or two rallies that
+    if value_problems:
+        raise InputError(f"{path}: the labels of {role} are not valid:\n  " + "\n  ".join(value_problems))
+    if role in _LABEL_RULES:
+        # The same rules as for a JSON label file: a rally listed twice or two rallies that
         # overlap would each be counted, and the recall would be taken over too many.
         problems = []
-        for video_id, intervals in groups.items():
+        for video_id, rallies in groups.items():
             per_row, overlaps = labels.interval_problems(
-                intervals, lambda index: f"row {row_numbers[video_id][index]}", names=("start_ms", "end_ms"))
+                [(rally.start_ms, rally.end_ms) for rally in rallies],
+                lambda index: f"row {row_numbers[video_id][index]}", names=("start_ms", "end_ms"))
             problems += [problem for found in per_row for problem in found] + overlaps
         if problems:
-            raise InputError(f"{path}: the gold intervals are not valid:\n  " + "\n  ".join(problems))
-    return {video_id: _checked(intervals, f"{path} (video {video_id})") for video_id, intervals in groups.items()}
+            raise InputError(f"{path}: {_LABEL_RULES[role][1]} not valid:\n  " + "\n  ".join(problems))
+    for video_id, rallies in groups.items():
+        _checked([(rally.start_ms, rally.end_ms) for rally in rallies], f"{path} (video {video_id})")
+    return groups
 
 
 def _checked(intervals: list[tuple[int, int]], source: str) -> list[tuple[int, int]]:
@@ -374,6 +437,105 @@ def _checked(intervals: list[tuple[int, int]], source: str) -> list[tuple[int, i
         if not 0 <= start < end:
             raise InputError(f"{source}: interval {start}..{end} does not satisfy 0 <= start < end")
     return intervals
+
+
+def _agreement(args: argparse.Namespace) -> int:
+    first = _load_rallies(args.a, "annotator A")
+    second = _load_rallies(args.b, "annotator B")
+    shared = sorted(set(first) & set(second))
+    if not shared:
+        raise InputError("no video id appears in the files of both annotators")
+    if args.out is not None:
+        if args.out.is_dir():
+            raise InputError(f"--out {args.out}: is a directory, a file name is needed")
+        if not args.out.parent.is_dir():
+            raise InputError(f"--out {args.out}: the folder does not exist")
+    per_video = {video_id: agreement.compare(first[video_id], second[video_id], args.tolerance_ms)
+                 for video_id in shared}
+    total = agreement.pool(per_video.values())
+    # A video one annotator did not label is not a video with no rallies, so it is listed
+    # and takes part in no number.
+    only_a = sorted(set(first) - set(second))
+    only_b = sorted(set(second) - set(first))
+    rows = agreement.disagreement_rows(per_video)
+    if args.out is not None:
+        # Written before anything is printed: a refused file leaves no report that looks complete.
+        with open(args.out, "x", encoding="utf-8", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(agreement.DISAGREEMENT_COLUMNS)
+            writer.writerows([["" if row[name] is None else row[name] for name in agreement.DISAGREEMENT_COLUMNS]
+                              for row in rows])
+
+    if args.json:
+        document = total.to_dict()
+        document["videos"] = {video_id: result.to_dict() for video_id, result in per_video.items()}
+        document["notCompared"] = {"onlyA": only_a, "onlyB": only_b}
+        document["disagreementsFile"] = None if args.out is None else str(args.out)
+        print(json.dumps(document, indent=2))
+        return EXIT_OK
+
+    print(f"Annotator agreement, tolerance +/-{args.tolerance_ms} ms on start and on end")
+    print(f"videos compared: {len(shared)} ({', '.join(shared)})")
+    if only_a:
+        print(f"not compared, labelled by annotator A only: {', '.join(only_a)}")
+    if only_b:
+        print(f"not compared, labelled by annotator B only: {', '.join(only_b)}")
+    print("rallies: " + _rally_counts(total))
+    if len(per_video) > 1:
+        for video_id, result in per_video.items():
+            print(f"  {video_id}: " + _rally_counts(result))
+            # Counts only. The differences and ratios of one video are in the JSON output.
+            print("    " + "; ".join(_field_counts(title, result.fields[name]) for name, title in _FIELD_TITLES))
+    boundaries = total.boundaries
+    print(f"start difference over {total.matched} matched pair(s): "
+          f"median {_number(boundaries.median_abs_start_error_ms, 0)} ms, "
+          f"p90 {_number(boundaries.p90_abs_start_error_ms, 0)} ms")
+    print(f"end difference over {total.matched} matched pair(s):   "
+          f"median {_number(boundaries.median_abs_end_error_ms, 0)} ms, "
+          f"p90 {_number(boundaries.p90_abs_end_error_ms, 0)} ms")
+    print(f"mean interval IoU of matched pairs: {_number(boundaries.mean_iou, 3)}")
+    for name, title in _FIELD_TITLES:
+        _print_field(title, total.fields[name])
+    print(f"disagreements for the adjudicator: {len(rows)} row(s)")
+    if args.out is not None:
+        print(f"wrote {args.out}")
+    return EXIT_OK
+
+
+def _rally_counts(result: agreement.Agreement) -> str:
+    return (f"A {result.a_count}   B {result.b_count}   matched pairs {result.matched}   "
+            f"only in A {result.only_a}   only in B {result.only_b}")
+
+
+_FIELD_TITLES = (("winning_side", "winning side"), ("serving_side", "serving side"))
+
+
+def _field_counts(title: str, field: agreement.FieldAgreement) -> str:
+    return f"{title} {field.agree}/{field.compared} agree" if field.compared else f"{title} not compared"
+
+
+def _print_field(title: str, field: agreement.FieldAgreement) -> None:
+    undefined = field.kappa_undefined_reason if field.compared else None
+    if not field.compared:
+        print(f"{title}: no matched pair has this field from both annotators")
+    elif field.percentages_reliable:
+        kappa = f"Cohen's kappa {field.kappa:.3f}" if field.kappa is not None else f"Cohen's kappa not defined: {undefined}"
+        print(f"{title}: {field.agree}/{field.compared} agree ({field.observed:.3f}); {kappa}")
+    else:
+        print(f"{title}: {field.agree}/{field.compared} agree")
+        # Undefined is not the same as unreliable: a kappa that does not exist is said to
+        # not exist at every sample size.
+        if undefined is not None:
+            print(f"  Cohen's kappa not defined: {undefined}")
+    if field.not_comparable:
+        print(f"  not comparable, one annotator left the field empty: {field.not_comparable} pair(s)")
+    if field.both_empty:
+        print(f"  left empty by both annotators: {field.both_empty} pair(s)")
+    if field.compared and not field.percentages_reliable:
+        what = "the agreement rate is" if undefined is not None else "the agreement rate and Cohen's kappa are"
+        verb = "is" if undefined is not None else "are"
+        print(f"  n = {field.compared} compared pairs is below {agreement.MIN_RELIABLE}: {what} not reliable "
+              f"at this sample size and {verb} not printed. Quote the counts.")
 
 
 def _validate_labels(args: argparse.Namespace) -> int:
