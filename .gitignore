@@ -20,6 +20,8 @@ __pycache__/
 data/
 media/
 storage/
+# Source packages that happen to be called "data" are code, not data.
+!android/**/src/**/data/
 *.sqlite3*
 *.mp4
 *.mov
@@ -29,3 +31,4 @@ storage/
 *.onnx
 *.tflite
 .DS_Store
+.kotlin/
