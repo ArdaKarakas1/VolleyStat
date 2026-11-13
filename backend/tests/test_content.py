@@ -28,6 +28,13 @@ def stored(client, make_clip):
     ("bytes=-1", (999, 999)),
     ("bytes=10-5000", (10, 999)),       # the end is cut to the file
     ("bytes=-5000", (0, 999)),          # a suffix longer than the file is the whole file
+    # A player may write "to the end" as the largest number it knows. The digit count does not matter.
+    ("bytes=0-18446744073709551615", (0, 999)),
+    ("bytes=10-" + "9" * 40, (10, 999)),
+    ("bytes=0-" + "9" * 5000, (0, 999)),
+    ("bytes=-99999999999999999999", (0, 999)),
+    ("bytes=-" + "9" * 5000, (0, 999)),
+    ("bytes=" + "0" * 5000 + "7-8", (7, 8)),
     ("Bytes = 5 - 9", (5, 9)),
     ("items=0-5", None),                # an unknown unit is ignored
     ("bytes=0-1,5-6", None),            # several ranges are answered with the whole file
@@ -38,7 +45,8 @@ def test_parse_range_of_a_1000_byte_file(header, expected):
 
 @pytest.mark.parametrize("header", [
     "bytes=1000-", "bytes=1000-1001", "bytes=5-2", "bytes=-0", "bytes=-", "bytes=", "bytes=abc", "bytes=1-2-3",
-    "bytes=0x10-", "bytes=١-٢", "bytes=" + "9" * 20 + "-",
+    "bytes=0x10-", "bytes=١-٢", "bytes=" + "9" * 20 + "-", "bytes=" + "9" * 5000 + "-",
+    "bytes=1000-18446744073709551615", "bytes=-" + "0" * 5000,
 ])
 def test_parse_range_refuses_what_it_can_not_satisfy(header):
     with pytest.raises(RangeNotSatisfiable):
@@ -65,6 +73,8 @@ def test_the_whole_video_is_served_without_a_range(client, stored):
     ("bytes=-500", lambda size: (size - 500, size - 1)),
     ("bytes=0-", lambda size: (0, size - 1)),
     ("bytes=10-999999999", lambda size: (10, size - 1)),
+    ("bytes=0-18446744073709551615", lambda size: (0, size - 1)),
+    ("bytes=-99999999999999999999", lambda size: (0, size - 1)),
 ])
 def test_a_byte_range_is_answered_with_206_and_exactly_those_bytes(client, stored, header, bounds):
     url, data = stored
@@ -94,7 +104,8 @@ def test_consecutive_ranges_rebuild_the_file(client, stored):
     assert b"".join(part.content for part in parts) == data
 
 
-@pytest.mark.parametrize("header", ["bytes={size}-", "bytes={size}-{size}", "bytes=999999999-", "bytes=5-2", "bytes=-0", "bytes=abc"])
+@pytest.mark.parametrize("header", ["bytes={size}-", "bytes={size}-{size}", "bytes=999999999-", "bytes=5-2", "bytes=-0", "bytes=abc",
+                                    "bytes=18446744073709551616-18446744073709551617"])
 def test_an_unsatisfiable_range_is_answered_with_416(client, stored, header):
     url, data = stored
     response = client.get(url, headers={"Range": header.format(size=len(data))})

@@ -1,8 +1,13 @@
+import asyncio
 import hashlib
+import json
 import sqlite3
 import time
 
+import pytest
+
 import app.main as main_module
+from app.bodylimit import MAX_JSON_BODY_BYTES, BodyLimit
 from app.main import CHUNK_SIZE
 
 
@@ -49,6 +54,90 @@ def test_errors_outside_the_routes_use_the_error_envelope(client):
     wrong_method = client.post("/v1/health")
     assert wrong_method.status_code == 405
     assert wrong_method.json()["error"]["code"] == "METHOD_NOT_ALLOWED"
+
+
+def padded_match(size):
+    """A valid match body of exactly `size` bytes; JSON allows whitespace between its tokens."""
+    body = json.dumps({"homeTeamName": "Takım A", "awayTeamName": "Takım B"}).encode()
+    return body[:-1] + b" " * (size - len(body)) + b"}"
+
+
+def post_json(client, url, content):
+    return client.post(url, content=content, headers={"Content-Type": "application/json"})
+
+
+def too_large(response):
+    assert response.status_code == 413, response.text
+    assert response.json() == {"error": {"code": "PAYLOAD_TOO_LARGE", "message": response.json()["error"]["message"],
+                                         "details": {"maxBytes": MAX_JSON_BODY_BYTES}}}
+    return True
+
+
+def test_a_json_body_of_64_kib_is_accepted_and_one_byte_more_is_refused(client, storage):
+    assert MAX_JSON_BODY_BYTES == 64 * 1024
+    assert post_json(client, "/v1/matches", padded_match(MAX_JSON_BODY_BYTES)).status_code == 201
+    assert too_large(post_json(client, "/v1/matches", padded_match(MAX_JSON_BODY_BYTES + 1)))
+    with sqlite3.connect(storage / "volleystat.sqlite3") as db:
+        assert db.execute("SELECT COUNT(*) FROM matches").fetchone()[0] == 1
+
+
+def in_pieces(data, size=8192):
+    """A body that httpx sends with chunked transfer encoding, that is without a Content-Length header."""
+    for start in range(0, len(data), size):
+        yield data[start:start + size]
+
+
+def test_a_json_body_without_a_content_length_has_the_same_limit(client):
+    accepted = post_json(client, "/v1/matches", in_pieces(padded_match(MAX_JSON_BODY_BYTES)))
+    assert "content-length" not in accepted.request.headers
+    assert accepted.status_code == 201
+    refused = post_json(client, "/v1/matches", in_pieces(padded_match(MAX_JSON_BODY_BYTES + 1)))
+    assert "content-length" not in refused.request.headers
+    assert too_large(refused)
+
+
+@pytest.mark.parametrize("method, url", [
+    ("POST", "/v1/matches"),
+    ("POST", "/v1/matches/unknown/uploads"),
+    ("POST", "/v1/review-cards/unknown/decisions"),
+    ("POST", "/v1/review-cards/unknown/reopen"),
+])
+def test_an_oversized_body_is_refused_before_the_route_looks_at_it(client, method, url):
+    # Neither JSON nor a known id: without the limit these would answer 422 or 404 after reading it all.
+    oversized = b"x" * (MAX_JSON_BODY_BYTES + 1)
+    assert too_large(client.request(method, url, content=oversized))
+    assert too_large(client.request(method, url, content=in_pieces(oversized)))
+
+
+def test_the_chunk_route_keeps_its_own_larger_limit(client):
+    size = MAX_JSON_BODY_BYTES + 1
+    uid = start_upload(client, size=size)
+    stored = client.put(f"/v1/uploads/{uid}/chunks?offset=0", content=b"z" * size)
+    assert stored.status_code == 200 and stored.json()["nextOffset"] == size
+
+
+def test_the_body_limit_stops_reading_a_body_that_names_no_length():
+    reached = []
+    pulled = []
+    sent = []
+
+    async def route(scope, receive, send):
+        reached.append(scope["path"])
+
+    async def receive():
+        pulled.append(1)
+        return {"type": "http.request", "body": b"x" * 16384, "more_body": True}
+
+    async def send(message):
+        sent.append(message)
+
+    scope = {"type": "http", "method": "POST", "path": "/v1/matches", "headers": []}
+    asyncio.run(BodyLimit(route)(scope, receive, send))
+    # An endless body is given up right after the limit, and the route never sees the request.
+    assert len(pulled) == MAX_JSON_BODY_BYTES // 16384 + 1
+    assert reached == []
+    assert sent[0]["type"] == "http.response.start" and sent[0]["status"] == 413
+    assert json.loads(sent[1]["body"])["error"]["code"] == "PAYLOAD_TOO_LARGE"
 
 
 def test_match_validation(client):

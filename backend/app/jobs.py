@@ -20,7 +20,7 @@ from fastapi import APIRouter, Header
 from fastapi.responses import JSONResponse
 
 from . import media
-from .analyzers.base import AWAY, HOME, MOCK, UNKNOWN, Analyzer, AnalyzerError, ProgressReporter, RallyProposal
+from .analyzers.base import AWAY, HOME, MOCK, MODEL, UNKNOWN, Analyzer, AnalyzerError, ProgressReporter, RallyProposal
 from .db import find_video, new_id, utc_now
 from .errors import fail
 
@@ -96,8 +96,8 @@ def measured_progress(done: Any, total: Any, unit: Any) -> tuple[int | None, int
     return done, total, unit
 
 
-def checked_proposals(proposals: Iterable[RallyProposal], duration_ms: int, mock: bool) -> list[RallyProposal]:
-    """Normalise analyzer output, or raise ValueError/TypeError when it breaks the analyzer contract."""
+def checked_proposals(proposals: Iterable[RallyProposal], duration_ms: int, kind: str) -> list[RallyProposal]:
+    """Normalise the output of an analyzer of `kind`, or raise ValueError/TypeError when it breaks the analyzer contract."""
     checked = []
     for proposal in proposals:
         if not isinstance(proposal, RallyProposal):
@@ -115,8 +115,11 @@ def checked_proposals(proposals: Iterable[RallyProposal], duration_ms: int, mock
             confidence = float(confidence)
             if not (math.isfinite(confidence) and 0.0 <= confidence <= 1.0):
                 raise ValueError(f"confidence {proposal.confidence!r} is not a probability")
-        if mock and (proposal.proposed_winner != UNKNOWN or confidence is not None):
-            raise ValueError("a mock analyzer must not propose a winner or a confidence")
+        if kind == MOCK and proposal.proposed_winner != UNKNOWN:
+            raise ValueError("a mock analyzer must not propose a winner")
+        if kind != MODEL and confidence is not None:
+            # A confidence is a calibrated probability. A mock has none and a baseline has never been evaluated.
+            raise ValueError(f"an analyzer of kind {kind} must not report a confidence")
         reasons = tuple(proposal.uncertainty_reasons)
         if not all(isinstance(reason, str) and reason for reason in reasons):
             raise TypeError("uncertainty reasons must be non-empty strings")
@@ -260,7 +263,8 @@ class JobWorker:
                 if job is None:
                     return None
                 configured = self._analyzer.info if self._analyzer is not None else None
-                if configured is None or (job["analyzer_id"], job["analyzer_version"]) != (configured.id, configured.version):
+                if configured is None or (job["analyzer_id"], job["analyzer_version"], job["analyzer_kind"]) != (
+                        configured.id, configured.version, configured.kind):
                     # Running it with another analyzer would label the output with the wrong origin.
                     _close(db, job["id"], FAILED, _Failure("ANALYZER_ERROR", "The analyzer this job was created for is no longer configured on the server"))
                     continue
@@ -301,7 +305,7 @@ class JobWorker:
                 return
 
     def _reporter(self, run: _Run) -> ProgressReporter:
-        last_stage: str | None = None
+        last_written: tuple[str, bool] | None = None  # (stage, whether its progress was measured)
         last_write = 0.0
 
         def halt(reason: str) -> None:
@@ -309,7 +313,7 @@ class JobWorker:
             raise _Halted(reason)
 
         def report(stage: str, done: int | None = None, total: int | None = None, unit: str | None = None) -> None:
-            nonlocal last_stage, last_write
+            nonlocal last_written, last_write
             # This callback is the only place where a running analyzer can be stopped.
             if self._stopping.is_set():
                 halt(_STOPPING)
@@ -319,15 +323,21 @@ class JobWorker:
                 halt(_TIMEOUT)
             if stage not in STAGES:
                 raise ValueError(f"unknown analysis stage {stage!r}")
+            progress = measured_progress(done, total, unit)
+            written = (stage, progress[1] is not None)
             now = time.monotonic()
-            if stage == last_stage and now - last_write < PROGRESS_WRITE_SECONDS:
+            # Skipped: a report in the stage that was written last which, like that one, carries numbers
+            # or, like that one, carries none. A new stage, a first measurement and a withdrawn one are
+            # stored at once: a job that keeps showing "5 of 10" after its analyzer stopped measuring
+            # would state a progress nobody measured.
+            if written == last_written and now - last_write < PROGRESS_WRITE_SECONDS:
                 return
-            last_stage, last_write = stage, now
+            last_written, last_write = written, now
             with self._connect(write=True) as db:
                 owned = db.execute(
                     "UPDATE analysis_jobs SET stage=?, progress_done=?, progress_total=?, progress_unit=?, heartbeat_at=?"
                     " WHERE id=? AND run_token=? AND state=?",
-                    (stage, *measured_progress(done, total, unit), time.time(), run.job_id, run.token, PROCESSING),
+                    (stage, *progress, time.time(), run.job_id, run.token, PROCESSING),
                 ).rowcount
             if not owned:
                 run.lost.set()
@@ -354,7 +364,7 @@ class JobWorker:
             log.exception("Analyzer %s crashed on job %s", analyzer.info.id, run.job_id)
             return _Failure("ANALYZER_ERROR", "The analyzer stopped with an internal error")
         try:
-            rallies = checked_proposals(proposals, int(media_info["durationMs"]), analyzer.info.kind == MOCK)
+            rallies = checked_proposals(proposals, int(media_info["durationMs"]), analyzer.info.kind)
         except (TypeError, ValueError) as error:
             log.error("Analyzer %s returned invalid output for job %s: %s", analyzer.info.id, run.job_id, error)
             return _Failure("ANALYZER_ERROR", "The analyzer returned output that breaks its contract")
@@ -416,25 +426,37 @@ def router(connect, analyzer: Analyzer | None, worker: JobWorker) -> APIRouter:
                      videoStatus=video["status"], rejectCode=video["reject_code"])
             if analyzer is None:
                 fail("MODEL_NOT_CONFIGURED", "Volleyball computer vision pipeline is not installed. No statistics have been inferred.", 503)
-            existing = None
+            job = None
             if idempotency_key is not None:
-                existing = db.execute(
-                    "SELECT * FROM analysis_jobs WHERE video_id=? AND idempotency_key=?", (video_id, idempotency_key)
+                job = db.execute(
+                    "SELECT j.* FROM analysis_request_keys k JOIN analysis_jobs j ON j.id=k.job_id"
+                    " WHERE k.video_id=? AND k.idempotency_key=?", (video_id, idempotency_key)
                 ).fetchone()
-            if existing is None:
-                existing = db.execute(
+            created = False
+            if job is None:
+                job = db.execute(
                     "SELECT * FROM analysis_jobs WHERE video_id=? AND state IN (?,?)", (video_id, *ACTIVE_STATES)
                 ).fetchone()
-            if existing is not None:
-                return job_payload(db, existing)
-            job_id = new_id()
-            db.execute(
-                "INSERT INTO analysis_jobs(id, video_id, match_id, state, analyzer_id, analyzer_version, analyzer_kind,"
-                " idempotency_key, created_at) VALUES(?,?,?,?,?,?,?,?,?)",
-                (job_id, video_id, video["match_id"], QUEUED, analyzer.info.id, analyzer.info.version,
-                 analyzer.info.kind, idempotency_key, utc_now()),
-            )
-            payload = job_payload(db, find_job(db, job_id))
+                if job is None:
+                    job_id = new_id()
+                    db.execute(
+                        "INSERT INTO analysis_jobs(id, video_id, match_id, state, analyzer_id, analyzer_version, analyzer_kind,"
+                        " created_at) VALUES(?,?,?,?,?,?,?,?)",
+                        (job_id, video_id, video["match_id"], QUEUED, analyzer.info.id, analyzer.info.version,
+                         analyzer.info.kind, utc_now()),
+                    )
+                    job = find_job(db, job_id)
+                    created = True
+                if idempotency_key is not None:
+                    # Also for a request that only joined a pending job: its retry may arrive after that
+                    # run ended and must still get this job, not start a second analysis.
+                    db.execute(
+                        "INSERT INTO analysis_request_keys(video_id, idempotency_key, job_id) VALUES(?,?,?)",
+                        (video_id, idempotency_key, job["id"]),
+                    )
+            payload = job_payload(db, job)
+        if not created:
+            return payload
         worker.wake()
         return JSONResponse(status_code=202, content=payload)
 

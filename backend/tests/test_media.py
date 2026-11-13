@@ -1,6 +1,8 @@
 """Media validation tests. Every clip is a synthetic ffmpeg test pattern."""
 import hashlib
 import subprocess
+import sys
+import tracemalloc
 
 import pytest
 
@@ -155,6 +157,72 @@ def test_probe_timeout_is_not_reported_as_a_corrupt_file(client, make_clip, monk
     video = store(client, make_clip("hd.mp4"))
     assert video["status"] == "STORED_UNVALIDATED"
     assert video["quality"]["rejectCode"] == "PROBE_TIMEOUT"
+
+
+def test_the_tail_check_keeps_no_packet_listing_in_memory(make_clip, tmp_path):
+    # 20 000 packets inside the tail window. ffprobe prints well over 300 KiB for them in any format.
+    path = tmp_path / "dense.mp4"
+    path.write_bytes(make_clip("dense.mp4", size="64x36", rate="20000",
+                               codec=("-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p")))
+    tracemalloc.start()
+    try:
+        assert media._tail_is_readable(path, "mov", 1.0) is True
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert peak < 256 * 1024
+
+
+def stand_in_for_ffprobe(monkeypatch, script):
+    """Run a short Python script in place of ffprobe; return the list its processes are appended to."""
+    started = []
+    real_popen = subprocess.Popen
+
+    def launch(_command, **options):
+        process = real_popen([sys.executable, "-c", script], **options)
+        started.append(process)
+        return process
+
+    monkeypatch.setattr(media.subprocess, "Popen", launch)
+    return started
+
+
+def test_a_tail_check_that_runs_too_long_is_stopped_and_counts_as_a_timeout(tmp_path, monkeypatch):
+    started = stand_in_for_ffprobe(monkeypatch, "import time; print('0.5,0.5', flush=True); time.sleep(60)")
+    monkeypatch.setattr(media, "PROBE_TIMEOUT_SECONDS", 0.3)
+    assert media._tail_is_readable(tmp_path / "any.mp4", "mov", 1.0) is None
+    # The process was stopped; it does not keep running behind the answer.
+    assert len(started) == 1 and started[0].poll() is not None
+
+
+def test_the_tail_check_reads_a_long_error_stream_next_to_the_packets(tmp_path, monkeypatch):
+    # More than a pipe holds on both streams: reading one after the other would block forever.
+    script = ("import sys\n"
+              "for _ in range(20000): sys.stderr.write('[mov] noise ' + 'x' * 80 + '\\n')\n"
+              "sys.stderr.write('[mov] stream 1, offset 0x4e78: partial file\\n')\n"
+              "for index in range(20000): sys.stdout.write(f'{index / 10000:.6f},{index / 10000:.6f}\\n')\n")
+    stand_in_for_ffprobe(monkeypatch, script)
+    monkeypatch.setattr(media, "PROBE_TIMEOUT_SECONDS", 30)
+    # The packets reach the end of the video, but the error stream names a truncation.
+    assert media._tail_is_readable(tmp_path / "any.mp4", "mov", 2.0) is False
+
+
+@pytest.mark.parametrize("listing, expected", [
+    ("0.500000,0.500000\n1.966667,1.900000\n", True),
+    ("N/A,1.950000\n", True),                          # no presentation time: the decode time counts
+    ("-0.023220,-0.023220,\n1.950000,1.950000,\n", True),  # a packet with side data ends with an empty field
+    ("0.100000,0.100000\n0.200000,0.200000\n", False),  # the packets stop long before the end
+    ("N/A,N/A\n", False),
+    ("", False),
+])
+def test_the_tail_check_decides_from_the_latest_packet_time(tmp_path, monkeypatch, listing, expected):
+    stand_in_for_ffprobe(monkeypatch, f"import sys; sys.stdout.write({listing!r})")
+    assert media._tail_is_readable(tmp_path / "any.mp4", "mov", 3.9) is expected
+
+
+def test_a_failed_tail_check_means_an_unreadable_tail(tmp_path, monkeypatch):
+    stand_in_for_ffprobe(monkeypatch, "import sys; print('3.900000,3.900000'); sys.exit(1)")
+    assert media._tail_is_readable(tmp_path / "any.mp4", "mov", 3.9) is False
 
 
 def test_recheck_leaves_a_decided_video_untouched(client, make_clip):

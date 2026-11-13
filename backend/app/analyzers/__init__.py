@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import importlib
 
-from .base import Analyzer
+from .base import BASELINE, MOCK, MODEL, Analyzer
 
 # name -> "module:class". Modules are imported only when selected, so the server starts
 # without the optional dependencies of analyzers it does not use.
@@ -11,10 +11,23 @@ REGISTRY = {
     "demo": "app.analyzers.demo:DemoAnalyzer",
     "motion-baseline": "app.analyzers.motion_baseline:MotionBaselineAnalyzer",
 }
+KINDS = (MOCK, BASELINE, MODEL)
 
 
 class AnalyzerNotAvailable(Exception):
     pass
+
+
+def require_known_kind(analyzer: Analyzer) -> None:
+    """Refuse an analyzer whose kind the contract does not define.
+
+    The kind decides whether a job is flagged mock and what its analyzer may claim, so a value
+    such as "mock" or "DEMO" must not slip through as "not a mock".
+    """
+    kind = analyzer.info.kind
+    if not (isinstance(kind, str) and kind in KINDS):
+        raise AnalyzerNotAvailable(
+            f"Analyzer '{analyzer.info.id}' declares kind {kind!r}. The kind must be exactly one of: {', '.join(KINDS)}")
 
 
 def load_analyzer(name: str | None) -> Analyzer | None:
