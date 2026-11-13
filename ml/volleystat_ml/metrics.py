@@ -11,7 +11,7 @@ IoU are computed over the matched pairs only.
 
 With fewer than 30 gold rallies a percentage is misleading. The result then
 carries `percentages_reliable = False`; report the raw counts ("18/20") and an
-interval instead.
+interval instead. `to_dict()` leaves the ratios out (null) in that case.
 """
 from __future__ import annotations
 
@@ -57,6 +57,12 @@ class BoundaryEvaluation:
     matches: tuple[Match, ...]
 
     def to_dict(self) -> dict[str, Any]:
+        """The form that is written to a report. Below MIN_RELIABLE_GOLD gold rallies the
+        ratios are null and only the counts are given, so a record built from this
+        dictionary can not quote a percentage the sample does not support."""
+        def ratio(value: float | None) -> float | None:
+            return value if self.percentages_reliable else None
+
         return {
             "toleranceMs": self.tolerance_ms,
             "goldCount": self.gold_count,
@@ -64,9 +70,9 @@ class BoundaryEvaluation:
             "tp": self.tp,
             "fp": self.fp,
             "fn": self.fn,
-            "precision": {"value": self.precision, "numerator": self.tp, "denominator": self.tp + self.fp},
-            "recall": {"value": self.recall, "numerator": self.tp, "denominator": self.tp + self.fn},
-            "f1": self.f1,
+            "precision": {"value": ratio(self.precision), "numerator": self.tp, "denominator": self.tp + self.fp},
+            "recall": {"value": ratio(self.recall), "numerator": self.tp, "denominator": self.tp + self.fn},
+            "f1": ratio(self.f1),
             "medianAbsStartErrorMs": self.median_abs_start_error_ms,
             "p90AbsStartErrorMs": self.p90_abs_start_error_ms,
             "medianAbsEndErrorMs": self.median_abs_end_error_ms,

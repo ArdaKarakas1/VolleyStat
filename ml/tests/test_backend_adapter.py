@@ -113,6 +113,36 @@ def test_unreadable_video_fails_with_the_contract_code(backend, clips):
     assert "ffmpeg could not decode the video" in str(failure.value)
 
 
+@pytest.mark.parametrize("clip", ["truncated", "damaged"])
+def test_partly_decoded_video_fails_the_job_instead_of_giving_partial_proposals(backend, clips, clip):
+    # ffmpeg exits with 0 for these files. Proposals for the part it could read would be
+    # stored as if the whole video had been analysed.
+    with pytest.raises(backend.base.AnalyzerError) as failure:
+        backend.adapter.MotionBaselineAnalyzer().analyze(getattr(clips, clip), MP4, ignore)
+    assert failure.value.code == "VIDEO_UNREADABLE"
+    assert "could not decode every part of the video" in str(failure.value)
+
+
+def test_proposals_count_from_the_first_video_frame_when_the_container_starts_later(backend, clips):
+    # The probe stores the container duration, which here runs 5 s past the last frame.
+    media = {"container": "video/x-matroska", "codec": "h264", "durationMs": 45000}
+    proposals = backend.adapter.MotionBaselineAnalyzer().analyze(clips.offset_start, media, ignore)
+    evaluation = evaluate_boundaries(clips.rallies_ms, [(p.start_ms, p.end_ms) for p in proposals])
+    assert (evaluation.tp, evaluation.fp, evaluation.fn) == (3, 0, 0)
+
+
+def test_proposals_are_clamped_to_the_stored_duration(backend, clips, monkeypatch):
+    def outside(path, params, *, duration_ms, demuxer, progress):
+        intervals = (segmenter.Interval(-300, 4000), segmenter.Interval(9000, 12400), segmenter.Interval(12100, 15000))
+        return segmenter.SegmentationResult(segmenter.OK, intervals, duration_ms, 60, 60)
+
+    monkeypatch.setattr(segmenter, "segment_video", outside)
+    proposals = backend.adapter.MotionBaselineAnalyzer().analyze(clips.busy, {**MP4, "durationMs": 12000}, ignore)
+    # Nothing can be played before 0 or after durationMs; an interval that lies outside
+    # completely has nothing left to show.
+    assert [(proposal.start_ms, proposal.end_ms) for proposal in proposals] == [(0, 4000), (9000, 12000)]
+
+
 def test_missing_ffmpeg_is_an_analyzer_error_not_an_unreadable_video(backend, clips, monkeypatch, tmp_path):
     monkeypatch.setenv("PATH", str(tmp_path))
     with pytest.raises(backend.base.AnalyzerError) as failure:

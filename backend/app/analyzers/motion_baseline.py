@@ -4,6 +4,9 @@ The algorithm lives in the volleystat_ml package (ml/ in this repository). Its
 accuracy on real match video is not measured. It proposes intervals only: it has
 no evidence about who won a rally, so the winner stays UNKNOWN and the confidence
 stays None.
+
+A video that ffmpeg could not decode to its end fails the job with VIDEO_UNREADABLE.
+No proposal is returned for the part that could be read.
 """
 from __future__ import annotations
 
@@ -50,13 +53,18 @@ class MotionBaselineAnalyzer:
             raise AnalyzerError("VIDEO_UNREADABLE", str(error)) from error
         except segmenter.SegmenterError as error:
             raise AnalyzerError("ANALYZER_ERROR", str(error)) from error
-        return [
-            RallyProposal(
-                start_ms=interval.start_ms,
-                end_ms=interval.end_ms,
-                proposed_winner=UNKNOWN,
-                confidence=None,
-                uncertainty_reasons=(NO_WINNER_MODEL,),
-            )
-            for interval in result.intervals
-        ]
+        proposals = []
+        for interval in result.intervals:
+            # Interval times count from the first video frame, and the player can only
+            # show positions from 0 to durationMs. An interval that lies outside
+            # completely has nothing left to show.
+            start_ms, end_ms = max(0, interval.start_ms), min(result.duration_ms, interval.end_ms)
+            if start_ms < end_ms:
+                proposals.append(RallyProposal(
+                    start_ms=start_ms,
+                    end_ms=end_ms,
+                    proposed_winner=UNKNOWN,
+                    confidence=None,
+                    uncertainty_reasons=(NO_WINNER_MODEL,),
+                ))
+        return proposals

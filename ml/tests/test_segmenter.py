@@ -99,6 +99,44 @@ def test_unreadable_file_raises_decode_error(clips, tmp_path):
         segment_video(tmp_path / "missing.mp4", duration_ms=5000)
 
 
+@pytest.mark.parametrize("clip", ["truncated", "damaged"])
+def test_video_that_was_not_decoded_to_its_end_is_refused(clips, clip):
+    # ffmpeg exits with 0 for both files; only its messages tell that frames are missing.
+    # Intervals for the readable part would look like a complete result.
+    with pytest.raises(segmenter.DecodeError, match="could not decode every part of the video"):
+        segment_video(getattr(clips, clip))
+
+
+def test_hole_in_the_timestamps_is_idle_time_and_not_the_idle_level(clips):
+    result = segment_video(clips.timestamp_gap)
+    assert result.status == segmenter.OK
+    evaluation = evaluate_boundaries(clips.rallies_ms, result.intervals)
+    assert (evaluation.tp, evaluation.fp, evaluation.fn) == (3, 0, 0)
+    # The idle level is the noise of the resting picture, not the zero of the repeated frames.
+    assert 0.5 < result.idle_energy < result.active_energy
+
+
+def test_sampling_faster_than_the_source_only_adds_repeated_frames(clips):
+    # The clip has 15 frames per second, so every second sample at 30 is a copy.
+    result = segment_video(clips.moving_box, SegmenterParams(sample_fps=30))
+    assert result.frames_processed == 1200
+    evaluation = evaluate_boundaries(clips.rallies_ms, result.intervals)
+    assert (evaluation.tp, evaluation.fp, evaluation.fn) == (3, 0, 0)
+
+
+@pytest.mark.parametrize("clip, container_ms", [("offset_start", 45000), ("late_picture", 42000)])
+def test_times_count_from_the_first_video_frame(clips, clip, container_ms):
+    # In the first clip the container starts at 5 s, in the second the sound starts 2 s
+    # before the picture. Neither shift may reach the intervals.
+    result = segment_video(getattr(clips, clip))
+    assert result.duration_ms == container_ms
+    assert result.frames_processed == 200
+    evaluation = evaluate_boundaries(clips.rallies_ms, result.intervals)
+    assert (evaluation.tp, evaluation.fp, evaluation.fn) == (3, 0, 0)
+    assert evaluation.p90_abs_start_error_ms <= 300 and evaluation.p90_abs_end_error_ms <= 300
+    assert all(0 <= interval.start_ms < interval.end_ms <= clips.rally_clip_ms for interval in result.intervals)
+
+
 def test_missing_ffmpeg_is_reported_as_such(clips, monkeypatch, tmp_path):
     monkeypatch.setenv("PATH", str(tmp_path))
     with pytest.raises(segmenter.FfmpegMissing):
@@ -156,9 +194,23 @@ def test_megabytes_of_decoder_messages_do_not_block_the_frames(stand_in_decoder)
     # A pipe holds about 64 KB. If nobody drained the messages, the decoder would stop
     # before its first frame and the reader would wait for that frame forever.
     stand_in_decoder(f'yes "damaged frame" | head -n 150000 >&2\nhead -c {10 * FRAME_BYTES} /dev/zero')
-    with time_limit(60):
-        energy, done, expected = decode_motion_energy(Path("unused.mp4"), PARAMS, duration_ms=2000)
-    assert (done, expected, energy.size) == (10, 10, 9)
+    calls = []
+    with time_limit(60), pytest.raises(segmenter.DecodeError, match="every part of the video: damaged frame$"):
+        decode_motion_energy(Path("unused.mp4"), PARAMS, duration_ms=2000,
+                             progress=lambda done, total: calls.append((done, total)))
+    # Every frame came through before the messages made the run fail.
+    assert calls[-1] == (10, 10)
+
+
+@needs_posix_shell
+def test_messages_with_exit_code_zero_fail_the_run_and_name_the_real_message(stand_in_decoder):
+    stand_in_decoder(
+        'echo "[h264] Invalid data found when processing input" >&2\n'
+        'echo "    Last message repeated 3 times" >&2\n'
+        f"head -c {10 * FRAME_BYTES} /dev/zero"
+    )
+    with time_limit(60), pytest.raises(segmenter.DecodeError, match="Invalid data found when processing input$"):
+        decode_motion_energy(Path("unused.mp4"), PARAMS, duration_ms=2000)
 
 
 @needs_posix_shell
@@ -263,6 +315,73 @@ def test_hysteresis_extends_a_run_but_does_not_start_one():
     assert intervals_from_energy(shoulder_only, PARAMS, duration_ms=60000)[0] == [Interval(28100, 39900)]
     attached = energy_of((0.1, 60), (0.7, 20), (10, 60), (0.1, 60))
     assert intervals_from_energy(attached, PARAMS, duration_ms=60000)[0] == [Interval(12100, 27900)]
+
+
+def test_repeated_frames_take_no_part_in_the_levels_and_count_as_idle():
+    # Five seconds of exact zeros inside idle time: a hole in the timestamps or a frozen
+    # picture. Taken as the idle level, they would turn the idle noise into rallies.
+    energy = energy_of((0.9, 50), (0, 25), (0.9, 25), (5, 30), (0.9, 40))
+    intervals, status, levels = intervals_from_energy(energy, PARAMS, duration_ms=34200)
+    assert status == segmenter.OK
+    assert intervals == [Interval(20100, 25900)]
+    assert levels[:2] == (0.9, 5.0)
+
+
+def test_repeated_frames_inside_a_rally_split_it_only_when_they_last():
+    one_copy = energy_of((0.9, 30), (5, 15), (0, 1), (5, 15), (0.9, 30))
+    assert intervals_from_energy(one_copy, PARAMS, duration_ms=18400)[0] == [Interval(6100, 12100)]
+    # Two seconds without a new frame are longer than the gap that is merged.
+    frozen = energy_of((0.9, 30), (5, 15), (0, 10), (5, 15), (0.9, 30))
+    assert intervals_from_energy(frozen, PARAMS, duration_ms=20200)[0] == [Interval(6100, 8900), Interval(11100, 13900)]
+
+
+def test_every_second_sample_repeated_does_not_break_the_runs():
+    # What sampling at twice the source frame rate produces.
+    def doubled(value, count):
+        return np.tile([float(value), 0.0], count)
+
+    energy = np.concatenate([doubled(0.9, 20), doubled(5, 20), doubled(0.9, 20)])
+    intervals, status, levels = intervals_from_energy(energy, PARAMS, duration_ms=24200)
+    assert status == segmenter.OK and levels[:2] == (0.9, 5.0)
+    assert intervals == [Interval(8100, 15700)]
+
+
+def test_lasting_zeros_are_the_rest_when_everything_that_moved_is_one_level():
+    # A perfectly still picture between the rallies, as in a screen recording or a
+    # synthetic clip. Left out of the levels, the zeros would leave nothing to call idle.
+    energy = energy_of((0, 40), (5, 30), (0, 40))
+    intervals, status, levels = intervals_from_energy(energy, PARAMS, duration_ms=22200)
+    assert status == segmenter.OK and levels[:2] == (0.0, 5.0)
+    assert intervals == [Interval(8100, 13900)]
+
+
+def test_lasting_zeros_are_the_rest_when_the_motion_only_splits_into_short_bursts():
+    # The rally itself has a slow and a fast part. Without the zeros the cut would fall
+    # between the two, and neither part is long enough to be a rally on its own.
+    energy = energy_of((0, 40), (4, 8), (20, 6), (4, 24), (20, 6), (4, 8), (0, 40))
+    without_zeros, status, _ = intervals_from_energy(energy[energy > 0], PARAMS, duration_ms=10600)
+    assert without_zeros == [] and status == segmenter.ONLY_SHORT_RUNS
+
+    intervals, status, levels = intervals_from_energy(energy, PARAMS, duration_ms=26600)
+    assert status == segmenter.OK and levels[0] == 0.0
+    assert intervals == [Interval(8100, 18300)]
+
+
+def test_zeros_that_come_one_at_a_time_are_never_the_rest():
+    # A resting picture sampled at twice its frame rate: noise, copy, noise, copy. The
+    # copies are not a second level, so the clip has no separation and no rally.
+    energy = np.tile([0.9, 0.0], 60)
+    assert intervals_from_energy(energy, PARAMS, duration_ms=24200) == ([], segmenter.NO_SEPARATION, None)
+    assert intervals_from_energy(np.zeros(100), PARAMS, duration_ms=20200) == ([], segmenter.NO_SEPARATION, None)
+
+
+def test_a_hole_in_a_clip_without_rallies_is_a_known_false_proposal():
+    # Documents a limit, not a wish. Only resting noise and one long hole: the energy can
+    # not tell this from a still picture with one stretch of play, so the noise is proposed.
+    energy = energy_of((0.9, 50), (0, 25), (0.9, 50))
+    intervals, status, _ = intervals_from_energy(energy, PARAMS, duration_ms=25200)
+    assert status == segmenter.OK
+    assert intervals == [Interval(0, 9900), Interval(15100, 25200)]
 
 
 def test_no_separation_cases_return_nothing():

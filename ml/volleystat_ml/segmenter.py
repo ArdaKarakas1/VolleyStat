@@ -9,6 +9,10 @@ This is a heuristic, not a model. It was only run on synthetic clips; its
 accuracy on real match video is not measured. It knows nothing about the ball,
 the court or the score, so it never proposes a winner and never produces a
 confidence value.
+
+Intervals are on the timeline a player shows: 0 is the first video frame. The
+container start time and a sound track that starts before the picture do not
+shift them.
 """
 from __future__ import annotations
 
@@ -25,7 +29,7 @@ import numpy as np
 ALGORITHM_ID = "motion-baseline"
 # Stored proposals carry this version. Change it whenever the algorithm or a default
 # parameter changes, otherwise results from different behaviour look comparable.
-ALGORITHM_VERSION = "0.1"
+ALGORITHM_VERSION = "0.2"
 
 OK = "OK"
 # The energy does not split into two clearly different levels (a still clip, a clip
@@ -71,8 +75,8 @@ class SegmenterParams:
     None of them was tuned or validated on real match video.
     """
 
-    # Frames per second sampled from the video. Keep it below the source frame rate:
-    # ffmpeg repeats frames to reach a higher rate and a repeated frame reads as zero motion.
+    # Frames per second sampled from the video. A rate above the source frame rate gains
+    # nothing: ffmpeg reaches it by repeating frames, and a repeated frame carries no motion.
     sample_fps: float = 5.0
     # Size of the grayscale frames the energy is computed on. Small frames average sensor
     # noise away and keep a full match within seconds of numpy work.
@@ -118,7 +122,10 @@ class SegmenterParams:
 @dataclass(frozen=True)
 class SegmentationResult:
     status: str
+    # Milliseconds from the first video frame.
     intervals: tuple[Interval, ...]
+    # Duration of the container. It is longer than the picture when the container does not
+    # start at 0 or when another stream starts earlier or ends later than the picture.
     duration_ms: int
     frames_processed: int
     frames_expected: int
@@ -161,16 +168,25 @@ def decode_motion_energy(
     """Return (energy, frames_processed, frames_expected).
 
     `energy[i]` is the mean absolute gray-level difference between sampled frames i and
-    i + 1, so it describes the time between i / sample_fps and (i + 1) / sample_fps.
+    i + 1, so it describes the time between i / sample_fps and (i + 1) / sample_fps, counted
+    from the first video frame.
     `demuxer` forces the input format (as the upload probe does) so ffmpeg never guesses
     the container from the content of an untrusted file.
+
+    Raises DecodeError when ffmpeg fails and also when it reports an error and still exits
+    with 0, which it does for a truncated or partly damaged file. Energy for the part it
+    could read would pass for the whole video.
     """
     width, height = params.frame_width, params.frame_height
+    # setpts puts the first video frame at 0. ffmpeg has already subtracted the container
+    # start time, but the picture still starts later than that when another stream (the
+    # sound) starts first, and the fps filter would fill that time with copies of the
+    # first frame.
     # round=up makes sampled frame k the newest source frame at or before k / sample_fps,
     # which is what a player shows at that position; the default (near) samples up to half
-    # a period late. start_time=0 keeps k / sample_fps on the file's own timeline.
+    # a period late.
     filters = (
-        f"fps=fps={params.sample_fps}:round=up:start_time=0,"
+        f"setpts=PTS-STARTPTS,fps=fps={params.sample_fps}:round=up,"
         f"scale={width}:{height}:flags=area,format=gray"
     )
     command = ["ffmpeg", "-v", "error", "-nostdin", "-protocol_whitelist", "file"]
@@ -217,10 +233,14 @@ def decode_motion_energy(
                 process.kill()
                 process.wait()
             process.stdout.close()
-        detail = _last_line(_tail(messages))
+        log = _tail(messages)
 
     if return_code != 0:
-        raise DecodeError(f"ffmpeg could not decode the video: {detail}")
+        raise DecodeError(f"ffmpeg could not decode the video: {_last_line(log)}")
+    if log.strip():
+        # The log level is "error", so every message names something ffmpeg failed to
+        # read or decode.
+        raise DecodeError(f"ffmpeg could not decode every part of the video: {_last_line(log)}")
     if done == 0:
         raise DecodeError("ffmpeg decoded no video frames")
     if progress is not None and done < expected:
@@ -236,18 +256,70 @@ def intervals_from_energy(
 ) -> tuple[list[Interval], str, tuple[float, float, float] | None]:
     """Turn an energy series into intervals. Returns (intervals, status, levels) where
     levels is (idle_energy, active_energy, contrast_ratio) or None when no cut exists."""
-    period_ms = 1000.0 / params.sample_fps
-    window = max(1, round(params.smooth_window_ms / period_ms)) | 1
     energy = np.asarray(energy, dtype=np.float64)
+    # A difference of exactly zero has two readings, and the energy alone can not tell them
+    # apart. It can be one frame read twice (a hole in the timestamps, a frozen picture,
+    # sampling above the source frame rate). Then the real idle level is the small motion
+    # of the resting scene, and taking zero for it would turn everything else, the real
+    # idle time included, into one rally. Or it can be the rest of a perfectly still
+    # picture, and then zero IS the idle level.
+    repeated = energy == 0
+    nothing = np.zeros(energy.size, dtype=bool)
+    if not repeated.any() or repeated.all():
+        return _intervals(energy, nothing, params, duration_ms)
+    # The first reading is tried first: a camera picture is never perfectly still, so in a
+    # recording it is the likely one. It stands when the samples that did move split into
+    # rest and rally.
+    without_repeats = _intervals(energy, repeated, params, duration_ms)
+    if without_repeats[1] == OK:
+        return without_repeats
+    # They did not: every sample that moved is rally, or none is. Then a zero stretch that
+    # lasts is taken as the rest (second reading). Zeros that come one at a time say
+    # nothing about the scene and stay out of the levels in both readings.
+    window = _smooth_window(params)
+    lasting = np.zeros(energy.size, dtype=bool)
+    for first, last in _runs(repeated):
+        if last - first + 1 >= window:
+            lasting[first:last + 1] = True
+    return _intervals(energy, repeated & ~lasting, params, duration_ms)
+
+
+def _smooth_window(params: SegmenterParams) -> int:
+    """Width of the median filter in samples, always odd."""
+    return max(1, round(params.smooth_window_ms * params.sample_fps / 1000.0)) | 1
+
+
+def _runs(mask: np.ndarray) -> list[tuple[int, int]]:
+    """Inclusive (first, last) index pairs of the stretches where `mask` is true."""
+    edges = np.flatnonzero(np.diff(np.concatenate(([False], mask, [False])).astype(np.int8)))
+    return [(int(first), int(last) - 1) for first, last in zip(edges[::2], edges[1::2])]
+
+
+def _intervals(
+    energy: np.ndarray, excluded: np.ndarray, params: SegmenterParams, duration_ms: int
+) -> tuple[list[Interval], str, tuple[float, float, float] | None]:
+    """Intervals from the energy series. Samples marked in `excluded` take no part in
+    finding the idle and the active level and always count as idle time."""
+    period_ms = 1000.0 / params.sample_fps
+    window = _smooth_window(params)
     if energy.size < 2 * window:
         return [], TOO_SHORT, None
 
-    log_energy = np.log(_median_filter(energy, window) + params.noise_floor)
-    cut = _otsu_cut(log_energy)
+    observed_at = np.flatnonzero(~excluded)
+    if observed_at.size == 0:
+        return [], NO_SEPARATION, None
+    # For the smoothing an excluded sample holds the last observed value (the first one
+    # before any was observed). Left at zero, a hole would look like a falling edge to the
+    # median filter and move the boundaries next to it.
+    last_observed = np.maximum.accumulate(np.where(excluded, 0, np.arange(energy.size)))
+    held = energy[np.maximum(last_observed, observed_at[0])]
+    log_energy = np.log(_median_filter(held, window) + params.noise_floor)
+    observed = log_energy[observed_at]
+    cut = _otsu_cut(observed)
     if cut is None:
         return [], NO_SEPARATION, None
-    idle = float(np.median(log_energy[log_energy < cut]))
-    active = float(np.median(log_energy[log_energy >= cut]))
+    idle = float(np.median(observed[observed < cut]))
+    active = float(np.median(observed[observed >= cut]))
     contrast = math.exp(active - idle)
     levels = (
         max(0.0, round(math.exp(idle) - params.noise_floor, 4)),
@@ -262,7 +334,7 @@ def intervals_from_energy(
     # The video stream can end before the container duration, never after it.
     timeline_end = min(float(duration_ms), (energy.size + 1) * period_ms)
     spans: list[list[float]] = []
-    for first, last in _hysteresis_runs(log_energy, enter, leave):
+    for first, last in _hysteresis_runs(np.where(excluded, -np.inf, log_energy), enter, leave):
         # The motion started somewhere inside sample `first` and stopped somewhere inside
         # sample `last`; the middle of the sample halves the worst-case error. A run that
         # touches the edge of the clip was already (or still) active there.
@@ -318,7 +390,9 @@ def _tail(messages: IO[bytes]) -> str:
 
 
 def _last_line(text: str) -> str:
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    # "Last message repeated 3 times" is ffmpeg's own shorthand and names no cause.
+    lines = [line.strip() for line in text.splitlines()
+             if line.strip() and not line.strip().startswith("Last message repeated")]
     return lines[-1] if lines else "no message"
 
 

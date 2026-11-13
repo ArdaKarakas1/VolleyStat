@@ -424,8 +424,6 @@ def router(connect, analyzer: Analyzer | None, worker: JobWorker) -> APIRouter:
             if video["status"] != media.READY:
                 fail("VIDEO_NOT_READY", "Video did not pass media validation and can not be analysed", 409,
                      videoStatus=video["status"], rejectCode=video["reject_code"])
-            if analyzer is None:
-                fail("MODEL_NOT_CONFIGURED", "Volleyball computer vision pipeline is not installed. No statistics have been inferred.", 503)
             job = None
             if idempotency_key is not None:
                 job = db.execute(
@@ -434,6 +432,10 @@ def router(connect, analyzer: Analyzer | None, worker: JobWorker) -> APIRouter:
                 ).fetchone()
             created = False
             if job is None:
+                # Only a request that would start or join a run needs an analyzer. A key that was
+                # already answered gets its job back even when the server was restarted without one.
+                if analyzer is None:
+                    fail("MODEL_NOT_CONFIGURED", "Volleyball computer vision pipeline is not installed. No statistics have been inferred.", 503)
                 job = db.execute(
                     "SELECT * FROM analysis_jobs WHERE video_id=? AND state IN (?,?)", (video_id, *ACTIVE_STATES)
                 ).fetchone()
