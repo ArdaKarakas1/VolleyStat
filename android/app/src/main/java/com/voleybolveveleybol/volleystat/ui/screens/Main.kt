@@ -47,6 +47,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -160,13 +161,16 @@ private fun NewMatchCard(onClick: () -> Unit) {
         Modifier.fillMaxWidth().clip(MaterialTheme.shapes.large).background(colors.hero)
             .clickable(role = Role.Button, onClick = onClick).heightIn(min = 132.dp),
     ) {
-        // Court line art, decorative.
+        // Court line art, decorative. It is left out on narrow cards and with enlarged text,
+        // where the lines would run under the words.
+        val roomForArt = LocalDensity.current.fontScale <= 1.15f
         Canvas(Modifier.matchParentSize()) {
+            if (!roomForArt || size.width < 340.dp.toPx()) return@Canvas
             val stroke = Stroke(1.5.dp.toPx())
             val tint = colors.onHero.copy(alpha = 0.22f)
-            val left = size.width * 0.58f
+            val left = size.width * 0.62f
             val top = size.height * 0.2f
-            val w = size.width * 0.36f
+            val w = size.width * 0.32f
             val h = size.height * 0.6f
             drawRect(tint, Offset(left, top), androidx.compose.ui.geometry.Size(w, h), style = stroke)
             drawLine(tint, Offset(left + w / 2, top), Offset(left + w / 2, top + h), stroke.width)

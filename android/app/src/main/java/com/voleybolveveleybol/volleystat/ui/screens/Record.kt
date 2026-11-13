@@ -3,7 +3,11 @@ package com.voleybolveveleybol.volleystat.ui.screens
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration
+import android.hardware.display.DisplayManager
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.os.StatFs
 import android.provider.Settings
 import androidx.activity.compose.BackHandler
@@ -29,8 +33,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
@@ -53,6 +59,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
@@ -96,9 +103,81 @@ private fun RoundControl(icon: Int, description: String, onClick: () -> Unit, en
     }
 }
 
+/** Corner brackets that only help the user line the court up. Nothing here claims a detected court. */
+@Composable
+private fun FramingGuides(modifier: Modifier = Modifier) {
+    Canvas(modifier) {
+        val arm = 28.dp.toPx()
+        val stroke = 3.dp.toPx()
+        val tint = Color.White.copy(alpha = 0.85f)
+        listOf(Offset(0f, 0f) to Offset(1f, 1f), Offset(size.width, 0f) to Offset(-1f, 1f), Offset(0f, size.height) to Offset(1f, -1f), Offset(size.width, size.height) to Offset(-1f, -1f))
+            .forEach { (corner, direction) ->
+                drawLine(tint, corner, corner.copy(x = corner.x + arm * direction.x), stroke)
+                drawLine(tint, corner, corner.copy(y = corner.y + arm * direction.y), stroke)
+            }
+    }
+}
+
+@Composable
+private fun TimerChip(ui: RecordUi) {
+    val colors = LocalVsColors.current
+    Row(
+        Modifier.background(if (ui.paused) Color.Black.copy(alpha = 0.6f) else colors.recording, RoundedCornerShape(8.dp)).padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Box(Modifier.size(10.dp).background(Color.White, CircleShape))
+        Text(
+            if (ui.paused) stringResource(R.string.record_paused) + "  " + formatClock(ui.elapsedMs) else formatClock(ui.elapsedMs),
+            style = MaterialTheme.typography.titleSmall, color = Color.White,
+        )
+    }
+}
+
+@Composable
+private fun RecordMessages(ui: RecordUi, portrait: Boolean, modifier: Modifier = Modifier) {
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (ui.cameraUnavailable) Notice(stringResource(R.string.record_no_camera), Tone.NEGATIVE)
+        if (ui.failed) Notice(stringResource(R.string.record_error), Tone.CAUTION)
+        if (ui.freeBytes != null && ui.freeBytes < LOW_SPACE_BYTES) Notice(stringResource(R.string.record_low_space), Tone.CAUTION)
+        if (!ui.recording) {
+            // The guide asks for a landscape picture; the hint appears only while it can still be followed.
+            if (portrait) Notice(stringResource(R.string.record_rotate), Tone.CAUTION)
+            Text(
+                stringResource(R.string.record_ready) + "\n" + stringResource(R.string.record_overlay_note),
+                style = MaterialTheme.typography.bodySmall, color = Color.White, textAlign = TextAlign.Center,
+                modifier = Modifier.background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(8.dp)).padding(horizontal = 12.dp, vertical = 8.dp),
+            )
+        }
+        if (ui.freeBytes != null) {
+            Text(
+                stringResource(R.string.record_free_space, formatBytes(ui.freeBytes)), style = MaterialTheme.typography.bodySmall, color = Color.White,
+                modifier = Modifier.background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(8.dp)).padding(horizontal = 10.dp, vertical = 4.dp),
+            )
+        }
+    }
+}
+
+/** Record: a red disc. Stop: a red square inside a white ring. */
+@Composable
+private fun RecordButton(ui: RecordUi, onStart: () -> Unit, onStop: () -> Unit) {
+    val colors = LocalVsColors.current
+    val label = stringResource(if (ui.recording) R.string.record_stop else R.string.record_start)
+    IconButton(
+        onClick = if (ui.recording) onStop else onStart, enabled = !ui.cameraUnavailable,
+        modifier = Modifier.size(80.dp).border(4.dp, Color.White, CircleShape).semantics { role = Role.Button },
+    ) {
+        if (ui.recording) {
+            Icon(painterResource(R.drawable.ic_stop), contentDescription = label, tint = colors.recording, modifier = Modifier.size(40.dp))
+        } else {
+            Box(Modifier.size(60.dp).background(colors.recording, CircleShape)) { Icon(painterResource(R.drawable.ic_videocam), contentDescription = label, tint = Color.White, modifier = Modifier.align(Alignment.Center).size(28.dp)) }
+        }
+    }
+}
+
 /**
- * 06: the controls over the camera picture. The corner brackets only help the user line the
- * court up; nothing on this screen claims that the app has detected a court.
+ * 06: the controls over the camera picture. A match is filmed with the phone on its side, so
+ * the landscape layout puts the controls under the right thumb like a camera app; the portrait
+ * layout stays usable and asks the user to turn the phone.
  */
 @Composable
 fun RecordOverlay(
@@ -110,81 +189,63 @@ fun RecordOverlay(
     onBack: () -> Unit,
     preview: @Composable () -> Unit,
 ) {
-    val colors = LocalVsColors.current
+    val portrait = LocalConfiguration.current.orientation != Configuration.ORIENTATION_LANDSCAPE
+    val back: @Composable () -> Unit = { RoundControl(R.drawable.ic_arrow_back, stringResource(R.string.action_back), onBack) }
+    val pause: @Composable () -> Unit = {
+        if (ui.recording) {
+            RoundControl(if (ui.paused) R.drawable.ic_play_arrow else R.drawable.ic_pause, stringResource(if (ui.paused) R.string.record_resume else R.string.record_pause), onPauseResume)
+        } else {
+            Spacer(Modifier.size(56.dp))
+        }
+    }
+    val switch: @Composable () -> Unit = {
+        if (ui.recording) {
+            Spacer(Modifier.size(56.dp))
+        } else {
+            RoundControl(R.drawable.ic_cameraswitch, stringResource(R.string.record_switch), onSwitchCamera, enabled = !ui.cameraUnavailable)
+        }
+    }
+    // The brackets live in the free area between the controls so they never sit under a button.
+    val guides: @Composable (Modifier) -> Unit = { modifier ->
+        if (ui.recording) Spacer(modifier) else FramingGuides(modifier.padding(12.dp))
+    }
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         preview()
-        if (!ui.recording) {
-            Canvas(Modifier.fillMaxSize().padding(40.dp)) {
-                val arm = 28.dp.toPx()
-                val stroke = 3.dp.toPx()
-                val tint = Color.White.copy(alpha = 0.85f)
-                listOf(Offset(0f, 0f) to Offset(1f, 1f), Offset(size.width, 0f) to Offset(-1f, 1f), Offset(0f, size.height) to Offset(1f, -1f), Offset(size.width, size.height) to Offset(-1f, -1f))
-                    .forEach { (corner, direction) ->
-                        drawLine(tint, corner, corner.copy(x = corner.x + arm * direction.x), stroke)
-                        drawLine(tint, corner, corner.copy(y = corner.y + arm * direction.y), stroke)
-                    }
-            }
-        }
-        Column(Modifier.fillMaxSize().safeDrawingPadding().padding(16.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                RoundControl(R.drawable.ic_arrow_back, stringResource(R.string.action_back), onBack)
-                Spacer(Modifier.weight(1f))
-                if (ui.recording) {
-                    Row(
-                        Modifier.background(if (ui.paused) Color.Black.copy(alpha = 0.6f) else colors.recording, RoundedCornerShape(8.dp)).padding(horizontal = 12.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Box(Modifier.size(10.dp).background(Color.White, CircleShape))
-                        Text(
-                            if (ui.paused) stringResource(R.string.record_paused) + "  " + formatClock(ui.elapsedMs) else formatClock(ui.elapsedMs),
-                            style = MaterialTheme.typography.titleSmall, color = Color.White,
-                        )
-                    }
+        if (portrait) {
+            Column(Modifier.fillMaxSize().safeDrawingPadding().padding(16.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    back()
+                    Spacer(Modifier.weight(1f))
+                    if (ui.recording) TimerChip(ui)
+                    Spacer(Modifier.weight(1f))
+                    Spacer(Modifier.size(56.dp))
                 }
-                Spacer(Modifier.weight(1f))
-                Spacer(Modifier.size(56.dp))
-            }
-            Spacer(Modifier.weight(1f))
-            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (ui.cameraUnavailable) Notice(stringResource(R.string.record_no_camera), Tone.NEGATIVE)
-                if (ui.failed) Notice(stringResource(R.string.record_error), Tone.CAUTION)
-                if (ui.freeBytes != null && ui.freeBytes < LOW_SPACE_BYTES) Notice(stringResource(R.string.record_low_space), Tone.CAUTION)
-                if (!ui.recording) {
-                    Text(
-                        stringResource(R.string.record_ready) + "\n" + stringResource(R.string.record_overlay_note),
-                        style = MaterialTheme.typography.bodySmall, color = Color.White, textAlign = TextAlign.Center,
-                        modifier = Modifier.background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(8.dp)).padding(horizontal = 12.dp, vertical = 8.dp),
-                    )
-                }
-                if (ui.freeBytes != null) {
-                    Text(
-                        stringResource(R.string.record_free_space, formatBytes(ui.freeBytes)), style = MaterialTheme.typography.bodySmall, color = Color.White,
-                        modifier = Modifier.background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(8.dp)).padding(horizontal = 10.dp, vertical = 4.dp),
-                    )
-                }
+                guides(Modifier.weight(1f).fillMaxWidth())
+                RecordMessages(ui, portrait = true, modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(12.dp))
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceEvenly) {
-                    if (ui.recording) {
-                        RoundControl(if (ui.paused) R.drawable.ic_play_arrow else R.drawable.ic_pause, stringResource(if (ui.paused) R.string.record_resume else R.string.record_pause), onPauseResume)
-                    } else {
+                    pause()
+                    RecordButton(ui, onStart, onStop)
+                    switch()
+                }
+            }
+        } else {
+            Row(Modifier.fillMaxSize().safeDrawingPadding().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                Column(Modifier.weight(1f).fillMaxHeight()) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        back()
+                        Spacer(Modifier.weight(1f))
+                        if (ui.recording) TimerChip(ui)
+                        Spacer(Modifier.weight(1f))
                         Spacer(Modifier.size(56.dp))
                     }
-                    // Record: a red disc. Stop: a red square inside a white ring.
-                    val label = stringResource(if (ui.recording) R.string.record_stop else R.string.record_start)
-                    IconButton(
-                        onClick = if (ui.recording) onStop else onStart, enabled = !ui.cameraUnavailable,
-                        modifier = Modifier.size(80.dp).border(4.dp, Color.White, CircleShape).semantics { role = Role.Button },
-                    ) {
-                        if (ui.recording) {
-                            Icon(painterResource(R.drawable.ic_stop), contentDescription = label, tint = colors.recording, modifier = Modifier.size(40.dp))
-                        } else {
-                            Box(Modifier.size(60.dp).background(colors.recording, CircleShape)) { Icon(painterResource(R.drawable.ic_videocam), contentDescription = label, tint = Color.White, modifier = Modifier.align(Alignment.Center).size(28.dp)) }
-                        }
-                    }
-                    if (ui.recording) {
-                        Spacer(Modifier.size(56.dp))
-                    } else {
-                        RoundControl(R.drawable.ic_cameraswitch, stringResource(R.string.record_switch), onSwitchCamera, enabled = !ui.cameraUnavailable)
-                    }
+                    guides(Modifier.weight(1f).fillMaxWidth())
+                    RecordMessages(ui, portrait = false, modifier = Modifier.fillMaxWidth())
+                }
+                Column(Modifier.fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.SpaceEvenly) {
+                    switch()
+                    RecordButton(ui, onStart, onStop)
+                    pause()
                 }
             }
         }
@@ -275,6 +336,22 @@ fun RecordRoute(prepareFile: () -> File, onRecorded: () -> Unit, onUseGallery: (
     DisposableEffect(Unit) {
         view.keepScreenOn = true
         onDispose { view.keepScreenOn = false }
+    }
+    // The activity is not recreated on rotation (a restart would end the recording), so nothing
+    // tells the recorder that the phone was turned. Without this a match filmed after turning
+    // the phone is stored sideways. A recording that already runs keeps the rotation it started with.
+    DisposableEffect(Unit) {
+        val displays = context.getSystemService(DisplayManager::class.java)
+        val listener = object : DisplayManager.DisplayListener {
+            override fun onDisplayAdded(displayId: Int) = Unit
+            override fun onDisplayRemoved(displayId: Int) = Unit
+            override fun onDisplayChanged(displayId: Int) {
+                view.display?.takeIf { it.displayId == displayId }?.let { videoCapture.targetRotation = it.rotation }
+            }
+        }
+        displays.registerDisplayListener(listener, Handler(Looper.getMainLooper()))
+        view.display?.let { videoCapture.targetRotation = it.rotation }
+        onDispose { displays.unregisterDisplayListener(listener) }
     }
     // Back is intercepted only while a recording runs, so the system back gesture stays normal otherwise.
     BackHandler(enabled = recording != null) { confirmExit = true }

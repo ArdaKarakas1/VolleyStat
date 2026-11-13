@@ -3,11 +3,13 @@ package com.voleybolveveleybol.volleystat.ui.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -27,6 +29,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -188,6 +191,7 @@ fun ReportScreen(
                         CompareRow(stringResource(R.string.report_aces), report.home.aces, report.away.aces)
                         CompareRow(stringResource(R.string.report_opponent_errors), report.home.opponentErrors, report.away.opponentErrors)
                         Text(stringResource(R.string.value_partial_note), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(stringResource(R.string.value_missing_note), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
 
@@ -227,9 +231,13 @@ fun ReportScreen(
     }
 }
 
+/** A count of confirmed decisions. While decisions are missing it is a lower bound and carries a plus. */
 @Composable
-private fun NumberCell(value: Int, modifier: Modifier = Modifier, strong: Boolean = false) {
-    Text(value.toString(), style = if (strong) MaterialTheme.typography.titleSmall else MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center, modifier = modifier)
+private fun NumberCell(value: Int, modifier: Modifier = Modifier, strong: Boolean = false, lowerBound: Boolean = false) {
+    Text(
+        if (lowerBound) "$value+" else value.toString(),
+        style = if (strong) MaterialTheme.typography.titleSmall else MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center, modifier = modifier,
+    )
 }
 
 /** 10: points per player, by jersey number. Only what the user attributed during review appears here. */
@@ -246,48 +254,79 @@ fun PlayersScreen(
     val roster = if (home) homeRoster else awayRoster
     val lines = report?.players.orEmpty().filter { it.home == home }.sortedBy { it.jersey }
     val unattributed = if (home) report?.unattributedHome else report?.unattributedAway
+    // A player's count can still grow while rallies are undecided or points have no player yet,
+    // so until then every number in the table is a lower bound and must not read as a final total.
+    val lowerBound = report != null && (report.verificationStatus != "VERIFIED" || (unattributed ?: 0) > 0)
     val missing = stringResource(R.string.value_not_measured)
     FlowScaffold(title = stringResource(R.string.players_title), onBack = onBack) {
-        if (report?.mock == true) DemoBanner()
+        if (report?.mock == true) DemoBanner(compact = true)
         SegmentedChoice(listOf(match.homeTeam, match.awayTeam), side, onSelect = { side = it })
         VsCard(padding = PaddingValues(vertical = 8.dp)) {
-            val number = Modifier.width(36.dp)
-            val cell = Modifier.width(44.dp)
-            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp).heightIn(min = 36.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(stringResource(R.string.players_col_number), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = number)
-                Text(stringResource(R.string.players_col_player), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-                listOf(R.string.players_col_attack, R.string.players_col_block, R.string.players_col_serve, R.string.players_col_dig, R.string.players_col_points).forEach {
-                    Text(stringResource(it), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, modifier = cell)
-                }
-            }
-            RowDivider()
-            if (lines.isEmpty()) {
-                Text(stringResource(R.string.players_empty), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(Dimens.cardPadding))
-            }
-            lines.forEach { line ->
-                val name = roster.firstOrNull { it.jersey == line.jersey }?.name?.takeIf { it.isNotBlank() }
-                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp).heightIn(min = Dimens.touchTarget), verticalAlignment = Alignment.CenterVertically) {
-                    Text(line.jersey.toString(), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = number)
-                    Text(name ?: stringResource(R.string.review_jersey, line.jersey), style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                    NumberCell(line.attackPoints, cell)
-                    NumberCell(line.blockPoints, cell)
-                    NumberCell(line.aces, cell)
-                    // Defence is not measured at all: a dashed box, never a zero.
-                    Box(cell, contentAlignment = Alignment.Center) {
-                        Box(Modifier.size(width = 24.dp, height = 18.dp).dashedOutline(MaterialTheme.colorScheme.outline, 5.dp).clearAndSetSemantics { contentDescription = missing })
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val number = Modifier.width(36.dp)
+                val cell = Modifier.width(44.dp)
+                // One line needs room for a readable name next to five numbers. A narrow phone or
+                // enlarged text leaves none, so there the name gets its own line above the numbers.
+                val stacked = maxWidth - 24.dp - 36.dp - 44.dp * 5 < 96.dp * LocalDensity.current.fontScale
+                val columns = listOf(R.string.players_col_attack, R.string.players_col_block, R.string.players_col_serve, R.string.players_col_dig, R.string.players_col_points)
+                Column {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp).heightIn(min = 36.dp), verticalAlignment = Alignment.CenterVertically) {
+                        if (!stacked) {
+                            Text(stringResource(R.string.players_col_number), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = number)
+                            Text(stringResource(R.string.players_col_player), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                        }
+                        columns.forEach {
+                            Text(
+                                stringResource(it), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center, maxLines = 1, softWrap = false, modifier = if (stacked) Modifier.weight(1f) else cell,
+                            )
+                        }
                     }
-                    NumberCell(line.points, cell, strong = true)
-                }
-            }
-            if (unattributed != null && unattributed > 0) {
-                RowDivider()
-                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp).heightIn(min = Dimens.touchTarget), verticalAlignment = Alignment.CenterVertically) {
-                    Text(stringResource(R.string.players_unattributed), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                    NumberCell(unattributed, cell, strong = true)
+                    RowDivider()
+                    if (lines.isEmpty()) {
+                        Text(stringResource(R.string.players_empty), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(Dimens.cardPadding))
+                    }
+                    lines.forEach { line ->
+                        val name = roster.firstOrNull { it.jersey == line.jersey }?.name?.takeIf { it.isNotBlank() } ?: stringResource(R.string.review_jersey, line.jersey)
+                        val numbers: @Composable RowScope.() -> Unit = {
+                            val slot = if (stacked) Modifier.weight(1f) else cell
+                            NumberCell(line.attackPoints, slot, lowerBound = lowerBound)
+                            NumberCell(line.blockPoints, slot, lowerBound = lowerBound)
+                            NumberCell(line.aces, slot, lowerBound = lowerBound)
+                            // Defence is not measured at all: a dashed box, never a zero.
+                            Box(slot, contentAlignment = Alignment.Center) {
+                                Box(Modifier.size(width = 24.dp, height = 18.dp).dashedOutline(MaterialTheme.colorScheme.outline, 5.dp).clearAndSetSemantics { contentDescription = missing })
+                            }
+                            NumberCell(line.points, slot, strong = true, lowerBound = lowerBound)
+                        }
+                        if (stacked) {
+                            Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text(line.jersey.toString(), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                                    Text(name, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, content = numbers)
+                            }
+                        } else {
+                            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp).heightIn(min = Dimens.touchTarget), verticalAlignment = Alignment.CenterVertically) {
+                                Text(line.jersey.toString(), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = number)
+                                Text(name, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                                numbers()
+                            }
+                        }
+                    }
+                    if (unattributed != null && unattributed > 0) {
+                        RowDivider()
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp).heightIn(min = Dimens.touchTarget), verticalAlignment = Alignment.CenterVertically) {
+                            Text(stringResource(R.string.players_unattributed), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                            NumberCell(unattributed, cell, strong = true)
+                        }
+                    }
                 }
             }
         }
         Text(stringResource(R.string.players_points_note), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (lowerBound) Text(stringResource(R.string.value_partial_note), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(stringResource(R.string.players_dig_note), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

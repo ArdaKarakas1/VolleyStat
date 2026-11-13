@@ -148,18 +148,27 @@ fun StatusChip(text: String, tone: Tone, modifier: Modifier = Modifier) {
     }
 }
 
-/** Marks everything that comes from the demo analyzer. Shown on every screen that displays such data. */
+/**
+ * Marks everything that comes from the demo analyzer. Shown on every screen that displays such
+ * data. The compact form is for screens where the user works through many items and the full
+ * explanation would push the answers off the screen.
+ */
 @Composable
-fun DemoBanner(modifier: Modifier = Modifier) {
+fun DemoBanner(modifier: Modifier = Modifier, compact: Boolean = false) {
     val extra = LocalVsColors.current
     Row(
-        modifier.fillMaxWidth().background(extra.cautionContainer, MaterialTheme.shapes.medium).padding(12.dp),
+        modifier.fillMaxWidth().background(extra.cautionContainer, MaterialTheme.shapes.medium).padding(horizontal = 12.dp, vertical = if (compact) 8.dp else 12.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = if (compact) Alignment.CenterVertically else Alignment.Top,
     ) {
-        Icon(painterResource(R.drawable.ic_warning), contentDescription = null, tint = extra.caution, modifier = Modifier.padding(top = 2.dp).size(20.dp))
-        Column {
-            Text(stringResource(R.string.demo_title), style = MaterialTheme.typography.titleSmall, color = extra.onCautionContainer)
-            Text(stringResource(R.string.demo_body), style = MaterialTheme.typography.bodySmall, color = extra.onCautionContainer)
+        Icon(painterResource(R.drawable.ic_warning), contentDescription = null, tint = extra.caution, modifier = Modifier.padding(top = if (compact) 0.dp else 2.dp).size(20.dp))
+        if (compact) {
+            Text(stringResource(R.string.demo_short), style = MaterialTheme.typography.labelMedium, color = extra.onCautionContainer)
+        } else {
+            Column {
+                Text(stringResource(R.string.demo_title), style = MaterialTheme.typography.titleSmall, color = extra.onCautionContainer)
+                Text(stringResource(R.string.demo_body), style = MaterialTheme.typography.bodySmall, color = extra.onCautionContainer)
+            }
         }
     }
 }

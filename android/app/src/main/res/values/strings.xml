@@ -21,11 +21,12 @@
     <string name="team_home">Ev sahibi takım</string>
     <string name="team_away">Misafir takım</string>
     <string name="state_not_yet">Henüz yok</string>
-    <string name="state_working">Çalışıyor</string>
+    <string name="state_working">Var</string>
     <string name="state_no_check">Kontrol yok</string>
     <string name="state_unreadable">Okunamadı</string>
     <string name="demo_title">DEMO veri</string>
     <string name="demo_body">Sunucu deneme analizörüyle çalışıyor. Ralli aralıkları uydurmadır, gerçek maç analizi değildir.</string>
+    <string name="demo_short">DEMO veri. Bu ekran gerçek maç analizi göstermiyor.</string>
 
     <!-- 01 Welcome -->
     <string name="welcome_today">Bugün video yükleme ve dosya kontrolü çalışıyor. Otomatik analiz modeli henüz yok.</string>
@@ -201,6 +202,7 @@
     <string name="record_paused">Duraklamada</string>
     <string name="record_free_space">Boş alan: %1$s</string>
     <string name="record_low_space">Telefonda az yer kaldı. Kayıt yarıda kesilebilir.</string>
+    <string name="record_rotate">Telefonu yatay çevir. Dikey çekimde saha kadraja sığmayabilir.</string>
     <string name="record_error">Kamera kaydı sürdüremedi. Kamera o ana kadar çektiği bölümü sakladı.</string>
     <string name="record_no_camera">Uygulama kamerayı açamadı.</string>
     <string name="record_exit_title">Kaydı bitireyim mi?</string>
@@ -291,9 +293,9 @@
     <string name="review_question_scorer">Sayıyı hangi oyuncu aldı?</string>
     <string name="review_not_a_rally">Bu bir ralli değil</string>
     <string name="review_unsure">Emin değilim</string>
-    <string name="review_action_attack">Smaç (hücum)</string>
+    <string name="review_action_attack">Hücum (smaç, plase)</string>
     <string name="review_action_block">Blok</string>
-    <string name="review_action_ace">Servis (as)</string>
+    <string name="review_action_ace">Servis ası</string>
     <string name="review_action_error">Rakip hatası</string>
     <string name="review_unknown_player">Oyuncuyu bilmiyorum</string>
     <string name="review_jersey">%1$d numara</string>
@@ -305,7 +307,6 @@
     <string name="review_details_switch">Ayrıntı soruları</string>
     <string name="review_details_helper">Açık olursa uygulama sayının türünü ve oyuncusunu da sorar.</string>
     <string name="review_hint">Sunucunun önerisi: %1$s olabilir</string>
-    <string name="review_no_suggestion">Sunucu bu ralli için kazanan önermedi.</string>
     <string name="review_clip_description">Rallinin kısa video klibi</string>
     <string name="review_clip_failed">Uygulama klibi oynatamadı.</string>
     <string name="review_replay">Klibi baştan oynat</string>
@@ -333,10 +334,10 @@
     <string name="report_review_video">Rallileri Doğrula</string>
     <string name="report_open_review">%1$d ralli kararını bekliyor</string>
     <string name="report_points">Sayı</string>
-    <string name="report_attack_points">Smaç sayısı</string>
+    <string name="report_attack_points">Hücum sayısı</string>
     <string name="report_block_points">Blok sayısı</string>
-    <string name="report_aces">As</string>
-    <string name="report_opponent_errors">Rakip hatasından</string>
+    <string name="report_aces">Servis ası</string>
+    <string name="report_opponent_errors">Rakip hatası</string>
     <string name="report_rallies_total">Önerilen ralli</string>
     <string name="report_rallies_verified">Kazananı belli</string>
     <string name="report_rallies_unresolved">Emin olmadığın</string>
@@ -351,15 +352,16 @@
     <string name="report_unavailable_body">Bu maç için analiz işi yok.</string>
     <string name="report_load_failed">Uygulama raporu sunucudan alamadı.</string>
     <string name="value_not_measured">Ölçüm yok</string>
-    <string name="value_partial_note">Kısmi değerler alt sınırdır.</string>
+    <string name="value_partial_note">Artı işareti alt sınırı gösterir. Doğrulama bitince sayı artabilir.</string>
+    <string name="value_missing_note">Kesik çizgili kutu ölçüm olmadığını gösterir. Uygulama eksik ölçümü sıfır yazmaz.</string>
 
     <!-- 10 Player stats -->
     <string name="players_title">Oyuncu İstatistikleri</string>
     <string name="players_col_number">#</string>
     <string name="players_col_player">Oyuncu</string>
-    <string name="players_col_attack">Smaç</string>
+    <string name="players_col_attack">Hücum</string>
     <string name="players_col_block">Blok</string>
-    <string name="players_col_serve">Servis</string>
+    <string name="players_col_serve">As</string>
     <string name="players_col_dig">Sav.</string>
     <string name="players_col_points">Puan</string>
     <string name="players_unattributed">Oyuncusu belli olmayan sayı</string>
@@ -370,7 +372,7 @@
     <!-- Profile -->
     <string name="profile_name">Adın</string>
     <string name="profile_name_hint">Ana sayfadaki selamda görünür</string>
-    <string name="profile_today">Bugün ne çalışıyor</string>
+    <string name="profile_today">Bu sürümde neler var</string>
     <string name="feature_match">Maç ve takım kaydı</string>
     <string name="feature_video">Video kaydetme ve seçme</string>
     <string name="feature_upload">Yükleme ve kaldığı yerden sürdürme</string>

@@ -110,6 +110,18 @@ class ScreenshotTest {
         captureRoboImage("build/outputs/roborazzi/$name.png") { VolleyStatTheme(dark = dark) { content() } }
     }
 
+    /** One screen on another device shape or text size, then back to the default phone. */
+    private fun shotOn(name: String, qualifiers: String, fontScale: Float = 1f, content: @Composable () -> Unit) {
+        RuntimeEnvironment.setQualifiers(qualifiers)
+        RuntimeEnvironment.setFontScale(fontScale)
+        try {
+            shot(name, content = content)
+        } finally {
+            RuntimeEnvironment.setFontScale(1f)
+            RuntimeEnvironment.setQualifiers("+w411dp-h891dp-port")
+        }
+    }
+
     @Test fun s01_welcome() = shot("01_acilis") { WelcomeScreen {} }
 
     @Test fun s02_home() {
@@ -139,6 +151,24 @@ class ScreenshotTest {
         shot("06_mac_kaydi") { RecordOverlay(RecordUi(recording = true, elapsedMs = 756_000, freeBytes = 22_400_000_000), {}, {}, {}, {}, {}, preview) }
         shot("06_mac_kaydi_hazir") { RecordOverlay(RecordUi(freeBytes = 1_100_000_000), {}, {}, {}, {}, {}, preview) }
         shot("06_kamera_izni") { RecordPermissionScreen(denied = true, {}, {}, {}, {}) }
+        // A match is filmed with the phone on its side, so this is the layout that matters most.
+        shotOn("06_mac_kaydi_yatay", "+w891dp-h411dp-land") { RecordOverlay(RecordUi(recording = true, elapsedMs = 756_000, freeBytes = 22_400_000_000), {}, {}, {}, {}, {}, preview) }
+        shotOn("06_mac_kaydi_hazir_yatay", "+w891dp-h411dp-land") { RecordOverlay(RecordUi(freeBytes = 1_100_000_000), {}, {}, {}, {}, {}, preview) }
+    }
+
+    @Test fun smallPhoneAndLargeText() {
+        val review: @Composable () -> Unit = {
+            val deck = ReviewDeck(List(18) { card(ReviewCard.RALLY_WINNER, winnerOptions, null, it + 1) }, 0, 18)
+            ReviewScreen(reviewing, AnalysisUi("m2", JobLoad.READY, job(AnalysisSummary.NEEDS_REVIEW), deck, cursor = 7), players, {}, {}, {}, {}, {}) { ClipPlaceholder() }
+        }
+        shotOn("kucuk_02_ana_ekran", "+w320dp-h568dp-port") { HomeScreen(state, {}, {}, {}, {}, {}) }
+        shotOn("kucuk_08_dogrulama", "+w320dp-h568dp-port", content = review)
+        shotOn("kucuk_09_mac_raporu", "+w320dp-h568dp-port") { ReportScreen(finished, ReportLoad.READY, report, {}, {}, {}, {}, {}) }
+        shotOn("kucuk_10_oyuncu", "+w320dp-h568dp-port") { PlayersScreen(finished, report, players, teams[1].players) {} }
+        shotOn("buyuk_yazi_02_ana_ekran", "+w411dp-h891dp-port", fontScale = 1.5f) { HomeScreen(state, {}, {}, {}, {}, {}) }
+        shotOn("buyuk_yazi_08_dogrulama", "+w411dp-h891dp-port", fontScale = 1.5f, content = review)
+        shotOn("buyuk_yazi_09_mac_raporu", "+w411dp-h891dp-port", fontScale = 1.5f) { ReportScreen(finished, ReportLoad.READY, report, {}, {}, {}, {}, {}) }
+        shotOn("buyuk_yazi_10_oyuncu", "+w411dp-h891dp-port", fontScale = 1.5f) { PlayersScreen(finished, report, players, teams[1].players) {} }
     }
 
     @Test fun s07_status() {

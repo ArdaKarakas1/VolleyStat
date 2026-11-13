@@ -21,6 +21,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -54,10 +58,15 @@ import com.voleybolveveleybol.volleystat.ui.theme.LocalVsColors
 
 /** One answer row. The user's saved answer is marked with words and a tick, not by colour alone. */
 @Composable
-private fun AnswerRow(text: String, chosen: Boolean, enabled: Boolean, onClick: () -> Unit, leading: (@Composable () -> Unit)? = null) {
+private fun AnswerRow(
+    text: String, chosen: Boolean, enabled: Boolean, onClick: () -> Unit,
+    modifier: Modifier = Modifier.fillMaxWidth(), leading: (@Composable () -> Unit)? = null,
+    /** Half-width answers have no room for the tick; the words under the answer still mark it. */
+    tick: Boolean = true,
+) {
     val scheme = MaterialTheme.colorScheme
     Surface(
-        modifier = Modifier.fillMaxWidth().selectable(selected = chosen, enabled = enabled, role = Role.RadioButton, onClick = onClick),
+        modifier = modifier.selectable(selected = chosen, enabled = enabled, role = Role.RadioButton, onClick = onClick),
         shape = MaterialTheme.shapes.medium,
         color = if (chosen) scheme.primaryContainer else scheme.surface,
         border = BorderStroke(if (chosen) 2.dp else 1.dp, if (chosen) scheme.primary else LocalVsColors.current.divider),
@@ -65,10 +74,10 @@ private fun AnswerRow(text: String, chosen: Boolean, enabled: Boolean, onClick: 
         Row(Modifier.heightIn(min = 56.dp).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             if (leading != null) leading()
             Column(Modifier.weight(1f)) {
-                Text(text, style = MaterialTheme.typography.titleSmall)
+                Text(text, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 if (chosen) Text(stringResource(R.string.review_your_answer), style = MaterialTheme.typography.bodySmall, color = scheme.onPrimaryContainer)
             }
-            if (chosen) Icon(painterResource(R.drawable.ic_check), contentDescription = null, tint = scheme.primary)
+            if (chosen && tick) Icon(painterResource(R.drawable.ic_check), contentDescription = null, tint = scheme.primary)
         }
     }
 }
@@ -122,7 +131,7 @@ fun ReviewScreen(
             }
         }),
     ) {
-        if (analysis.job?.mock == true) DemoBanner()
+        if (analysis.job?.mock == true) DemoBanner(compact = true)
         when {
             deck == null && analysis.reviewProblem == ReviewProblem.LOAD_FAILED -> Notice(stringResource(R.string.review_save_failed), Tone.NEGATIVE)
             deck == null -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -153,11 +162,9 @@ fun ReviewScreen(
                     }),
                     style = MaterialTheme.typography.titleMedium,
                 )
-                if (card.questionType == ReviewCard.RALLY_WINNER) {
-                    Text(
-                        card.suggestedValue?.let { stringResource(R.string.review_hint, optionLabel(it, match)) } ?: stringResource(R.string.review_no_suggestion),
-                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                // Only a real suggestion gets a line. It is a hint; the app never selects it for the user.
+                if (card.questionType == ReviewCard.RALLY_WINNER && card.suggestedValue != null) {
+                    Text(stringResource(R.string.review_hint, optionLabel(card.suggestedValue, match)), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
 
                 val enabled = !analysis.saving
@@ -176,6 +183,25 @@ fun ReviewScreen(
                             }
                         }
                         AnswerRow(stringResource(R.string.review_unknown_player), card.answer == ReviewCard.UNKNOWN_PLAYER, enabled, onClick = { onAnswer(ReviewCard.UNKNOWN_PLAYER) })
+                    } else if (card.questionType == ReviewCard.RALLY_WINNER) {
+                        // Two answers per row keep all four next to the clip on a small phone. Home
+                        // is on the left as on every other screen, and the order never changes.
+                        val teams = listOf(ReviewCard.HOME, ReviewCard.AWAY).filter { it in card.options }
+                        (listOf(teams) + (card.options - teams.toSet()).chunked(2)).filter { it.isNotEmpty() }.forEach { pair ->
+                            Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                pair.forEach { option ->
+                                    AnswerRow(
+                                        optionLabel(option, match), chosen = card.answer == option, enabled = enabled, onClick = { onAnswer(option) },
+                                        modifier = Modifier.weight(1f).fillMaxHeight(), tick = false,
+                                        leading = when (option) {
+                                            ReviewCard.HOME -> ({ TeamBadge(home = true, size = 32.dp) })
+                                            ReviewCard.AWAY -> ({ TeamBadge(home = false, size = 32.dp) })
+                                            else -> null
+                                        },
+                                    )
+                                }
+                            }
+                        }
                     } else {
                         // The order of the answers never changes from card to card.
                         card.options.forEach { option ->
