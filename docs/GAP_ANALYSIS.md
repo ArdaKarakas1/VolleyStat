@@ -100,6 +100,7 @@ Ayrıntılı plan `docs/AI_PLAN.md` dosyasındadır.
 | Etiket şeması ve CSV şablonları | TEST EDİLDİ | `ml/schemas/` |
 | Etiket dosyası doğrulayıcı | TEST EDİLDİ | `python -m volleystat_ml validate-labels` |
 | Maç bazlı ayrım ve sızıntı denetimi | TEST EDİLDİ | `make-splits`, `check-leakage` |
+| İki etiketçinin uyum ölçümü (B0) | TEST EDİLDİ | `python -m volleystat_ml agreement`: sınır farkı, IoU, uyum oranı, Cohen's kappa ve hakem için uyuşmazlık listesi. Kimse aracı gerçek etiketle çalıştırmadı, çünkü etiket yok. |
 | Video kaynak envanteri | DIŞ BAĞIMLILIK | Kimse envanterdeki bağlantıların lisansını doğrulamadı. Ekip hiçbir video indirmedi. |
 | Gold etiketler | DIŞ BAĞIMLILIK | İki bağımsız etiketçi ve izinli video gerekir. Hiç gold veri yok. |
 
@@ -110,7 +111,7 @@ Sayılar son yerel koşudan gelir. CI aynı testleri her PR'da çalıştırır.
 | Kanıt | Sonuç |
 |---|---|
 | Arka uç `pytest` | 402 test geçti (yerelde Python 3.13, CI'da Python 3.12) |
-| `ml` `pytest` | 209 test geçti (yerel ve CI) |
+| `ml` `pytest` | 239 test geçti (yerel ve CI) |
 | Android JVM testleri (`:core:test`, `:app:testDebugUnitTest`) | 61 test geçti, hiçbiri atlanmadı (yerel). Testler 42 ekran görüntüsü üretti. |
 | Uygulama gerçek sunucuya karşı (JVM) | 6 test geçti (yerel ve CI): `BackendE2eTest` 4, `AppFlowE2eTest` 1, `AppUploadFlowE2eTest` 1. Bu altı test yukarıdaki 61 testin içindedir. |
 | Lint | 0 hata |
@@ -127,7 +128,7 @@ Ayrı inceleyiciler üç parçayı ve yapay zekâ planını okudu. Ayrı bir do�
 | Parça | Bulgu | Sonuç |
 |---|---|---|
 | Arka uç | 16 | 15 bulgu düzeldi. 1 bulgu tasarım gereğidir: `motion-baseline` modülü `ml` paketiyle gelir. Doğrulayıcının eklediği 4 küçük nokta da kapandı. |
-| `ml` paketi | 8 | 8 bulgu düzeldi. Oturum düzeltmeleri test paketinin dışındaki kliplerle ayrıca denedi. |
+| `ml` paketi | 8 | 8 bulgu düzeldi. Oturum düzeltmeleri test paketinin dışındaki kliplerle ayrıca denedi. Sonradan gelen `agreement` komutunu ikinci bir inceleyici 30 denemeyle sınadı ve 3 kusur buldu. Üçü de düzeldi. |
 | Yapay zekâ planı | 11 | 11 bulgu belgeye işlendi. |
 | Android uygulaması | 21 | Doğrulayıcı 19 bulguyu doğruladı ve 2 bulguyu reddetti. Doğrulanan 19 bulgu sürüm 0.4.1 ile düzeldi. Reddedilen bulgulardan biri metin kuralıydı ve o metinler de düzeldi. Öbürü uygulanmadı: "Oyuncusu belli olmayan sayı" alt sınır değildir, çünkü kullanıcı oyuncu seçtikçe bu sayı azalır. |
 
@@ -150,7 +151,7 @@ Sıra bağımlılığa göredir. İlk dört iş gerçek video beklemez.
 2. **Saha yarısı ve taraf değişimi:** Maç kaydı hangi takımın hangi yarıda başladığını ve takımların ne zaman yer değiştirdiğini taşımıyor. Kazanan önerisi ve oyuncu tarafı bu bilgiyi ister.
 3. **Saha bölgesi seçimi:** Kullanıcı bir karede sahanın köşelerine dokunur. Sunucu homografiyi saklar. Baseline hareketi saha içiyle sınırlar (deney B2'nin ön koşulu).
 4. **Arka plan yükleme:** WorkManager ve ön plan hizmeti. Gerçek telefonda deneme ister.
-5. **Eksik ölçüm araçları:** Anotatör uyumu, kazanan metrikleri, kalibrasyon.
+5. **Eksik ölçüm araçları:** Kazanan metrikleri ve kalibrasyon. Anotatör uyumu aracı hazırdır (`agreement`).
 6. **B0 ve B1 deneyleri:** İzinli video ve iki etiketçi gelince. Ekip baseline'ı ilk kez gerçek maçta ölçer.
 7. **Üretim altyapısı:** Hesap, HTTPS, nesne depolama, iş kuyruğu. Bulut ve bütçe kararı ister.
 
