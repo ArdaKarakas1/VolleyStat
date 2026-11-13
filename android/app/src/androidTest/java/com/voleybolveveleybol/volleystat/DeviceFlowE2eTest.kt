@@ -5,7 +5,6 @@ import android.content.pm.PackageManager
 import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
-import androidx.compose.ui.semantics.getOrElse
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.isRoot
