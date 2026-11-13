@@ -16,7 +16,9 @@
 
 `backend/app/main.py`: FastAPI + SQLite, yalnızca yerel video alımı, model bulunmadığını açıkça bildiren API.
 
-`backend/app/media.py`: ffprobe ile dosya doğrulaması. Yalnız kapsayıcıya ve video akışına bakar, görüntünün içeriğini ölçmez.
+`backend/app/media.py`: ffprobe ile dosya doğrulaması. Kapsayıcıya, video akışına ve dosyanın sonunun okunabilirliğine bakar, görüntünün içeriğini ölçmez.
+
+Yüklenen her dosya `storage/media/<uploadId>.bin` adında tek bir dosyadır. Tamamlama dosyayı taşımaz; video kaydı aynı dosyayı gösterir. Böylece tamamlama tek bir veritabanı işlemidir.
 
 `backend/tests`: API ve medya doğrulama testleri. Klipler ffmpeg'in ürettiği sentetik test desenleridir.
 
