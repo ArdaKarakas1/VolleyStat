@@ -107,6 +107,16 @@ fun VolleyStatApp(viewModel: AppViewModel = viewModel()) {
         restoreState = true
     }
     fun match(id: String?) = state.matches.firstOrNull { it.localId == id }
+
+    /**
+     * Closes the screen at [route] because what it shows no longer exists. Only the screen on top
+     * may do that: a screen stays composed while it slides out, and one that popped then would
+     * close the screen that just replaced it.
+     */
+    fun leave(route: String, toHome: Boolean = false) {
+        if (nav.currentDestination?.route != route) return
+        if (toHome) nav.popBackStack(Routes.HOME, inclusive = false) else nav.popBackStack()
+    }
     fun roster(teamId: String?) = state.teams.firstOrNull { it.id == teamId }?.players.orEmpty()
 
     val itemColors = NavigationSuiteDefaults.itemColors(
@@ -160,7 +170,7 @@ fun VolleyStatApp(viewModel: AppViewModel = viewModel()) {
             composable(Routes.TEAM) { entry ->
                 val team = state.teams.firstOrNull { it.id == entry.arguments?.getString("id") }
                 if (team == null) {
-                    LaunchedEffect(Unit) { nav.popBackStack() }
+                    LaunchedEffect(Unit) { leave(Routes.TEAM) }
                 } else {
                     TeamRosterScreen(
                         team, onAddPlayer = { name, jersey -> viewModel.addPlayer(team.id, name, jersey) },
@@ -193,13 +203,9 @@ fun VolleyStatApp(viewModel: AppViewModel = viewModel()) {
             composable(Routes.NEW_CHECK) {
                 val video = state.draft.video
                 if (video == null) {
-                    // Nothing to check without a video, so this screen leaves. It must only do so
-                    // while it is still the current screen: starting the upload empties the draft
-                    // and moves on to the status screen, and this screen, still drawn while it
-                    // slides out, would otherwise close that status screen again.
-                    LaunchedEffect(Unit) {
-                        if (nav.currentDestination?.route == Routes.NEW_CHECK) nav.popBackStack(Routes.HOME, inclusive = false)
-                    }
+                    // Nothing to check without a video. Starting the upload also empties the draft
+                    // while it moves on to the status screen, which is the case leave() guards.
+                    LaunchedEffect(Unit) { leave(Routes.NEW_CHECK, toHome = true) }
                 } else {
                     // A new video never inherits the previous video's rights statement.
                     var rights by rememberSaveable(video.location) { mutableStateOf(false) }
@@ -214,7 +220,7 @@ fun VolleyStatApp(viewModel: AppViewModel = viewModel()) {
             composable(Routes.STATUS) { entry ->
                 val match = match(entry.arguments?.getString("id"))
                 if (match == null) {
-                    LaunchedEffect(Unit) { nav.popBackStack(Routes.HOME, inclusive = false) }
+                    LaunchedEffect(Unit) { leave(Routes.STATUS, toHome = true) }
                 } else {
                     // Follow the job from the moment the server accepted the file, and stop when the screen closes.
                     val ready = match.check?.status == com.voleybolveveleybol.volleystat.model.VideoCheck.READY
@@ -236,7 +242,7 @@ fun VolleyStatApp(viewModel: AppViewModel = viewModel()) {
                 val match = match(entry.arguments?.getString("id"))
                 val videoId = match?.check?.videoId
                 if (match == null || videoId == null) {
-                    LaunchedEffect(Unit) { nav.popBackStack() }
+                    LaunchedEffect(Unit) { leave(Routes.REVIEW) }
                 } else {
                     LaunchedEffect(match.localId) {
                         if (analysis.matchId != match.localId || analysis.job == null) viewModel.watchAnalysis(match.localId, startIfMissing = false)
@@ -258,7 +264,7 @@ fun VolleyStatApp(viewModel: AppViewModel = viewModel()) {
             composable(Routes.REPORT) { entry ->
                 val match = match(entry.arguments?.getString("id"))
                 if (match == null) {
-                    LaunchedEffect(Unit) { nav.popBackStack(Routes.HOME, inclusive = false) }
+                    LaunchedEffect(Unit) { leave(Routes.REPORT, toHome = true) }
                 } else {
                     // Reload whenever the screen comes back, so decisions made in review show up.
                     LaunchedEffect(match.localId, entry) { viewModel.loadReport(match.localId) }
@@ -273,7 +279,7 @@ fun VolleyStatApp(viewModel: AppViewModel = viewModel()) {
             composable(Routes.PLAYERS) { entry ->
                 val match = match(entry.arguments?.getString("id"))
                 if (match == null) {
-                    LaunchedEffect(Unit) { nav.popBackStack() }
+                    LaunchedEffect(Unit) { leave(Routes.PLAYERS) }
                 } else {
                     PlayersScreen(match, analysis.report.takeIf { analysis.matchId == match.localId }, roster(match.homeTeamId), roster(match.awayTeamId), onBack = { nav.popBackStack() })
                 }

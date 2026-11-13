@@ -106,3 +106,19 @@ Gerçek telefonda deneme hâlâ ürün sahibinin işidir. Emülatörün kameras�
 **Durum:** Kabul edildi, geçici
 
 Yükleme `AppViewModel` içinde çalışır ve uygulama kapanınca durur. Kullanıcı uygulamayı yeniden açıp yüklemeyi sürdürdüğünde yükleme kaldığı bayttan devam eder. Uzun bir maç videosu için arka plan işçisi (WorkManager ve ön plan hizmeti) gerekir. Ekip bu işi gerçek bir telefonda denemeden yazmadı, çünkü Android'in arka plan kuralları sürümden sürüme değişir ve emülatör bu davranışı temsil etmez. Sunucu bugün yalnız geliştirme bilgisayarında çalıştığı için bu eksik ilk pilotu engellemez.
+
+## ADR-0112: Rapor alt sınır verir ve set sayımı belirsiz rallide durur
+
+**Tarih:** 13 Kasım 2026 · **Durum:** Kabul edildi
+
+Bağımsız inceleme iki sorun buldu. Kararsız tek bir ralli sonraki bütün sayıları tek bir açık sete yığıyordu ve rapor `74-60` gibi kurallara aykırı bir set skoru veriyordu. İnceleme akışı analizörün kaçırdığı ralliyi ekleyemediği hâlde rapor bütün kartlar yanıtlanınca değerleri `MEASURED` olarak bildiriyordu.
+
+Kararlar:
+
+- Sunucu set sayımını kazananı belli olmayan ilk rallide durdurur ve o rallinin sıra numarasını `score.stoppedAtRally` alanında bildirir. O rallinin kazananı sonraki her sayının hangi sete ait olduğunu belirler, bu yüzden sunucu tahmin yürütmez. Takım toplamları doğrulanmış bütün rallileri saymayı sürdürür.
+- Sunucu maçı üç sette bitirmez. Antrenman maçları çoğu zaman sabit sayıda set oynar. Beşinci set 15 sayıya, öbür setler 25 sayıya gider.
+- Analizörün türü `MODEL` değilse rapor `ralliesMayBeMissing: true` taşır ve hiçbir değeri `MEASURED` olarak bildirmez. Uygulama bu durumu rapor ekranında yazar ve sayıları artı işaretiyle gösterir.
+- Yalnız `MODEL` türündeki analizör güven puanı verebilir. `MOCK` kazanan öneremez. `BASELINE` kazanan önerebilir ve uygulama öneriyi yalnız ipucu olarak gösterir.
+
+Açık kalan iş: Kullanıcının kaçan ralliyi eklemesi, ralliyi bölmesi, birleştirmesi ve sınırını düzeltmesi. Bu iş `docs/GAP_ANALYSIS.md` 7. bölümün ilk maddesidir.
+

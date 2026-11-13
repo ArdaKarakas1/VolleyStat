@@ -12,6 +12,8 @@ Durum etiketleri:
 
 Depoda eğitilmiş model yok. Kimse hiçbir yapay zekâ bileşeninin doğruluğunu ölçmedi. G0–G8 kapılarının hepsi `NOT_MEASURED` durumundadır. Uygulama bugün gerçek maç istatistiğini kendiliğinden çıkarmaz: Kullanıcı her rallinin kazananını kendisi seçer ve rapor bu kararlardan oluşur.
 
+**En önemli sınır:** İnceleme yalnızca analizörün önerdiği ralliyi onaylar ya da reddeder. Kullanıcı analizörün kaçırdığı ralliyi ekleyemez, birleşmiş iki ralliyi bölemez ve ralli sınırını düzeltemez. Bu yüzden rapordaki her sayı alt sınırdır ve set sınırı kayabilir. Sunucu bunu raporda `ralliesMayBeMissing` alanıyla bildirir ve uygulama raporda yazar. Bu eksik kapanmadan uygulama gerçek bir maçın skorunu güvenle veremez.
+
 ## 1. Fonksiyonel gereksinimler (FR-01 … FR-20)
 
 | ID | Özellik | Öncelik | Durum | Açıklama |
@@ -26,8 +28,8 @@ Depoda eğitilmiş model yok. Kimse hiçbir yapay zekâ bileşeninin doğruluğu
 | FR-08 | Analiz iş durumu | P0 | TEST EDİLDİ | İş kuyruğu, durum makinesi, iptal, çöken işi kurtarma. Ekran yalnız sunucunun bildirdiği adımı ve oranı gösterir. |
 | FR-09 | Ralli tahmini | P0 | KISMEN + DIŞ BAĞIMLILIK | Hareket enerjisi baseline'ı var ve sentetik kliplerle testli. Gerçek maçta ölçüm izinli video ve gold etiket ister. |
 | FR-10 | Olası takım kazananı | P0 | DIŞ BAĞIMLILIK | Hiçbir analizör kazanan önermiyor. Plan `docs/AI_PLAN.md` 2.7 bölümünde. |
-| FR-11 | Doğrulama kuyruğu | P0 | TEST EDİLDİ | Kartlar, sürüm denetimli karar, geri alma, denetim kaydı. Ekran: klip, tek soru, tek dokunuş. Akış yalnız DEMO analizörle denendi. |
-| FR-12 | İki takım raporu | P0 | TEST EDİLDİ | Sunucu raporu yalnız kullanıcı kararlarından hesaplar. Her değer `MEASURED`, `PARTIAL` ya da `UNKNOWN` durumu taşır. |
+| FR-11 | Doğrulama kuyruğu | P0 | KISMEN | Kartlar, sürüm denetimli karar, geri alma ve denetim kaydı TEST EDİLDİ. Ekran: klip, tek soru, tek dokunuş. Kullanıcı kaçan ralliyi ekleyemez, ralliyi bölemez ve sınırını düzeltemez. Akış yalnız DEMO analizörle denendi. |
+| FR-12 | İki takım raporu | P0 | KISMEN | Sunucu raporu yalnız kullanıcı kararlarından hesaplar (TEST EDİLDİ). Her değer `MEASURED`, `PARTIAL` ya da `UNKNOWN` durumu taşır. Ölçümü kayıtlı bir model gelene kadar hiçbir değer `MEASURED` olmaz. Set sayımı kazananı belli olmayan ilk rallide durur. |
 | FR-13 | Ralli bazında video oynatma | P0 | KISMEN | Sunucu videoyu `Range` isteğiyle sunar (TEST EDİLDİ). Media3 oynatıcı yalnız CI emülatöründe sınanır. |
 | FR-14 | Oyuncu eşlemesi | P1 | KISMEN | Kullanıcı sayıyı alan oyuncuyu forma numarasıyla seçer. Otomatik eşleme DIŞ BAĞIMLILIK'tır. |
 | FR-15 | Tam aksiyon çıkarımı | P1 | DIŞ BAĞIMLILIK | Kullanıcı yalnız ralliyi bitiren aksiyonu seçebilir. |
@@ -120,13 +122,15 @@ Bütün test klipleri ffmpeg'in ürettiği sentetik desenlerdir. Uçtan uca akı
 
 ## 7. Sıradaki dilimler
 
-Sıra bağımlılığa göredir. İlk üç iş gerçek video beklemez.
+Sıra bağımlılığa göredir. İlk dört iş gerçek video beklemez.
 
-1. **Saha bölgesi seçimi:** Kullanıcı bir karede dört köşeye dokunur. Sunucu homografiyi saklar. Baseline hareketi saha içiyle sınırlar (deney B2'nin ön koşulu).
-2. **Arka plan yükleme:** WorkManager ve ön plan hizmeti. Gerçek telefonda deneme ister.
-3. **Eksik ölçüm araçları:** Anotatör uyumu, kazanan metrikleri, kalibrasyon.
-4. **B0 ve B1 deneyleri:** İzinli video ve iki etiketçi gelince. Ekip baseline'ı ilk kez gerçek maçta ölçer.
-5. **Üretim altyapısı:** Hesap, HTTPS, nesne depolama, iş kuyruğu. Bulut ve bütçe kararı ister.
+1. **Ralli düzeltme:** Kullanıcı kaçan ralliyi ekler, birleşmiş ralliyi böler, iki parçayı birleştirir ve sınırı düzeltir. Sözleşme, sunucu ve doğrulama ekranı bu işe girer. Bu iş bitmeden rapor yalnız alt sınır verir ve B1 ölçümünün sonucu ürüne yansımaz.
+2. **Saha yarısı ve taraf değişimi:** Maç kaydı hangi takımın hangi yarıda başladığını ve takımların ne zaman yer değiştirdiğini taşımıyor. Kazanan önerisi ve oyuncu tarafı bu bilgiyi ister.
+3. **Saha bölgesi seçimi:** Kullanıcı bir karede sahanın köşelerine dokunur. Sunucu homografiyi saklar. Baseline hareketi saha içiyle sınırlar (deney B2'nin ön koşulu).
+4. **Arka plan yükleme:** WorkManager ve ön plan hizmeti. Gerçek telefonda deneme ister.
+5. **Eksik ölçüm araçları:** Anotatör uyumu, kazanan metrikleri, kalibrasyon.
+6. **B0 ve B1 deneyleri:** İzinli video ve iki etiketçi gelince. Ekip baseline'ı ilk kez gerçek maçta ölçer.
+7. **Üretim altyapısı:** Hesap, HTTPS, nesne depolama, iş kuyruğu. Bulut ve bütçe kararı ister.
 
 ## 8. Arda'dan beklenenler
 
