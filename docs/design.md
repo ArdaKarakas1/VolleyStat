@@ -1,17 +1,75 @@
-# VolleyStat tasarım dili
+# VolleyStat tasarım sistemi
 
-Marka Voleybol Ve Veleybol, ürün VolleyStat. Kullanıcının sağladığı logo değiştirilmeden başlıkta ve uygulama simgesinde kullanılır.
+Marka Voleybol Ve Veleybol, ürün VolleyStat. Uygulamanın görsel kimliği UI Tasarım V1 paketinden gelir: mor ve beyaz, Inter yazı tipi, yuvarlatılmış beyaz kartlar. Ürün kuralları V4 devir raporundan gelir. İki kaynak çelişirse görsel konuda UI V1, davranış konusunda V4 geçerlidir.
 
-- Krem zemin `#FCF7EB`, lacivert metin ve ana eylem `#162340`, koyu turuncu vurgu `#9E491B`.
-- Beyaz, yuvarlatılmış bölümler; belirgin başlıklar; açıklayıcı boş durumlar.
-- Ana akış video ekleme, olay doğrulama ve performans inceleme adımlarından oluşur.
-- Butonlar en az 52 dp, seçim alanları en az 48 dp yüksekliğindedir. Form etiketleri yazı girilirken de görünür. Formlar kaydırılabilir.
-- Doğrulanmamış veriler performans olarak sunulmaz. AI çalışmıyorsa elle inceleme modu açıkça belirtilir.
-- Uzun takım adları ve büyük yazı boyutlarında içerik satırlara yayılır; ekran kaydırılır.
+Tasarım paketinde Figma dosyası yoktur. Ekip PNG görsellerini görsel hedef, `04_DESIGN_TOKENS.json` dosyasını stil başlangıcı olarak aldı. Görsellerdeki skorlar, adlar ve yüzdeler örnek veridir ve uygulamaya girmez.
 
-## Araştırma
+## Tokenlar
 
-- [Hudl voleybol raporları](https://www.hudl.com/support/hudl-volleyball/guides/reports) — istatistikten ilgili videoya geçiş, olay ve görüntü ilişkisinin korunması.
-- [Android erişilebilir View tasarımı](https://developer.android.com/guide/topics/ui/accessibility/views/apps-views) — en az 48 dp dokunma alanları ve anlaşılır kontroller.
+Bütün değerler `android/app/src/main/java/com/voleybolveveleybol/volleystat/ui/theme/Theme.kt` dosyasında durur. Ekranlar renk ve ölçü yazmaz, bu dosyadaki adları kullanır.
 
-Bu kaynaklardan etkileşim ilkeleri alındı; görseller veya arayüzler kopyalanmadı. Yeni kullanıcı örnekleri geldiğinde renk, bileşen ve ekran düzeni geliştirilebilir.
+| Token | Açık tema | Kullanım |
+|---|---|---|
+| Ana renk | `#6A3DF0` | Ana düğme, seçili sekme, vurgu |
+| Açık ana renk | `#8B5CF6` | Geçişli kartın ikinci rengi |
+| Zemin | `#F5F3FF` | Ekran zemini |
+| Yüzey | `#FFFFFF` | Kart, alt çubuk |
+| Metin | `#111827` | Başlık ve gövde |
+| İkincil metin | `#596174` | Yardımcı satır, etiket |
+| Olumlu | `#16A34A` | Biten adım, hazır rapor |
+| Uyarı | `#D97706` | Doğrulama bekleyen iş, DEMO etiketi |
+| Hata | `#DC2626` | Reddedilen dosya, duran iş, kayıt göstergesi |
+| Ayraç | `#E5E7EB` | Satır çizgisi, kart kenarı |
+
+Koyu temanın kendi şeması vardır. Koyu temada ana renk açılır ve yüzeyler koyulaşır. Uygulama sistem ayarını izler.
+
+Ölçüler: Ekran kenar boşluğu 16 dp, kart köşesi 16 dp, düğme köşesi 12 dp, temel aralık 8 dp, dokunma alanı en az 48 dp.
+
+Yazı: Inter Regular, Medium, SemiBold ve Bold (SIL Open Font License, lisans metni `android/licenses/` klasöründe). Sayılar eş genişlikli rakamla çizilir, böylece skor ve tablo sütunları titremez.
+
+## Bileşenler
+
+Ortak bileşenler `ui/components/Components.kt` dosyasındadır.
+
+| Bileşen | Görev |
+|---|---|
+| `VsCard` | Beyaz, 16 dp köşeli kart |
+| `PrimaryButton`, `SecondaryButton` | Ekranın ana ve ikincil eylemi |
+| `ListRow`, `IconTile` | Simge kutulu liste satırı |
+| `StatusChip` | Durum etiketi. Durumu renk tek başına taşımaz, etiket her zaman bir simge ve bir sözcük içerir. |
+| `Notice` | Ekran içi bilgi, uyarı ve hata kutusu |
+| `DemoBanner` | Deneme analizörünün ürettiği her verinin üstündeki DEMO etiketi |
+| `NotYetCard`, kesik çizgili kutu | Henüz var olmayan ya da ölçümü olmayan şey |
+| `StageList` | Sunucunun bildirdiği iş adımları |
+| `ProgressRing` | İlerleme halkası. Halka yalnız sunucu ya da yükleme gerçek bir oran bildirdiğinde dolar. |
+| `TeamBadge` | Ev sahibi dolu, misafir çerçeveli rozet |
+| `SegmentedChoice`, `SelectCard` | İkili seçim ve radyo kartı |
+| `EmptyState` | Boş liste açıklaması |
+
+## Dürüstlük kalıpları
+
+Bu kalıplar görsel etkiden önce gelir.
+
+- **Ölçüm yoksa sayı yok.** Uygulama bilinmeyen değeri kesik çizgili boş kutuyla çizer ve ekran okuyucuya "Ölçüm yok" der. Uygulama bilinmeyen değeri hiçbir yerde `0` yazmaz.
+- **Alt sınır artı işareti taşır.** Doğrulama bitmeden görünen sayı `28+` biçimindedir. Ekran artının anlamını bir satırla açıklar.
+- **Bitmemiş set kesik çizgilidir.** Süren setin skoru kesin set skoru gibi görünmez.
+- **DEMO her ekranda yazılıdır.** Deneme analizörünün verisi durum, doğrulama, rapor ve oyuncu ekranlarında DEMO etiketi taşır.
+- **Sahte yüzde yok.** Analiz ekranı yalnız sunucunun bildirdiği adımı ve oranı gösterir.
+- **Öneri seçili gelmez.** Sunucu bir kazanan önerirse ekran öneriyi ipucu olarak yazar. Kararı kullanıcı verir.
+- **Oyuncuya sayı yazmak karar ister.** Oyuncu tablosu yalnız kullanıcının doğrulamada forma numarası seçtiği sayıları içerir. Oyuncusu belli olmayan sayılar ayrı satırda durur.
+
+## Durumlar
+
+Her ekran dört durumu çizer: yükleniyor, boş, hata ve dolu. Hata mesajı neyin olmadığını ve kullanıcının ne yapabileceğini söyler. Uygulama hata kodu göstermez.
+
+## Erişilebilirlik ve ekran boyutları
+
+- Dokunma alanları en az 48 dp yüksekliğindedir.
+- Renk hiçbir bilgiyi tek başına taşımaz. Seçili yanıt çerçeve, zemin ve "Senin kararın" yazısıyla işaretlenir.
+- Ekran görüntüsü testleri her ana ekranı 411 dp ve 320 dp genişlikte, açık ve koyu temada ve 1,5 kat yazı boyutunda üretir.
+- Dar ekranda ve büyük yazıda oyuncu tablosu adı sayıların üstüne taşır. Doğrulama ekranı iki takımı yan yana koyar, böylece yanıtlar klibin yanında kalır.
+- Kayıt ekranı yatay tutuş için tasarlanmıştır. Dikey tutuşta ekran kullanıcıdan telefonu çevirmesini ister.
+
+## Uygulama simgesi
+
+Simge ürün sahibinin verdiği suluboya logodur (krem, lacivert, turuncu). Uygulamanın içi mor ve beyazdır. İki kimlik aynı paleti paylaşmaz. Logo ayrıntılı bir çizimdir ve küçük boyda okunması zordur. Bu karar marka sahibine aittir. Uygulama logoyu açılış ekranında ve Profil sekmesinde küçük boyda gösterir.

@@ -41,12 +41,68 @@ Paket adı markayı taşır. Eski `com.volleyvolleystat.app` kimliği yayımlanm
 
 ## ADR-0104: Arayüz paleti `docs/design.md` paletidir
 
-**Durum:** Kabul edildi
+**Durum:** ADR-0106 bu kararın yerini aldı
 
 V3 şartnamesindeki lacivert/mavi/turkuaz palet kendi ifadesiyle "bağlayıcı marka rehberi değil, ilk konsept"tir. `docs/design.md` paleti (krem `#FCF7EB`, lacivert `#162340`, turuncu `#9E491B`) kullanıcının sağladığı logoyla birlikte gelmiştir ve daha yenidir.
 
 ## ADR-0105: Android derlemesi CI'da doğrulanır
 
-**Durum:** Kabul edildi
+**Durum:** ADR-0109 bu kararın yerini aldı
 
 Geliştirme oturumunun çalıştığı bulut ortamı Android SDK sunucusuna erişemez. Bu yüzden APK derlemesi, lint ve Android birim testleri GitHub Actions üzerinde çalışır (`.github/workflows/android-build.yml`). Emülatör ve gerçek cihaz testi bu kapsamda değildir ve ayrıca yapılmalıdır.
+
+## ADR-0106: Uygulamanın görsel kimliği UI Tasarım V1'dir
+
+**Tarih:** 12 Kasım 2026 · **Durum:** Kabul edildi
+
+Ürün sahibi UI Tasarım V1 paketini verdi ve mor ve beyaz kimliği temel almamızı istedi. Uygulama bu paketin renklerini, Inter yazı tipini ve on ekranın düzenini kullanır. Tokenlar `ui/theme/Theme.kt` dosyasındadır ve `docs/design.md` bu sistemi anlatır.
+
+Uygulama görsellerden şu noktalarda bilerek ayrılır, çünkü görseldeki öğe ürün kuralını çiğner: sahte yüzde gösteren halka, sunucunun bildirmediği analiz adımları, dolu görünen ama ölçümü olmayan sütunlar ve örnek kulüp adları. Tam liste `docs/UI_V1_PLAN.md` dosyasının 2. bölümündedir.
+
+Uygulama simgesi ürün sahibinin suluboya logosudur. Logonun paleti (krem, lacivert, turuncu) uygulamanın moruyla uyuşmaz. Bu kararı marka sahibi verir.
+
+## ADR-0107: Tek ViewModel, elle bağımlılık kurulumu, Hilt yok
+
+**Durum:** Kabul edildi
+
+Uygulamada bir `AppViewModel` vardır. `AppViewModel` üç veri sınıfını kendisi kurar: `LocalStore`, `ApiClient` ve `VideoInspector`. Bu ölçekte bir bağımlılık çatısı yalnız derleme süresi ve öğrenme yükü ekler. Testler aynı sınıfları doğrudan kurar ya da gerçek etkinliği sürer.
+
+Ekip Hilt'i şu durumda yeniden değerlendirir: Uygulama birden çok `ViewModel` ve ortak bir depo katmanı taşır ya da arka plan işçisi aynı bağımlılıklara ihtiyaç duyar.
+
+## ADR-0108: Uygulama içi kayıt CameraX, klip Media3
+
+**Durum:** Kabul edildi
+
+- Kayıt ekranı CameraX `VideoCapture` kullanır. Kalite sırası Full HD, HD, SD biçimindedir. Uygulama ses kaydetmez, çünkü analiz sesi kullanmaz ve salondaki konuşmalar kişisel veridir.
+- Etkinlik dönüşte yeniden kurulmaz (`configChanges`), çünkü yeniden kurulum süren kaydı ve yüklemeyi keserdi. Bu yüzden kayıt ekranı ekranın dönüşünü kendisi dinler ve kaydediciye bildirir.
+- Kayıt dosyası uygulamanın özel klasöründe durur. Kullanıcı kaydı Profil sekmesinden siler.
+- Doğrulama ekranı klibi Media3 ile sunucudan `Range` isteğiyle oynatır. Sunucu ayrı klip dosyası üretmez.
+
+## ADR-0109: Test katmanları ve cihaz testleri
+
+**Durum:** Kabul edildi
+
+Geliştirme oturumunun bulut ortamı artık Android SDK'ya erişir ve uygulamayı derler, ama emülatör çalıştıramaz (donanım hızlandırma yok). Testler bu yüzden üç yerde çalışır:
+
+1. **JVM (Robolectric):** Yükleme motoru, yerel kayıt, gezinme ve her ekranın çizimi. Roborazzi her ekranın görüntüsünü üretir ve CI bu görüntüleri artefakt olarak saklar.
+2. **JVM ve gerçek sunucu:** `BackendE2eTest` ve `AppFlowE2eTest` uygulamanın istemcisini ve ekranlarını çalışan bir sunucuya karşı sürer.
+3. **Emülatör (yalnız CI):** `RecordingDeviceTest` ve `DeviceFlowE2eTest` kamerayı, sunucudan klip oynatmayı ve baştan sona akışı dener.
+
+Uçtan uca ve cihaz testleri sunucu ya da kamera yoksa kendilerini atlar. CI'da `tools/require_tests_ran.py` atlanan testi hata sayar.
+
+Gerçek telefonda deneme hâlâ ürün sahibinin işidir. Emülatörün kamerası sanal bir sahne üretir ve gerçek bir salonu, gerçek bir tripodu ve uzun bir kaydı temsil etmez.
+
+## ADR-0110: Analizör eklentisi ve önce inceleme akışı
+
+**Durum:** Kabul edildi
+
+- Sunucu analizörü `VOLLEYSTAT_ANALYZER` değişkeninden ya da `--analyzer` seçeneğinden alır. Seçim yoksa analiz isteği `503 MODEL_NOT_CONFIGURED` döner.
+- Her analizör türünü bildirir: `MOCK`, `BASELINE` ya da `MODEL`. Sunucu `MOCK` işini ve raporunu `mock: true` ile işaretler ve uygulama bu veriyi her ekranda DEMO etiketiyle gösterir.
+- Analizör yalnız ralli aralığı ve isterse kazanan önerir. Rapor yalnız kullanıcı kararlarından oluşur. Öneri hiçbir zaman doğrudan rapora girmez.
+- Bir bileşen kendi kapısını (`docs/AI_PLAN.md`) kilitli test kümesinde geçene kadar önce inceleme kipinde kalır.
+
+## ADR-0111: Yükleme uygulama açıkken sürer
+
+**Durum:** Kabul edildi, geçici
+
+Yükleme `AppViewModel` içinde çalışır ve uygulama kapanınca durur. Kullanıcı uygulamayı yeniden açıp yüklemeyi sürdürdüğünde yükleme kaldığı bayttan devam eder. Uzun bir maç videosu için arka plan işçisi (WorkManager ve ön plan hizmeti) gerekir. Ekip bu işi gerçek bir telefonda denemeden yazmadı, çünkü Android'in arka plan kuralları sürümden sürüme değişir ve emülatör bu davranışı temsil etmez. Sunucu bugün yalnız geliştirme bilgisayarında çalıştığı için bu eksik ilk pilotu engellemez.
