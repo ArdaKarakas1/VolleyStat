@@ -178,6 +178,6 @@ Ekip bu bölümü 13 Kasım 2026'da, kodu yazdıktan sonra ekledi. Üstteki böl
 | Gezinme | `JourneyTest`: gerçek etkinlik, gezinme grafiği, ViewModel ve yerel kayıt | Yerel ve CI |
 | İstemci ve sunucu | `BackendE2eTest` | Yerel ve CI |
 | Ekranlar ve sunucu | `AppFlowE2eTest`: analiz, kararlar, rapor, oyuncu tablosu | Yerel ve CI |
-| Cihaz | `RecordingDeviceTest`, `DeviceFlowE2eTest` | Yalnız CI emülatörü. İlk koşu PR #4'te sürüyor. |
+| Cihaz | `RecordingDeviceTest`, `DeviceFlowE2eTest` | CI emülatörü (API 34): geçti |
 
 Geliştirici görsel hedefle karşılaştırmayı elle yaptı: Her ekran görüntüsüne baktı ve görüntüyü tasarım panosuyla yan yana koydu. Depoda piksel karşılaştırması yapan bir test yok, çünkü tasarım paketi Figma dosyası içermez ve görseller 234 × 455 pikseldir.

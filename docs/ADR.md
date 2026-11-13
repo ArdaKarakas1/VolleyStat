@@ -92,6 +92,8 @@ Uçtan uca ve cihaz testleri sunucu ya da kamera yoksa kendilerini atlar. CI'da 
 
 Gerçek telefonda deneme hâlâ ürün sahibinin işidir. Emülatörün kamerası sanal bir sahne üretir ve gerçek bir salonu, gerçek bir tripodu ve uzun bir kaydı temsil etmez.
 
+Cihaz testi ilk koşularında değerini gösterdi: Emülatördeki tam akış testi, JVM testlerinin hiçbirinin geçmediği bir yolda (kontrol ekranından yüklemeyi başlatma) uygulamanın kullanıcıyı ana ekrana attığını buldu. Ekip hatayı önce JVM'de yeniden üreten bir test yazdı, sonra düzeltti.
+
 ## ADR-0110: Analizör eklentisi ve önce inceleme akışı
 
 **Durum:** Kabul edildi

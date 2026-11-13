@@ -11,7 +11,7 @@ Bu depo yalnızca Android uygulamasını ve onun arka ucunu içerir. Web sitesi 
 | Parça | Durum |
 | --- | --- |
 | Android uygulaması (UI Tasarım V1, on ekran) | Var. Ekran çizimleri, gezinme ve sunucuyla uçtan uca akış testli. Kimse uygulamayı gerçek telefonda denemedi. |
-| Kamera kaydı (CameraX) ve klip oynatma (Media3) | Var. Yalnız CI emülatöründe sınanır. |
+| Kamera kaydı (CameraX) ve klip oynatma (Media3) | Var. CI emülatöründe testli. Gerçek telefonda deneme yok. |
 | Video yükleme (parçalı, kaldığı yerden devam, SHA-256) | Çalışıyor, testli. Yükleme uygulama açıkken sürer. |
 | Video dosya doğrulaması (ffprobe) | Çalışıyor, sentetik kliplerle testli. Sunucu sahneyi ölçmez. |
 | Analiz işi, doğrulama kartları, rapor (API 0.4) | Çalışıyor, testli. Rapor yalnız kullanıcı kararlarından oluşur. |

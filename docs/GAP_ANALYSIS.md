@@ -21,7 +21,7 @@ Depoda eğitilmiş model yok. Kimse hiçbir yapay zekâ bileşeninin doğruluğu
 | FR-01 | Modern Android arayüzü | P0 | TEST EDİLDİ (JVM) | UI Tasarım V1: on ekran, dört sekme, açık ve koyu tema. Ekran görüntüsü testleri 411 dp, 320 dp ve 1,5 kat yazıyı kapsar. Kimse uygulamayı gerçek telefonda denemedi. |
 | FR-02 | Hesap ve takım taslağı | P0 | KISMEN | Takımlar ve kadrolar telefonda durur ve testlidir. Hesap sistemi yok. |
 | FR-03 | Galeriden video | P0 | KISMEN | Sistem Photo Picker bağlı, küçük resim ve süre görünür. Seçici hiçbir otomatik testte çalışmadı. |
-| FR-04 | Kamera video kaydı | P0 | KISMEN | CameraX ile uygulama içi kayıt: süre, duraklat, bitir, boş alan uyarısı, izin akışı. Cihaz testi yalnız CI emülatöründe çalışır. Uzun kayıt ve gerçek telefon denemesi yok. |
+| FR-04 | Kamera video kaydı | P0 | KISMEN | CameraX ile uygulama içi kayıt: süre, duraklat, bitir, boş alan uyarısı, izin akışı. Kayıt CI emülatöründe (API 34) TEST EDİLDİ. Uzun kayıt ve gerçek telefon denemesi yok. |
 | FR-05 | Kamera yerleşim rehberi | P0 | KISMEN | Çekim rehberi ekranı ve hizalama köşeleri var. Uygulama sahayı algılamaz ve kadrajı denetlemez. |
 | FR-06 | Video kabul kontrolü | P0 | KISMEN | Sunucu codec, süre, çözünürlük, kare hızı ve dosya bütünlüğünü denetler (TEST EDİLDİ). Sunucu sahneyi ölçmez. Saha bölgesi seçimi yok. |
 | FR-07 | Kesintiye dayanıklı yükleme | P0 | KISMEN | Protokol ve istemci motoru TEST EDİLDİ (kopma, kaldığı yerden sürme, sağlama toplamı). Yükleme uygulama açıkken sürer. Arka plan işçisi yok (ADR-0111). |
@@ -30,7 +30,7 @@ Depoda eğitilmiş model yok. Kimse hiçbir yapay zekâ bileşeninin doğruluğu
 | FR-10 | Olası takım kazananı | P0 | DIŞ BAĞIMLILIK | Hiçbir analizör kazanan önermiyor. Plan `docs/AI_PLAN.md` 2.7 bölümünde. |
 | FR-11 | Doğrulama kuyruğu | P0 | KISMEN | Kartlar, sürüm denetimli karar, geri alma ve denetim kaydı TEST EDİLDİ. Ekran: klip, tek soru, tek dokunuş. Kullanıcı kaçan ralliyi ekleyemez, ralliyi bölemez ve sınırını düzeltemez. Akış yalnız DEMO analizörle denendi. |
 | FR-12 | İki takım raporu | P0 | KISMEN | Sunucu raporu yalnız kullanıcı kararlarından hesaplar (TEST EDİLDİ). Her değer `MEASURED`, `PARTIAL` ya da `UNKNOWN` durumu taşır. Ölçümü kayıtlı bir model gelene kadar hiçbir değer `MEASURED` olmaz. Set sayımı kazananı belli olmayan ilk rallide durur. |
-| FR-13 | Ralli bazında video oynatma | P0 | KISMEN | Sunucu videoyu `Range` isteğiyle sunar (TEST EDİLDİ). Media3 oynatıcı yalnız CI emülatöründe sınanır. |
+| FR-13 | Ralli bazında video oynatma | P0 | KISMEN | Sunucu videoyu `Range` isteğiyle sunar (TEST EDİLDİ). Media3 oynatıcı CI emülatöründe klibi sunucudan parça parça istedi ve hata vermeden oynattı. Test görüntünün doğru kareyi gösterdiğini denetlemez. |
 | FR-14 | Oyuncu eşlemesi | P1 | KISMEN | Kullanıcı sayıyı alan oyuncuyu forma numarasıyla seçer. Otomatik eşleme DIŞ BAĞIMLILIK'tır. |
 | FR-15 | Tam aksiyon çıkarımı | P1 | DIŞ BAĞIMLILIK | Kullanıcı yalnız ralliyi bitiren aksiyonu seçebilir. |
 | FR-16 | Eğitim kullanım izni | P0 | KISMEN | İzin varsayılan olarak kapalıdır ve sunucu `allowTraining: true` isteğini reddeder (TEST EDİLDİ). Ayrı onay ve geri çekme akışı yok. |
@@ -48,9 +48,9 @@ Depoda eğitilmiş model yok. Kimse hiçbir yapay zekâ bileşeninin doğruluğu
 | 03 | Maç oluştur | TEST EDİLDİ (JVM) | Ad, tarih, salon ve tür isteğe bağlıdır. |
 | 04 | Takım ve kadro | TEST EDİLDİ (JVM) | Kayıtlı takımdan seçim, yeni takım, kadro. |
 | 05 | Video kaynağı | TEST EDİLDİ (JVM) | Kamera ya da galeri. Ardından telefonun okuduğu dosya bilgileri ve hak beyanı. |
-| 06 | Maç kaydı | KISMEN | Çizim ve izin akışı JVM'de testli. Kayıt yalnız CI emülatöründe sınanır. |
+| 06 | Maç kaydı | TEST EDİLDİ (JVM, CI emülatörü) | Çizim ve izin akışı JVM'de, kayıt emülatörde testli. Gerçek telefonda deneme yok. |
 | 07 | Yükleme ve analiz durumu | TEST EDİLDİ (JVM, gerçek sunucu) | |
-| 08 | Belirsiz olay doğrulama | TEST EDİLDİ (JVM, gerçek sunucu) | Klip oynatma yalnız CI emülatöründe sınanır. |
+| 08 | Belirsiz olay doğrulama | TEST EDİLDİ (JVM, gerçek sunucu, CI emülatörü) | Klip oynatma emülatörde testli. |
 | 09 | Maç raporu | TEST EDİLDİ (JVM, gerçek sunucu) | |
 | 10 | Oyuncu istatistikleri | TEST EDİLDİ (JVM, gerçek sunucu) | Savunma sütunu ölçümsüzdür ve boş kalır. |
 | | Maçlar, Takımlar, Profil, Çekim rehberi | TEST EDİLDİ (JVM) | |
@@ -114,7 +114,7 @@ Sayılar son yerel koşudan gelir. CI aynı testleri her PR'da çalıştırır.
 | Android JVM testleri (`:core:test`, `:app:testDebugUnitTest`) | 39 test geçti, hiçbiri atlanmadı (yerel). Testler 41 ekran görüntüsü üretti. |
 | Uygulama gerçek sunucuya karşı (JVM) | 5 test geçti (yerel ve CI): `BackendE2eTest` 4, `AppFlowE2eTest` 1 |
 | Lint | 0 hata |
-| Emülatörde cihaz testleri | İlk koşu PR #4'ün CI'ında sürüyor. Sonuç gelene kadar kamera kaydı ve klip oynatma doğrulanmış sayılmaz. |
+| Emülatörde cihaz testleri (CI, API 34) | 2 test geçti: kamera kaydı ve baştan sona akış (yeni maç, kayıt, yükleme, dosya kontrolü, deneme analizi, sunucudan klip, karar, rapor). İlk iki koşu kırmızıydı ve uygulamada gerçek bir gezinme hatasını gösterdi. |
 | Gerçek telefonda deneme | **Yok.** |
 | Model doğruluğu | **Yok.** Kimse ölçmedi. |
 
