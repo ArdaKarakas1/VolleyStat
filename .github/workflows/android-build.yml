@@ -79,7 +79,7 @@ jobs:
           VOLLEYSTAT_E2E_VIDEO: ${{ runner.temp }}/clip.mp4
         run: ./gradlew --no-daemon :app:testDebugUnitTest --tests '*E2eTest*'
       - name: The end-to-end tests must have run, not skipped
-        run: python tools/require_tests_ran.py android/app/build/test-results/testDebugUnitTest 5
+        run: python tools/require_tests_ran.py android/app/build/test-results/testDebugUnitTest 6
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -131,6 +131,10 @@ jobs:
           script: ./gradlew --no-daemon :app:connectedDebugAndroidTest
       - name: The device tests must have run, not skipped
         run: python tools/require_tests_ran.py android/app/build/outputs/androidTest-results 2
+      # A failed device run is diagnosed from this log: every request the app made and its status.
+      - name: Backend log
+        if: always()
+        run: tail -n 120 "$RUNNER_TEMP/backend.log"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

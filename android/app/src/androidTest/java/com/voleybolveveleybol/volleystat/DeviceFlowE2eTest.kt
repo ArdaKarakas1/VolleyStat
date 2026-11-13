@@ -3,7 +3,12 @@ package com.voleybolveveleybol.volleystat
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.compose.ui.test.ComposeTimeoutException
+import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrElse
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
@@ -63,8 +68,28 @@ class DeviceFlowE2eTest {
     @get:Rule(order = 2) val app = createAndroidComposeRule<MainActivity>()
 
     private fun text(id: Int, vararg args: Any) = target.getString(id, *args)
+
+    private fun textsOf(node: SemanticsNode): List<String> =
+        node.config.getOrElse(SemanticsProperties.Text) { emptyList() }.map { it.text } + node.children.flatMap(::textsOf)
+
+    /** What the app stored and what the screen shows, on one line: the only evidence a CI log keeps. */
+    private fun evidence(): String {
+        val stored = runCatching { storedMatch() }.getOrNull()
+        val state = if (stored == null) "no stored match" else "check=${stored.check} session=${stored.session} analysis=${stored.analysis} video=${stored.video.sizeBytes} bytes ${stored.video.mimeType}"
+        val screen = runCatching { app.onAllNodes(isRoot()).fetchSemanticsNodes().flatMap(::textsOf).take(40).joinToString(" | ") }.getOrElse { "unreadable: $it" }
+        return "Stored: $state. On screen: $screen"
+    }
+
+    private fun waitFor(step: String, timeoutMs: Long = 30_000, condition: () -> Boolean) {
+        try {
+            app.waitUntil(timeoutMs, condition)
+        } catch (timeout: ComposeTimeoutException) {
+            throw AssertionError("$step did not happen within ${timeoutMs / 1000} s. ${evidence()}")
+        }
+    }
+
     private fun waitForText(value: String, timeoutMs: Long = 30_000) =
-        app.waitUntil(timeoutMs) { app.onAllNodesWithText(value).fetchSemanticsNodes().isNotEmpty() }
+        waitFor("Text '$value'", timeoutMs) { app.onAllNodesWithText(value).fetchSemanticsNodes().isNotEmpty() }
 
     private fun addAndPickTeam(name: String) {
         app.onAllNodesWithText(text(R.string.match_team_pick)).onFirst().performClick()
@@ -85,21 +110,25 @@ class DeviceFlowE2eTest {
 
         // 06: record until the recorder's own clock shows six seconds.
         val start = text(R.string.record_start)
-        app.waitUntil(30_000) { app.onAllNodesWithContentDescription(start).fetchSemanticsNodes().isNotEmpty() }
+        waitFor("The record button") { app.onAllNodesWithContentDescription(start).fetchSemanticsNodes().isNotEmpty() }
         app.onNodeWithContentDescription(start).performClick()
-        app.waitUntil(60_000) { (6L..40L).any { second -> app.onAllNodesWithText(formatClock(second * 1000)).fetchSemanticsNodes().isNotEmpty() } }
+        waitFor("Six recorded seconds on the recorder's clock", 60_000) {
+            (6L..40L).any { second -> app.onAllNodesWithText(formatClock(second * 1000)).fetchSemanticsNodes().isNotEmpty() }
+        }
         app.onNodeWithContentDescription(text(R.string.record_stop)).performClick()
 
         // The phone's own reading of the file, then the rights statement and the upload.
         waitForText(text(R.string.check_title))
         app.onNodeWithText(text(R.string.check_rights)).performScrollTo().performClick()
-        app.onNodeWithText(text(R.string.action_start_upload)).performClick()
+        app.onNodeWithText(text(R.string.action_start_upload)).assertIsEnabled().performClick()
 
-        // 07: upload, the server's file check and the demo job.
-        waitForText(text(R.string.action_start_review), 180_000)
-        app.onNodeWithText(text(R.string.demo_title)).assertIsDisplayed()
+        // 07: the upload, then the server's verdict on the file the camera wrote, then the demo job.
+        waitFor("The match record after starting the upload") { storedMatch() != null }
+        waitFor("The server's file check", 180_000) { storedMatch()?.check != null }
         val match = storedMatch()!!
-        assertEquals(VideoCheck.READY, match.check!!.status)
+        assertEquals("The server did not accept the recording. ${evidence()}", VideoCheck.READY, match.check!!.status)
+        waitForText(text(R.string.action_start_review), 60_000)
+        app.onNodeWithText(text(R.string.demo_title)).assertIsDisplayed()
         val job = api.latestAnalysis(match.check!!.videoId)!!
         assertEquals(AnalysisSummary.NEEDS_REVIEW, job.state)
         app.onNodeWithText(text(R.string.action_start_review)).performClick()
