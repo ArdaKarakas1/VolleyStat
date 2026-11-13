@@ -53,7 +53,7 @@ Bu kuralı çiğneyen çıktı işi `ANALYZER_ERROR` koduyla düşürür.
 | `GET /v1/videos/{videoId}/analyses/latest` | Videonun son işi · `404 ANALYSIS_NOT_FOUND` |
 | `POST /v1/analyses/{jobId}/cancel` | `CANCELLED` iş · bitmiş işte `409 JOB_FINISHED` |
 
-Bir videonun aynı anda tek süren işi olur. `Idempotency-Key` başlığı isteğe bağlıdır. Sunucu bir işle yanıtladığı her anahtarı saklar: işi oluşturan anahtarı da, süren işe katılan anahtarı da. Aynı anahtar o iş bittikten sonra bile aynı işi döner ve ikinci bir analiz başlatmaz.
+Bir videonun aynı anda tek süren işi olur. `Idempotency-Key` başlığı isteğe bağlıdır. Sunucu bir işle yanıtladığı her anahtarı saklar: işi oluşturan anahtarı da, süren işe katılan anahtarı da. Aynı anahtar o iş bittikten sonra bile aynı işi döner ve ikinci bir analiz başlatmaz. Sunucu analizörsüz yeniden başlasa bile saklı anahtar işini döner. `503 MODEL_NOT_CONFIGURED` yalnızca yeni bir iş başlatacak ya da süren işe katılacak isteğe gider.
 
 ```json
 {
@@ -137,7 +137,7 @@ Bir videonun aynı anda tek süren işi olur. `Idempotency-Key` başlığı iste
 
 ## 6. Kanıt videosu
 
-`GET /v1/videos/{videoId}/content` videonun baytlarını döner. `Range: bytes=…` desteklenir (`206`, `Content-Range`, `Accept-Ranges`). Bitiş konumu dosyanın sonunda ya da ötesindeyse sunucu dosyanın sonuna kadar gönderir. Yalnızca başlangıç konumu dosyanın dışındaysa sunucu `416 RANGE_NOT_SATISFIABLE` döner (`details.sizeBytes`). Video `READY` değilse `409 VIDEO_NOT_READY`, saklanan baytlar yoksa `409 VIDEO_FILE_MISSING`. İstemci klibi bu adresten `clipStartMs`–`clipEndMs` aralığında oynatır.
+`GET /v1/videos/{videoId}/content` videonun baytlarını döner. `Range: bytes=…` desteklenir (`206`, `Content-Range`, `Accept-Ranges`). Bitiş konumu dosyanın sonunda ya da ötesindeyse sunucu dosyanın sonuna kadar gönderir. Başlangıç konumu dosyanın dışındaysa sunucu `416 RANGE_NOT_SATISFIABLE` döner (`details.sizeBytes`). Sunucu okuyamadığı ya da boş bir aralığa da aynı yanıtı verir: `bytes=abc`, `bytes=-`, `bytes=-0`, `bytes=10-5`. Video `READY` değilse `409 VIDEO_NOT_READY`, saklanan baytlar yoksa `409 VIDEO_FILE_MISSING`. İstemci klibi bu adresten `clipStartMs`–`clipEndMs` aralığında oynatır.
 
 ## 7. Rapor
 
@@ -171,12 +171,12 @@ Bir videonun aynı anda tek süren işi olur. `Idempotency-Key` başlığı iste
 - `verificationStatus`: `DRAFT` (hiç karar yok), `PARTIALLY_VERIFIED`, `VERIFIED` (açık `SCORE` kartı yok ve `UNRESOLVED` ralli yok).
 - Değer nesnesi: `{"value": sayı ya da null, "status": "MEASURED" | "PARTIAL" | "UNKNOWN"}`. `PARTIAL` değerin alt sınır olduğunu söyler. `UNKNOWN` değerde `value` her zaman `null` olur.
 - Rapor maçın rallisi olan en yeni işini izler. `revision` o işe aittir. Eski bir işin kartına verilen karar o işin `revision` değerini artırır ve raporu değiştirmez.
-- `ralliesMayBeMissing`: Analizörün `kind` değeri `MODEL` değilse `true` olur. Kimse o analizörün kaç ralliyi bulduğunu ölçmedi ve inceleme kaçan ralliyi ekleyemez. Bu durumda sunucu hiçbir değeri `MEASURED` olarak bildirmez: `teams` altındaki sayılar ve `score.status` en fazla `PARTIAL` olur, bütün kartlar yanıtlanmış olsa bile.
+- `ralliesMayBeMissing`: Analizörün `kind` değeri `MODEL` değilse `true` olur. Kimse o analizörün kaç ralliyi bulduğunu ölçmedi ve inceleme kaçan ralliyi ekleyemez. Bu durumda sunucu `teams` altındaki hiçbir değeri ve `score.status` alanını `MEASURED` olarak bildirmez. Bu alanlar en fazla `PARTIAL` olur, bütün kartlar yanıtlanmış olsa bile. `coverage[].status` bu kuralın dışındadır: O alan kullanıcının önerilen rallilerin ne kadarını karara bağladığını söyler ve bütün öneriler karara bağlandığında `MEASURED` olur. `coverage` analizörün kaçırdığı ralliyi saymaz.
 - Skor: Sunucu rallileri sırayla sayar, reddedilen ralliyi atlar ve seti kurala göre kapatır: Set 25 sayıda, beşinci set 15 sayıda ve iki farkla biter. Maçı bitiren bir kural yoktur. Ralliler sürdükçe sunucu yeni set açar, çünkü antrenman maçları çoğu zaman sabit sayıda set oynar. Beşinci setten sonraki set yine 25 sayıya gider.
-- Sayım kazananı belli olmayan ilk rallide durur (kartı açık ya da yanıtı `UNSURE`). `score.stoppedAtRally` o rallinin sıra numarasını taşır, sayım sona ulaştıysa `null` olur. O ralliden önce biten setler `complete: true` kalır. Rallinin içinde bulunduğu set o ana kadarki sayılarla ve `complete: false` olarak gelir. Sonraki ralliler hiçbir set satırına girmez. `setsWon` yalnızca biten setleri sayar. Hiç doğrulanmış ralli yoksa `score.status` `UNKNOWN`, `setsWon` alanları `null` olur.
+- Sayım kazananı belli olmayan ilk rallide durur (kartı açık ya da yanıtı `UNSURE`). `score.stoppedAtRally` o rallinin sıra numarasını taşır, sayım sona ulaştıysa `null` olur. O ralliden önce biten setler `complete: true` kalır. Rallinin içinde bulunduğu set o ana kadarki sayılarla ve `complete: false` olarak gelir. Sayım o setin ilk rallisinde durduysa set için satır gelmez, çünkü o sette sayılmış bir sayı yoktur. Sonraki ralliler hiçbir set satırına girmez. `setsWon` yalnızca biten setleri sayar. Hiç doğrulanmış ralli yoksa `score.status` `UNKNOWN`, `setsWon` alanları `null` olur.
 - `teams.<taraf>.points` maçın doğrulanmış bütün rallilerini sayar, sayımın durduğu ralliden sonrakileri de. Hiç doğrulanmış ralli yokken iki taraf için de `null` ve `UNKNOWN` olur. Bir ralli doğrulandığı anda iki taraf da sayı taşır: Doğrulanan rallilerin hiçbirini kazanmamış taraf `0` taşır.
 - `REJECTED` ralli hiçbir sayıma girmez. `eligibleN` reddedilenleri dışarıda tutar.
-- Takımın sayı türleri (`attackPoints` …) yalnızca `TERMINAL_ACTION` kararı olan rallilerden gelir. Hiç karar yoksa `UNKNOWN`, bir kısmında varsa `PARTIAL` olur.
+- Takımın sayı türleri (`attackPoints` …) yalnızca `TERMINAL_ACTION` kararı olan rallilerden gelir. Hiç karar yoksa `UNKNOWN`, bir kısmında varsa `PARTIAL` olur. Sunucu sıfır olan bir alt sınırı sayı olarak göndermez: O türde henüz karar yoksa ve sayım tamamlanmadıysa değer `null` ve `UNKNOWN` olur. `0` yalnızca sayım tamamlandığında (`MEASURED`) gelir.
 - `players` yalnızca `SCORER` kararıyla forma numarası verilen sayıları içerir. Bu sayılar düz sayımdır ve doğrulama sürdükçe artabilir. Oyuncusu bilinmeyen sayılar `unattributed` altında kalır ve takım toplamına girer. `unattributed.<taraf>` o tarafın `points` değeri `null` iken `null`, değilse sayıdır.
 - `coverage` ölçüleri: `RALLY_WINNER`, `TERMINAL_ACTION`, `SCORER`.
 - Her karar `revision` değerini bir artırır.

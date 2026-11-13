@@ -183,6 +183,25 @@ def test_a_key_answered_with_the_pending_job_returns_that_job_after_the_run_ende
         assert fresh.status_code == 202 and fresh.json()["id"] != first["id"]
 
 
+def test_a_remembered_key_returns_its_job_when_the_server_restarted_without_an_analyzer(storage, make_clip, monkeypatch):
+    with serve(storage, ScriptedAnalyzer()) as client:
+        video = ready_video(client, make_clip)
+        first = request_job(client, video["id"], **{"Idempotency-Key": "tap-1"})
+        run_pending(client)
+    monkeypatch.setenv("VOLLEYSTAT_ANALYZER", "none")
+    with serve(storage, None) as client:
+        # The retry asks for the answer to a request that was already accepted. It starts nothing,
+        # so the missing analyzer is no reason to refuse it.
+        retry = client.post(f"/v1/videos/{video['id']}/analyses", headers={"Idempotency-Key": "tap-1"})
+        assert retry.status_code == 200
+        assert (retry.json()["id"], retry.json()["state"]) == (first["id"], "NEEDS_REVIEW")
+        for headers in ({"Idempotency-Key": "tap-2"}, {}):
+            refused = client.post(f"/v1/videos/{video['id']}/analyses", headers=headers)
+            assert refused.status_code == 503 and refused.json()["error"]["code"] == "MODEL_NOT_CONFIGURED"
+        assert len(rows(storage, "SELECT 1 FROM analysis_jobs")) == 1
+        assert len(rows(storage, "SELECT 1 FROM analysis_request_keys")) == 1
+
+
 def test_a_key_keeps_its_job_after_the_job_was_cancelled(storage, make_clip):
     with serve(storage, ScriptedAnalyzer()) as client:
         video = ready_video(client, make_clip)
