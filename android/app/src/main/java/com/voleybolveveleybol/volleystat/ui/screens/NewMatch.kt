@@ -300,6 +300,9 @@ fun VideoSourceScreen(
     onGo: () -> Unit,
     onOpenGuide: () -> Unit,
     onBack: () -> Unit,
+    /** The video an unfinished setup already holds, so returning to the setup does not force a new recording. */
+    existing: LocalVideo? = null,
+    onContinueExisting: () -> Unit = {},
 ) {
     val colors = LocalVsColors.current
     FlowScaffold(
@@ -311,6 +314,11 @@ fun VideoSourceScreen(
             )
         },
     ) {
+        if (existing != null) {
+            VsCard(padding = PaddingValues(vertical = 4.dp)) {
+                ListRow(R.drawable.ic_smart_display, existing.fileName, stringResource(R.string.source_existing_action), onContinueExisting)
+            }
+        }
         Column(Modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             SelectCard(cameraSelected, R.drawable.ic_videocam, stringResource(R.string.source_camera_title), stringResource(R.string.source_camera_body), onClick = { onSelect(true) }, enabled = !reading)
             SelectCard(!cameraSelected, R.drawable.ic_photo_library, stringResource(R.string.source_gallery_title), stringResource(R.string.source_gallery_body), onClick = { onSelect(false) }, enabled = !reading)

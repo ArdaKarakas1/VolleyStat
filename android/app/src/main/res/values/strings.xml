@@ -142,19 +142,20 @@
     <string name="source_camera_cancelled">Kamera kayıt bırakmadı. Yeniden çekebilir ya da galeriden seçebilirsin.</string>
     <string name="source_pick_failed">Uygulama seçtiğin videoyu okuyamadı. Başka bir video seç.</string>
     <string name="source_reading">Telefon videoyu okuyor</string>
+    <string name="source_existing_action">Bu videoyla devam et</string>
 
     <!-- Filming guide -->
     <string name="guide_title">Çekim Rehberi</string>
     <string name="guide_good">İyi kadraj</string>
     <string name="guide_bad">Kötü kadraj</string>
-    <string name="guide_good_description">Çizim: Kamera dip çizgisinin arkasında ve yüksekte duruyor. Karşı sahanın dört köşesi görünüyor.</string>
-    <string name="guide_bad_description">Çizim: Kamera sahaya çok yakın ve alçakta duruyor. Karşı sahanın köşeleri kadrajın dışında kalıyor.</string>
-    <string name="guide_rule_1">Telefonu yatay tut ve normal lensi (1x) kullan.</string>
+    <string name="guide_good_description">Çizim: Kamera dip çizgisinin arkasında ve yüksekte duruyor. Sahanın bütün köşeleri görünüyor.</string>
+    <string name="guide_bad_description">Çizim: Kamera sahaya çok yakın ve alçakta duruyor. Yakın köşeler kadrajın dışında kalıyor.</string>
+    <string name="guide_rule_1">Telefonu yatay tut.</string>
     <string name="guide_rule_2">Telefonu tripoda ya da sabit bir yere bağla. Elde çekim görüntüyü sallar.</string>
-    <string name="guide_rule_3">Telefonu dip çizgisinin ortasının arkasına, olabildiğince yükseğe koy.</string>
-    <string name="guide_rule_4">Karşı sahanın dört köşesi kadrajda kalsın.</string>
+    <string name="guide_rule_3">Telefonu dip çizgisinin ortasının arkasına koy. Salon izin verdiği kadar geriye ve yükseğe çık.</string>
+    <string name="guide_rule_4">Sahanın tamamı kadraja girsin. Yakın köşeler sığmıyorsa geniş açı lensine (0,5x) geç.</string>
     <string name="guide_rule_5">Maçı tek parça kaydet.</string>
-    <string name="guide_note">Bu kurallar benzer uygulamaların çekim önerilerinden geliyor. VolleyStat bu kuralları kendi modeliyle henüz sınamadı.</string>
+    <string name="guide_note">Bu kurallar benzer uygulamaların çekim önerilerinden ve saha geometrisinden geliyor. VolleyStat bu kuralları kendi modeliyle henüz sınamadı. Geniş açı lensi uzaktaki topu küçültür ve kimse bu etkiyi henüz ölçmedi.</string>
 
     <!-- Video check before upload -->
     <string name="check_title">Video Kontrolü</string>

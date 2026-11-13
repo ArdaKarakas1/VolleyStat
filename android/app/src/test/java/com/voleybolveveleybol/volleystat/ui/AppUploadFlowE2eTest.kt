@@ -2,14 +2,15 @@ package com.voleybolveveleybol.volleystat.ui
 
 import android.content.Context
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.core.app.ApplicationProvider
-import com.voleybolveveleybol.volleystat.AppViewModel
 import com.voleybolveveleybol.volleystat.BuildConfig
 import com.voleybolveveleybol.volleystat.MainActivity
 import com.voleybolveveleybol.volleystat.R
@@ -38,9 +39,9 @@ private const val HOME_TEAM = "E2E Yükleme Ev"
 private const val AWAY_TEAM = "E2E Yükleme Misafir"
 
 /**
- * The upload as the app itself performs it: the view model turns a draft with a recorded file
- * into a match, uploads it to a running backend, and the status screen, open during the upload,
- * moves on to the analysis by itself. Runs under the same conditions as [AppFlowE2eTest].
+ * The upload as the user starts it: from the check screen of a setup that already holds a
+ * recorded file, through "Yüklemeyi Başlat", to the status screen that follows the upload into
+ * the analysis. Runs under the same conditions as [AppFlowE2eTest].
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -76,21 +77,28 @@ class AppUploadFlowE2eTest {
 
     private fun text(id: Int) = app.activity.getString(id)
 
-    @Test fun theAppUploadsADraftVideoAndTheOpenStatusScreenReachesReview() {
-        val viewModel = ViewModelProvider(app.activity)[AppViewModel::class.java]
-        var matchId: String? = null
-        app.runOnUiThread { matchId = viewModel.startUpload() }
-        assertNotNull(matchId)
+    @Test fun startingTheUploadFromTheCheckScreenStaysOnTheStatusScreenUntilReview() {
+        // Back into the unfinished setup and through its steps, as a user returning to the app would go.
+        app.onNodeWithText(text(R.string.home_draft_action)).performClick()
+        app.onNodeWithText(text(R.string.action_continue)).performClick()
+        app.onNodeWithText(text(R.string.match_teams_title)).assertIsDisplayed()
+        app.onNodeWithText(text(R.string.action_continue)).performClick()
+        app.onNodeWithText(text(R.string.source_existing_action)).performClick()
 
-        // The status screen is opened while the upload still runs, as after "Yüklemeyi Başlat".
-        app.onAllNodesWithText(text(R.string.nav_matches)).onFirst().performClick()
-        app.onNodeWithText("$HOME_TEAM - $AWAY_TEAM").performClick()
+        app.onNodeWithText(text(R.string.check_title)).assertIsDisplayed()
+        app.onNodeWithText(text(R.string.check_rights)).performScrollTo().performClick()
+        app.onNodeWithText(text(R.string.action_start_upload)).assertIsEnabled().performClick()
+
+        // The app must stay on the status screen: that screen is what follows the upload into the
+        // analysis. Being sent back to the home screen here left the analysis unwatched.
         app.waitUntil(60_000) { app.onAllNodesWithText(text(R.string.action_start_review)).fetchSemanticsNodes().isNotEmpty() }
+        app.onNodeWithText(text(R.string.status_title)).assertIsDisplayed()
         app.onNodeWithText(text(R.string.demo_title)).assertIsDisplayed()
 
         val match = LocalStore(storeFile).load().matches.single()
         assertEquals(VideoCheck.READY, match.check!!.status)
         assertEquals(clip!!.length(), match.session.sentBytes)
         assertNotNull(match.session.serverMatchId)
+        assertNotNull(match.analysis)
     }
 }

@@ -193,8 +193,13 @@ fun VolleyStatApp(viewModel: AppViewModel = viewModel()) {
             composable(Routes.NEW_CHECK) {
                 val video = state.draft.video
                 if (video == null) {
-                    // The draft just became a match, or its video is gone: nothing to check.
-                    LaunchedEffect(Unit) { nav.popBackStack(Routes.HOME, inclusive = false) }
+                    // Nothing to check without a video, so this screen leaves. It must only do so
+                    // while it is still the current screen: starting the upload empties the draft
+                    // and moves on to the status screen, and this screen, still drawn while it
+                    // slides out, would otherwise close that status screen again.
+                    LaunchedEffect(Unit) {
+                        if (nav.currentDestination?.route == Routes.NEW_CHECK) nav.popBackStack(Routes.HOME, inclusive = false)
+                    }
                 } else {
                     // A new video never inherits the previous video's rights statement.
                     var rights by rememberSaveable(video.location) { mutableStateOf(false) }
@@ -296,5 +301,6 @@ private fun VideoRoute(state: AppUiState, viewModel: AppViewModel, nav: NavHostC
         onSelect = { camera = it },
         onGo = { if (camera) nav.navigate(Routes.NEW_RECORD) else picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)) },
         onOpenGuide = { nav.navigate(Routes.GUIDE) }, onBack = { nav.popBackStack() },
+        existing = state.draft.video, onContinueExisting = toCheck,
     )
 }
