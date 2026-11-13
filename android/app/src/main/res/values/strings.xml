@@ -321,8 +321,9 @@
     <string name="report_verification_draft">Taslak</string>
     <string name="report_verification_partial">Kısmen doğrulandı</string>
     <string name="report_verification_done">Senin kararlarınla tamamlandı</string>
-    <string name="report_rules">Skor kuralı: 25 sayı, karar setinde 15, iki fark.</string>
+    <string name="report_rules">Skor kuralı: Set 25 sayıda, beşinci set 15 sayıda ve iki farkla biter.</string>
     <string name="report_set_open">%1$d. set sürüyor</string>
+    <string name="report_score_stopped">%1$d. rallinin kazananı belli değil. Sunucu set skorunu bu ralliden sonrası için hesaplamaz.</string>
     <string name="report_stats">Maç İstatistikleri</string>
     <string name="report_team_stats">Takım İstatistikleri</string>
     <string name="report_player_stats">Oyuncu İstatistikleri</string>

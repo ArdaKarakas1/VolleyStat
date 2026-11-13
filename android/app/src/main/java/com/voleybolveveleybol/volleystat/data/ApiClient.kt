@@ -161,11 +161,13 @@ class ApiClient(private val baseUrl: String) {
             setsWonHome = if (setsWon.isNull("home")) null else setsWon.getInt("home"),
             setsWonAway = if (setsWon.isNull("away")) null else setsWon.getInt("away"),
             sets = score.getJSONArray("sets").objects().map { SetScore(it.getInt("number"), it.getInt("home"), it.getInt("away"), it.getBoolean("complete")) },
+            scoreStoppedAtRally = if (score.isNull("stoppedAtRally")) null else score.getInt("stoppedAtRally"),
             home = team("home"), away = team("away"),
             players = json.getJSONArray("players").objects().map {
                 PlayerLine(it.getString("side") == "HOME", it.getInt("jersey"), it.getInt("points"), it.getInt("attackPoints"), it.getInt("blockPoints"), it.getInt("aces"))
             },
-            unattributedHome = unattributed.getInt("home"), unattributedAway = unattributed.getInt("away"),
+            unattributedHome = if (unattributed.isNull("home")) null else unattributed.getInt("home"),
+            unattributedAway = if (unattributed.isNull("away")) null else unattributed.getInt("away"),
             coverage = json.getJSONArray("coverage").objects().map { Coverage(it.getString("metricId"), it.getInt("eligibleN"), it.getInt("verifiedN")) },
         )
     }

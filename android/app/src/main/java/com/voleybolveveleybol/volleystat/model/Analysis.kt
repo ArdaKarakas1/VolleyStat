@@ -92,10 +92,13 @@ data class MatchReport(
     val setsWonHome: Int?,
     val setsWonAway: Int?,
     val sets: List<SetScore>,
+    /** Sequence number of the first rally without a winner. Set scores stop there; null when none. */
+    val scoreStoppedAtRally: Int? = null,
     val home: TeamStats,
     val away: TeamStats,
     val players: List<PlayerLine>,
-    val unattributedHome: Int,
-    val unattributedAway: Int,
+    /** Points of a side that no player was chosen for. Null while that side's points are unknown. */
+    val unattributedHome: Int?,
+    val unattributedAway: Int?,
     val coverage: List<Coverage>,
 )

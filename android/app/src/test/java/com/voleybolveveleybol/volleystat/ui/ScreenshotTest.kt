@@ -193,6 +193,7 @@ class ScreenshotTest {
     @Test fun s09_s10_report() {
         shot("09_mac_raporu") { ReportScreen(finished, ReportLoad.READY, report, {}, {}, {}, {}, {}) }
         shot("09_mac_raporu_yok") { ReportScreen(match("m4"), ReportLoad.NONE, null, {}, {}, {}, {}, {}) }
+        shot("09_mac_raporu_kararsiz_ralli") { ReportScreen(finished, ReportLoad.READY, report.copy(scoreStoppedAtRally = 29), {}, {}, {}, {}, {}) }
         shot("09_mac_raporu_koyu", dark = true) { ReportScreen(finished, ReportLoad.READY, report, {}, {}, {}, {}, {}) }
         shot("10_oyuncu_istatistik") { PlayersScreen(finished, report, players, teams[1].players) {} }
     }

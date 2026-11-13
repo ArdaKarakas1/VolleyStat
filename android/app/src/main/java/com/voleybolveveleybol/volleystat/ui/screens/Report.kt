@@ -178,6 +178,11 @@ fun ReportScreen(
                     }
                     if (report.scoreStatus == "PARTIAL") StatusChip(stringResource(R.string.report_score_partial), Tone.CAUTION)
                 }
+                // One rally without a winner makes every later set boundary a guess, so the server
+                // stops the set scores there. The screen says so instead of showing a short score silently.
+                if (report.scoreStoppedAtRally != null) {
+                    Notice(stringResource(R.string.report_score_stopped, report.scoreStoppedAtRally), Tone.CAUTION)
+                }
                 if (report.ralliesOpen > 0) {
                     PrimaryButton(stringResource(R.string.report_open_review, report.ralliesOpen), onOpenReview, icon = R.drawable.ic_fact_check)
                 }
