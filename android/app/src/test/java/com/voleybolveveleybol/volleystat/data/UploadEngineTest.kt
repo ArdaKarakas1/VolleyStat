@@ -63,6 +63,27 @@ class UploadEngineTest {
         assertEquals(1, server.uploadsCreated)
     }
 
+    @Test fun theMatchIdIsSavedBeforeTheServerHearsOfItSoALostAnswerLeavesNoMatchThePhoneCanNotName() {
+        server.loseMatchAnswers = 1
+        val failure = assertThrows(UploadException::class.java) { run() }
+        assertEquals(UploadFailure.SERVER_UNREACHABLE, failure.failure)
+        // The server stored the match and the phone never saw the answer, yet the phone holds the id.
+        val saved = sessions.last()
+        assertEquals(server.matchIds.single(), saved.serverMatchId)
+
+        val check = run(saved)
+        assertEquals(VideoCheck.READY, check.status)
+        assertEquals("the repeat found the match and created no second one", 1, server.matchesCreated)
+        assertEquals(saved.serverMatchId, sessions.last().serverMatchId)
+    }
+
+    @Test fun aMatchTheServerLostIsCreatedAgainUnderTheSameIdBeforeTheUploadOpens() {
+        val known = UploadSession(sha256 = sha256(data), serverMatchId = "0d1c8a52-7b1e-4f3a-9a55-0c6d2e1f4b7a")
+        val check = run(known)  // a server whose storage was reset knows neither the match nor an upload
+        assertEquals(VideoCheck.READY, check.status)
+        assertEquals(listOf(known.serverMatchId), server.matchIds)
+    }
+
     @Test fun theServerOffsetWinsOverAStaleSavedOffset() {
         server.failChunk = 3
         assertThrows(UploadException::class.java) { run() }
@@ -107,6 +128,13 @@ class UploadEngineTest {
         server.close()
         val failure = assertThrows(UploadException::class.java) { run() }
         assertEquals(UploadFailure.SERVER_UNREACHABLE, failure.failure)
+        assertEquals(0, opens)
+    }
+
+    @Test fun aServiceThatIsNotThisApiIsReportedAsARefusalAndNotAsACrash() {
+        server.answersWithAPage = true
+        val failure = assertThrows(UploadException::class.java) { run() }
+        assertEquals(UploadFailure.SERVER_REFUSED, failure.failure)
         assertEquals(0, opens)
     }
 

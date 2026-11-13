@@ -44,11 +44,15 @@ class ApiClient(private val baseUrl: String) {
         )
     }
 
-    fun createMatch(match: MatchInfo): String {
+    /**
+     * Creates the match under [matchId], an id this phone chose, or finds it already there.
+     * The call can be repeated: the server never creates a second match and never changes the first.
+     */
+    fun putMatch(matchId: String, match: MatchInfo) {
         val body = JSONObject().put("homeTeamName", match.homeTeam).put("awayTeamName", match.awayTeam)
             .putOpt("name", match.name).putOpt("playedOn", match.playedOn).putOpt("venue", match.venue)
             .put("kind", match.kind)
-        return request("POST", "/matches", body.toString().toByteArray()).getString("id")
+        request("PUT", "/matches/$matchId", body.toString().toByteArray())
     }
 
     fun createUpload(matchId: String, fileName: String, sizeBytes: Long, mimeType: String, sha256: String): UploadTicket {
@@ -71,14 +75,14 @@ class ApiClient(private val baseUrl: String) {
     fun complete(uploadId: String): VideoCheck =
         parseVideo(request("POST", "/uploads/$uploadId/complete", ByteArray(0), timeoutMs = 300_000))
 
-    fun abortUpload(uploadId: String) {
-        request("DELETE", "/uploads/$uploadId")
-    }
-
     fun video(videoId: String): VideoCheck = parseVideo(request("GET", "/videos/$videoId"))
 
-    fun deleteVideo(videoId: String) {
-        request("DELETE", "/videos/$videoId")
+    /**
+     * Removes the match and everything the server holds for it: uploads, videos, analyses and decisions.
+     * Only the route's own 204 counts as deleted; any other answer throws.
+     */
+    fun deleteMatch(matchId: String) {
+        request("DELETE", "/matches/$matchId", expectedStatus = 204)
     }
 
     // ----- Analysis, review and report (docs/API_V1.md) -----
@@ -198,6 +202,7 @@ class ApiClient(private val baseUrl: String) {
         contentType: String = "application/json",
         timeoutMs: Int = 60_000,
         headers: Map<String, String> = emptyMap(),
+        expectedStatus: Int? = null,
     ): JSONObject {
         val connection = URL(baseUrl.trimEnd('/') + path).openConnection() as HttpURLConnection
         try {
@@ -224,7 +229,16 @@ class ApiClient(private val baseUrl: String) {
                     details = error?.optJSONObject("details") ?: JSONObject(),
                 )
             }
-            return if (text.isBlank()) JSONObject() else JSONObject(text)
+            if (expectedStatus != null && status != expectedStatus) {
+                throw ApiException(status, "UNEXPECTED_ANSWER", "HTTP $status where $expectedStatus was expected", JSONObject())
+            }
+            // An answer that is not JSON comes from something that is not this API. It is a failed
+            // call like any other, not a crash.
+            return if (text.isBlank()) JSONObject() else try {
+                JSONObject(text)
+            } catch (error: org.json.JSONException) {
+                throw ApiException(status, "UNEXPECTED_ANSWER", "The answer is not JSON", JSONObject())
+            }
         } finally {
             connection.disconnect()
         }

@@ -2,15 +2,22 @@ package com.voleybolveveleybol.volleystat.ui
 
 import android.content.Context
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ApplicationProvider
+import com.github.takahirom.roborazzi.captureRoboImage
 import com.voleybolveveleybol.volleystat.AnalysisUi
+import com.voleybolveveleybol.volleystat.RemovalFailure
 import com.voleybolveveleybol.volleystat.AppUiState
 import com.voleybolveveleybol.volleystat.JobLoad
 import com.voleybolveveleybol.volleystat.R
@@ -108,6 +115,28 @@ class ScreenStatesTest {
         assertEquals(false, shown(text(R.string.review_loading)))
     }
 
+    private val actionCard = ReviewCard(
+        "c1", "r1", 1, ReviewCard.TERMINAL_ACTION, "DETAIL", 1_000, 5_000, null,
+        listOf("ATTACK", "BLOCK", "ACE", "OPPONENT_ERROR", "UNSURE"), "OPEN", null, 1,
+    )
+    private val definitions = listOf(R.string.define_attack, R.string.define_block, R.string.define_ace, R.string.define_error)
+
+    @Test fun theQuestionAboutThePointTypeOpensTheDefinitionsOfTheFourTypes() {
+        review(AnalysisUi("m1", JobLoad.READY, job(AnalysisSummary.NEEDS_REVIEW), ReviewDeck(listOf(actionCard), 0, 1), detail = true))
+        assertEquals(false, shown(text(R.string.define_ace)))
+        compose.onNodeWithContentDescription(text(R.string.definitions_open)).performClick()
+        definitions.forEach { compose.onNodeWithText(text(it)).assertIsDisplayed() }
+        // A dialog is its own window, so the screenshot run can not reach it; this run keeps its picture.
+        compose.onNode(isDialog()).captureRoboImage("build/outputs/roborazzi/08_dogrulama_sayi_turleri.png")
+        compose.onNodeWithText(text(R.string.action_ok)).performClick()
+        assertEquals(false, shown(text(R.string.define_ace)))
+    }
+
+    @Test fun theQuestionAboutTheWinnerHasNoDefinitionsButton() {
+        review(AnalysisUi("m1", JobLoad.READY, job(AnalysisSummary.NEEDS_REVIEW), ReviewDeck(listOf(card(1, null)), 0, 1)))
+        assertEquals(0, compose.onAllNodesWithContentDescription(text(R.string.definitions_open)).fetchSemanticsNodes().size)
+    }
+
     private fun report(scoreStatus: String) = MatchReport(
         "j1", "motion-baseline", "BASELINE", mock = false, verificationStatus = "PARTIALLY_VERIFIED",
         ralliesProposed = 40, ralliesVerified = 30, ralliesRejected = 0, ralliesUnresolved = 0, ralliesOpen = 10,
@@ -128,6 +157,22 @@ class ScreenStatesTest {
         compose.onNodeWithText("1 - 0").assertIsDisplayed()
     }
 
+    @Test fun everyReportCardThatShowsDemoNumbersCarriesItsOwnDemoMark() {
+        var mock by mutableStateOf(true)
+        show { ReportScreen(match, ReportLoad.READY, report("PARTIAL").copy(mock = mock), {}, {}, {}, {}, {}) }
+        // The team numbers and the coverage counts: a picture of either card alone still says DEMO.
+        assertEquals(2, compose.onAllNodesWithText(text(R.string.status_demo)).fetchSemanticsNodes().size)
+        mock = false
+        compose.waitForIdle()
+        assertEquals(0, compose.onAllNodesWithText(text(R.string.status_demo)).fetchSemanticsNodes().size)
+    }
+
+    @Test fun theReportOpensTheSameDefinitionsForTheNumbersItCounts() {
+        show { ReportScreen(match, ReportLoad.READY, report("PARTIAL"), {}, {}, {}, {}, {}) }
+        compose.onNodeWithText(text(R.string.definitions_title)).performScrollTo().performClick()
+        definitions.forEach { compose.onNodeWithText(text(it)).assertIsDisplayed() }
+    }
+
     @Test fun playersWithoutAReportShowLoadingAndNotAnEmptyTable() {
         show { PlayersScreen(match, null, emptyList(), emptyList(), load = ReportLoad.LOADING) {} }
         compose.onNodeWithText(text(R.string.report_loading)).assertIsDisplayed()
@@ -142,7 +187,24 @@ class ScreenStatesTest {
         assertEquals(1, retries)
     }
 
-    private fun status(analysis: AnalysisUi) = show { StatusScreen(match, null, analysis, false, {}, {}, {}, {}, {}, {}, {}) }
+    private fun status(analysis: AnalysisUi, removalFailure: RemovalFailure? = null) =
+        show { StatusScreen(match, null, analysis, removalFailure, {}, {}, {}, {}, {}, {}, {}) }
+
+    @Test fun aFailedRemovalNamesItsOwnCause() {
+        val sentences = mapOf(
+            RemovalFailure.UNCONFIRMED to R.string.removal_unconfirmed,
+            RemovalFailure.VERIFYING to R.string.removal_verifying,
+            RemovalFailure.REFUSED to R.string.removal_refused,
+        )
+        var shownFailure by mutableStateOf<RemovalFailure?>(null)
+        show { StatusScreen(match, null, AnalysisUi("m1", JobLoad.NO_JOB), shownFailure, {}, {}, {}, {}, {}, {}, {}) }
+        sentences.values.forEach { assertEquals(false, shown(text(it))) }
+        sentences.forEach { (failure, sentence) ->
+            shownFailure = failure
+            compose.onNodeWithText(text(sentence)).performScrollTo().assertIsDisplayed()
+            (sentences.values - sentence).forEach { assertEquals(false, shown(text(it))) }
+        }
+    }
 
     @Test fun aCancelledJobIsNotShownAsAnErrorAndNoServerCodeReachesTheScreen() {
         status(AnalysisUi("m1", JobLoad.READY, job(AnalysisSummary.CANCELLED)))
@@ -166,10 +228,17 @@ class ScreenStatesTest {
         val used = RecordingFile("kayit-1.mp4", "/files/recordings/kayit-1.mp4", 10)
         val free = RecordingFile("kayit-2.mp4", "/files/recordings/kayit-2.mp4", 10)
         val state = AppUiState(draft = Draft(homeTeam = "A", video = video.copy(location = used.path)), recordings = listOf(used, free))
-        show { ProfileScreen(state, "0.4.1", {}, {}, {}, {}) }
+        show { ProfileScreen(state, "0.4.2", {}, {}, {}, {}) }
         compose.onNodeWithText(text(R.string.recordings_in_use)).performScrollTo().assertIsDisplayed()
         assertEquals(0, compose.onAllNodesWithContentDescription(text(R.string.recording_delete_description, used.name)).fetchSemanticsNodes().size)
         assertEquals(1, compose.onAllNodesWithContentDescription(text(R.string.recording_delete_description, free.name)).fetchSemanticsNodes().size)
+    }
+
+    @Test fun theProfileSaysWhoSeesTheVideoHowLongTheServerKeepsItAndHowItIsDeleted() {
+        show { ProfileScreen(AppUiState(), "0.4.2", {}, {}, {}, {}) }
+        listOf(R.string.privacy_accounts, R.string.privacy_retention, R.string.privacy_delete, R.string.privacy_faces).forEach {
+            compose.onNodeWithText(text(it)).performScrollTo().assertIsDisplayed()
+        }
     }
 
     @Test fun theStartButtonOfTheWelcomeScreenCanBeReachedInLandscapeWithLargeText() {

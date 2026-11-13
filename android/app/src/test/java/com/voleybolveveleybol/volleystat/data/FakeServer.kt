@@ -4,6 +4,7 @@ import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
+import okhttp3.mockwebserver.SocketPolicy
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
@@ -13,7 +14,11 @@ class FakeServer(var maxVideoBytes: Long = 4L * 1024 * 1024 * 1024) : AutoClosea
     private val server = MockWebServer()
     val baseUrl get() = server.url("/v1").toString()
 
-    var matchesCreated = 0
+    /** The ids the phone created matches under, in the order they arrived. */
+    val matchIds = mutableListOf<String>()
+    val matchesCreated get() = matchIds.size
+    /** Number of match requests the server stores and then answers by dropping the connection. */
+    var loseMatchAnswers = 0
     var uploadsCreated = 0
     var chunksReceived = 0
     val stored = ByteArrayOutputStream()
@@ -24,6 +29,8 @@ class FakeServer(var maxVideoBytes: Long = 4L * 1024 * 1024 * 1024) : AutoClosea
     var failChunk: Int? = null
     /** Number of completes that report a checksum mismatch before behaving. */
     var checksumFailures = 0
+    /** Answer every request with a web page, as another service on the same port would. */
+    var answersWithAPage = false
 
     init {
         server.dispatcher = object : Dispatcher() {
@@ -44,13 +51,22 @@ class FakeServer(var maxVideoBytes: Long = 4L * 1024 * 1024 * 1024) : AutoClosea
         val url = request.requestUrl!!
         val path = url.encodedPath.removePrefix("/v1")
         val method = request.method
+        if (answersWithAPage) return MockResponse().setResponseCode(200).setHeader("Content-Type", "text/html").setBody("<html>another service</html>")
         return when {
             method == "GET" && path == "/health" ->
                 reply(200, JSONObject().put("status", "ok").put("mediaProbe", "available").put("maxVideoBytes", maxVideoBytes))
-            method == "POST" && path == "/matches" -> {
-                matchesCreated++
-                reply(201, JSONObject().put("id", "match-$matchesCreated"))
+            method == "PUT" && path.startsWith("/matches/") && path.count { it == '/' } == 2 -> {
+                val id = path.removePrefix("/matches/")
+                val known = id in matchIds
+                if (!known) matchIds += id
+                when {
+                    // The match is stored; only the answer never reaches the phone.
+                    loseMatchAnswers > 0 -> { loseMatchAnswers--; MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST) }
+                    else -> reply(if (known) 200 else 201, JSONObject().put("id", id))
+                }
             }
+            method == "POST" && path.endsWith("/uploads") && path.removePrefix("/matches/").removeSuffix("/uploads") !in matchIds ->
+                reply(404, error("MATCH_NOT_FOUND", "no such match"))
             method == "POST" && path.endsWith("/uploads") -> {
                 uploadsCreated++
                 declaredSha = JSONObject(request.body.readUtf8()).getString("clientSha256")

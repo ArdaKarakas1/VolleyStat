@@ -3,7 +3,7 @@
   "info": {
     "title": "VolleyStat Local Development API",
     "description": "LOCAL TEST DATA ONLY. No authentication, no trained AI. Never expose to the internet.",
-    "version": "0.4.0"
+    "version": "0.4.1"
   },
   "paths": {
     "/v1/health": {
@@ -59,6 +59,55 @@
       }
     },
     "/v1/matches/{match_id}": {
+      "put": {
+        "summary": "Put Match",
+        "description": "Create the match under an id the client chose, or return the match that already has it.\n\nA client that picks the id before its first request can address the match whatever happens\nto the answer: it repeats this call, or deletes the match, with the id it already holds.\nWith POST the id exists only in the answer, and a lost answer leaves a match nobody can\ndelete. A repeat never changes what the first request stored.",
+        "operationId": "put_match_v1_matches__match_id__put",
+        "parameters": [
+          {
+            "name": "match_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Match Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MatchInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "201": {
+            "description": "The match was created under this id"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
       "get": {
         "summary": "Get Match",
         "operationId": "get_match_v1_matches__match_id__get",
@@ -81,6 +130,37 @@
                 "schema": {}
               }
             }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Match",
+        "description": "Remove a match and everything the server holds for it: its record, uploads, videos, analyses and bytes.\n\nDeleting a video leaves the match record and the upload rows behind. This is the call a\nclient makes when the user removes the match itself, so that nothing of it stays.",
+        "operationId": "delete_match_v1_matches__match_id__delete",
+        "parameters": [
+          {
+            "name": "match_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Match Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
           },
           "422": {
             "description": "Validation Error",

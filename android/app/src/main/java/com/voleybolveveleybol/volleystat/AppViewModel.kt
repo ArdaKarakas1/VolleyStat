@@ -62,6 +62,15 @@ enum class SourceProblem { CAMERA_MISSING, CAMERA_EMPTY, UNREADABLE }
 
 data class RecordingFile(val name: String, val path: String, val sizeBytes: Long)
 
+/**
+ * Why the server did not confirm the removal of a match. UNCONFIRMED: no answer came, so the app
+ * does not know what the server holds. VERIFYING: the server is still checking the match's upload.
+ * REFUSED: the server answered and deleted nothing.
+ */
+enum class RemovalFailure { UNCONFIRMED, VERIFYING, REFUSED }
+
+data class RemovalProblem(val matchId: String, val failure: RemovalFailure)
+
 data class AppUiState(
     val matches: List<MatchRecord> = emptyList(),
     val teams: List<Team> = emptyList(),
@@ -74,8 +83,8 @@ data class AppUiState(
     val recordings: List<RecordingFile> = emptyList(),
     val readingVideo: Boolean = false,
     val sourceProblem: SourceProblem? = null,
-    /** Match whose server-side removal failed; the record is kept and the screen says so. */
-    val removalFailedFor: String? = null,
+    /** The match whose removal the server did not confirm; the record is kept and the screen says why. */
+    val removalProblem: RemovalProblem? = null,
     /** The last change did not reach the disk. It is still in memory and the next change tries again. */
     val saveFailed: Boolean = false,
 ) {
@@ -292,42 +301,37 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     // ----- Matches -----
 
     /**
-     * Removes a match: stops its upload if one is running, deletes what the server holds
-     * (the video, or the unfinished part) and then forgets the record. If the server can
-     * not be reached nothing is forgotten, so the app never claims a deletion that did not happen.
+     * Removes a match: stops its upload if one is running, has the server delete everything it
+     * holds for the match (the record, the video or its unfinished part, the analyses and the
+     * decisions) and then forgets the record. If the server did not delete it nothing is
+     * forgotten, so the app never claims a deletion that did not happen.
      */
     fun removeMatch(matchId: String, onDone: () -> Unit) {
         viewModelScope.launch {
             if (_state.value.upload?.matchId == matchId) stopUpload()
             val match = _state.value.matches.firstOrNull { it.localId == matchId } ?: return@launch
-            val removed = withContext(Dispatchers.IO) {
+            val failure = withContext(Dispatchers.IO) {
                 try {
-                    val videoId = match.check?.videoId
-                    val uploadId = match.session.uploadId
-                    when {
-                        videoId != null -> api().deleteVideo(videoId)
-                        uploadId != null -> try {
-                            api().abortUpload(uploadId)
-                        } catch (error: ApiException) {
-                            // The upload became a video while the user was deciding.
-                            if (error.code != "UPLOAD_COMPLETED") throw error
-                            api().deleteVideo(error.details.getString("videoId"))
-                        }
-                    }
-                    true
+                    match.session.serverMatchId?.let { api().deleteMatch(it) }
+                    null
                 } catch (error: ApiException) {
-                    error.status == 404  // already gone on the server
+                    when (error.code) {
+                        // Only the server's own "no such match" means the match is already gone. Any
+                        // other answer, a 404 from a wrong address included, deleted nothing.
+                        "MATCH_NOT_FOUND" -> null
+                        "UPLOAD_FINALIZING" -> RemovalFailure.VERIFYING
+                        else -> RemovalFailure.REFUSED
+                    }
                 } catch (error: IOException) {
-                    false
-                } catch (error: org.json.JSONException) {
-                    false
+                    // No answer: the server may be off, or it deleted the match and the answer was lost.
+                    RemovalFailure.UNCONFIRMED
                 }
             }
-            if (removed) {
+            if (failure == null) {
                 forget(match)
                 onDone()
             } else {
-                _state.update { it.copy(removalFailedFor = matchId) }
+                _state.update { it.copy(removalProblem = RemovalProblem(matchId, failure)) }
             }
         }
     }
@@ -339,12 +343,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             state.copy(
                 matches = state.matches.filterNot { it.localId == match.localId },
                 upload = state.upload?.takeUnless { it.matchId == match.localId },
-                removalFailedFor = null,
+                removalProblem = null,
             )
         }
     }
 
-    fun clearRemovalFailure() = _state.update { it.copy(removalFailedFor = null) }
+    fun clearRemovalFailure() = _state.update { it.copy(removalProblem = null) }
 
     // ----- Profile -----
 

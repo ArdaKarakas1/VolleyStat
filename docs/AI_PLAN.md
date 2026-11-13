@@ -81,6 +81,7 @@ Aşağıdaki kaynakların lisansı kapalı kaynak ticari ürünü kısıtlar. AG
 - **Ölçüm ve kapı:** Ekip iki anotatörün köşe işaretleri arasındaki piksel farkını ölçer. Otomatik tespitte ekip köşe hatasını ve saha çokgeni IoU değerini ölçer. Kapı G1'dir: Pilot videoların en az %80'i işlenebilir bir saha ve eksiksiz bir yükleme verir.
 - **Ana risk:** Kamera arka çizgiye yakın durduğunda yakın köşeler, yakın arka çizgi ve yakın servis alanı kadrajın dışında kalır. Uzak köşeler her mesafede görüntünün ortasına yakın düşer. Oturumun geometri hesabına göre 18 × 9 metrelik sahada kameranın yakın iki köşeyi görmesi için gereken yatay görüş açısı şöyledir: Kamera arka çizginin 3 metre gerisindeyken yaklaşık 113 derece, 5 metre gerisindeyken yaklaşık 84 derece, 6,5 metre gerisindeyken yaklaşık 69 derece. Hesap kameranın yüksekliğini ve eğimini saymaz. Bir telefonun ana kamerası yatay çekimde yaklaşık 65–75 derece görür (varsayım, kimse ölçmedi). Salonların çoğu arka çizginin gerisinde bu kadar boşluk bırakmaz (varsayım). Oyuncular da köşeleri kapatır. Salondaki basketbol ve hentbol çizgileri voleybol çizgilerine karışır. Biri tripoda çarpar ve homografi geçersiz kalır.
 - **Gerçek video olmadan:** Ekip bu bileşeni şimdi başlatabilir. Ekip `PATCH /videos/{id}/court-roi` sözleşmesini, homografi hesabını, saha içi filtresini ve işaretleme ekranını sentetik görüntüyle yazar ve test eder. Yalnız G1 ölçümü gerçek video ister.
+- **Aday ilk kullanım (çekim öncesi kadraj denetimi):** Saha işaretleri analizden önce de işe yarar. Kullanıcı kayda başlamadan önce önizlemede saha noktalarına dokunur ve uygulama iki arka çizginin, filenin ve servis alanının kadrajda olup olmadığını söyler. Yanlış kadrajı maçtan sonra kimse düzeltemez, bu yüzden denetimin yeri kayıttan öncesidir. Bu adım işaretleme ekranını (S07) ister. Uygulamada bu ekran henüz yok. Ekip adımın kullanıcıya kaç saniyeye mal olduğunu B2 deneyinde ölçer.
 
 ### 2.4 Ralli bölümleme
 
@@ -111,6 +112,7 @@ Aşağıdaki kaynakların lisansı kapalı kaynak ticari ürünü kısıtlar. AG
 - **Ölçüm ve kapı:** Ekip `player_auto_precision` ve `player_coverage` değerlerini mesafeye ve kapanmaya göre katmanlı ölçer (SP-04). Kapı G4'tür: Bileşenin atadığı oyuncularda precision en az 0,95 olur ve ekip coverage değerini açıkça raporlar. Bileşen kapıyı geçemezse oyuncu `UNKNOWN_PLAYER` kalır ve rapor yalnız takım metriği verir.
 - **Ana risk:** Kamera uzaktaki numarayı okutmaz. İki oyuncu file önünde yer değiştirir ve izleyici kimlikleri karıştırır. Oyuncu değişikliği kadrajın dışında olur (R02).
 - **Gerçek video olmadan:** Ekip yalnız kadro kısıtını ve oylama mantığını yazar. Okunabilirlik sorusunu yalnız gerçek video yanıtlar.
+- **Aday ara adım (önce adsız iz):** Otomatik adım numarayı okuyamadığı izi atmaz, izi adsız tutar ("1. oyuncu"). Kaydı yapan kullanıcı adsız izleri kadrodaki forma numaralarıyla eşler ve bir eşleme o izin bütün sayılarını taşır. Kullanıcı eşlemeden hiçbir iz bir oyuncuya bağlanmaz. Bu adım oyuncu izini (2.1) ve G4 ölçümünü bekler.
 
 ### 2.7 Ralli kazananı
 
@@ -131,6 +133,7 @@ Aşağıdaki kaynakların lisansı kapalı kaynak ticari ürünü kısıtlar. AG
 - **Ölçüm ve kapı:** Birim testleri her kuralı sentetik olaylarla denetler. Bu bileşenin model kapısı yoktur. İlgili ürün kapısı G6'dır: 90 dakikalık videoda medyan aktif doğrulama süresi en çok 15 dakika.
 - **Ana risk:** Kod bir öneriyi doğrulanmış olayla karıştırabilir ya da bilinmeyen değeri sıfır olarak yazabilir.
 - **Gerçek video olmadan:** Ekip bu bileşeni tamamen bitirebilir. Bugünkü fonksiyon skoru ve sayı türlerini hesaplar. Servis, karşılama ve hücum yüzdesi gibi oran istatistikleri temas etiketi ister ve henüz yoktur.
+- **Servis sırasına dayanan sayımlar bekler:** Rapor, servisi karşılayan takımın aldığı sayıyı (side-out) ve servisi atan takımın aldığı sayıyı (break) önceki rallinin kazananından çıkarabilir. Bölümleme bir ralliyi kaçırırsa bu sıra kayar ve sonraki bütün ralliler yanlış sınıfa düşer. Ekip bu iki sayımı ralli düzeltme sözleşmesi (bölüm 3) bitmeden rapora eklemez.
 
 ## 3. Sıra
 
@@ -155,6 +158,7 @@ Oyuncu (G4) ve aksiyon (G5) deneyleri B6'dan sonra aynı protokolle gelir. Her d
 3. Ekip 30'dan az gold rallide oran yazmaz. Ekip ham sayıyı (örneğin `18/20`) ve güven aralığını yazar.
 4. `UNKNOWN` oranını yükselterek precision kazanan bir aday coverage kapısını da geçmek zorundadır.
 5. Ekip her deneyi raporun şablonuyla kaydeder: `experiment_id`, `dataset_version`, `test_manifest_sha256`, `model_version`, `eligible_n`, `TP/FP/FN`, `decision`, `signed_off_by`.
+6. Ekip kapısını geçmemiş bir bileşenin çıktısını kullanıcı ekranına sayı olarak çıkarmaz. Bileşik performans puanı, yüzdelik dilim, sıralama, tahmin ve kalibrasyonu ölçülmemiş güven değeri yalnız deney raporunda durur. Ekran kuralları `docs/design.md` belgesinin "Dürüstlük kalıpları" bölümündedir.
 
 ### Bu planın istediği sözleşme işleri
 

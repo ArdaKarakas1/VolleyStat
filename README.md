@@ -6,7 +6,7 @@ Hedef: Kullanıcı maçı telefonla kaydeder ya da galeriden seçer. Sunucu vide
 
 Bu depo yalnızca Android uygulamasını ve onun arka ucunu içerir. Web sitesi ayrı bir depodadır (`voleybolveveleybol`) ve bu projeyle kod paylaşmaz.
 
-## Bugünkü durum (sürüm 0.4.1)
+## Bugünkü durum (sürüm 0.4.2)
 
 | Parça | Durum |
 | --- | --- |
