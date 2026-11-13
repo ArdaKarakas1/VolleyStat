@@ -551,13 +551,230 @@ def test_make_splits_refuses_an_inventory_it_can_not_group(tmp_path, capsys):
     assert not (tmp_path / "lock.csv").exists()
 
 
+# --- agreement -------------------------------------------------------------------------
+
+LABEL_COLUMNS = ["video_id", "start_ms", "end_ms", "serving_side", "winning_side", "observation_status"]
+
+
+def labelled(video_id, rallies):
+    """rallies: (start_ms, end_ms, winning_side, serving_side or None)"""
+    return {
+        "annotationVersion": "VVV_ANNOTATION_V3", "videoId": video_id,
+        "rallies": [
+            {"rallyId": f"R{index}", "startMs": start, "endMs": end, "winningSide": winner,
+             "observationStatus": "OBSERVED", "uncertaintyReason": "UNKNOWN_OTHER",
+             **({} if serving is None else {"servingSide": serving})}
+            for index, (start, end, winner, serving) in enumerate(rallies, start=1)
+        ],
+    }
+
+
+def test_agreement_of_identical_labels_in_csv_and_json(tmp_path, capsys):
+    spans = [(0, 8000, "HOME", "AWAY"), (12000, 20000, "AWAY", "HOME"), (25000, 31000, "HOME", "HOME")]
+    a = write_rows(tmp_path / "a.csv", LABEL_COLUMNS,
+                   [("V1", start, end, serving, winner, "OBSERVED") for start, end, winner, serving in spans])
+    b = write_json(tmp_path / "b.json", labelled("V1", spans))
+
+    code, out, err = run(capsys, "agreement", "--a", a, "--b", b)
+    assert (code, err) == (0, "")
+    assert "tolerance +/-1000 ms" in out
+    assert "videos compared: 1 (V1)" in out
+    assert "rallies: A 3   B 3   matched pairs 3   only in A 0   only in B 0" in out
+    assert "start difference over 3 matched pair(s): median 0 ms, p90 0 ms" in out
+    assert "mean interval IoU of matched pairs: 1.000" in out
+    assert "winning side: 3/3 agree\n" in out
+    assert "serving side: 3/3 agree\n" in out
+    assert "n = 3 compared pairs is below 30" in out
+    assert "disagreements for the adjudicator: 0 row(s)" in out
+    # No adjective and no threshold: the tool measures, the owner decides.
+    for word in ("good", "sufficient", "excellent", "poor", "substantial", "moderate", "pass", "fail"):
+        assert word not in out.lower()
+
+
+def test_agreement_below_thirty_pairs_prints_counts_and_writes_null_ratios(tmp_path, capsys):
+    rows_a = [("V1", index * 20000, index * 20000 + 8000, "", "HOME" if index % 2 else "AWAY", "OBSERVED")
+              for index in range(20)]
+    # B disagrees on the winner of two rallies and leaves one winner empty.
+    rows_b = [list(row) for row in rows_a]
+    rows_b[3][4], rows_b[4][4], rows_b[5][4] = "AWAY", "HOME", ""
+    a = write_rows(tmp_path / "a.csv", LABEL_COLUMNS, rows_a)
+    b = write_rows(tmp_path / "b.csv", LABEL_COLUMNS, rows_b)
+
+    code, out, _ = run(capsys, "agreement", "--a", a, "--b", b)
+    assert code == 0
+    assert "winning side: 17/19 agree\n" in out
+    assert "  not comparable, one annotator left the field empty: 1 pair(s)" in out
+    assert ("  n = 19 compared pairs is below 30: the agreement rate and Cohen's kappa are not reliable "
+            "at this sample size and are not printed. Quote the counts.") in out
+    assert "kappa 0" not in out and "(0." not in out
+    assert "serving side: no matched pair has this field from both annotators" in out
+    assert "  left empty by both annotators: 20 pair(s)" in out
+
+    code, out, _ = run(capsys, "agreement", "--a", a, "--b", b, "--json")
+    document = json.loads(out)
+    assert code == 0
+    winner = document["fields"]["winningSide"]
+    assert winner == {
+        "compared": 19, "agree": 17, "notComparable": 1, "bothEmpty": 0, "agreementRate": None, "kappa": None,
+        "kappaUndefinedReason": None, "percentagesReliable": False, "minReliable": 30,
+    }
+    serving = document["fields"]["servingSide"]
+    assert (serving["compared"], serving["bothEmpty"], serving["agreementRate"], serving["kappa"]) == (0, 20, None, None)
+    assert document["rallies"] == {"a": 20, "b": 20, "matched": 20, "onlyA": 0, "onlyB": 0}
+    assert document["videos"]["V1"]["fields"]["winningSide"]["agree"] == 17
+
+
+def test_agreement_from_thirty_pairs_prints_ratio_and_kappa(tmp_path, capsys):
+    rows_a = [(video, index * 20000, index * 20000 + 8000, "HOME", "HOME" if index % 2 else "AWAY", "OBSERVED")
+              for video in ("V1", "V2") for index in range(20)]
+    rows_b = [[video, start + 300, end, winner] for video, start, end, _, winner, _ in rows_a]
+    # Two HOME turned AWAY and two AWAY turned HOME: B still says HOME 20 times and AWAY 20 times.
+    for index in (1, 3, 22, 24):
+        rows_b[index][3] = "AWAY" if rows_b[index][3] == "HOME" else "HOME"
+    a = write_rows(tmp_path / "a.csv", LABEL_COLUMNS, rows_a)
+    # B has no serving_side column at all.
+    b = write_rows(tmp_path / "b.csv", ["video_id", "start_ms", "end_ms", "winning_side"], rows_b)
+
+    code, out, _ = run(capsys, "agreement", "--a", a, "--b", b)
+    assert code == 0
+    assert "videos compared: 2 (V1, V2)" in out
+    assert "rallies: A 40   B 40   matched pairs 40   only in A 0   only in B 0" in out
+    assert "  V1: A 20   B 20   matched pairs 20   only in A 0   only in B 0" in out
+    assert "start difference over 40 matched pair(s): median 300 ms, p90 300 ms" in out
+    assert "end difference over 40 matched pair(s):   median 0 ms, p90 0 ms" in out
+    # p_o = 36/40 = 0.9. Each side says HOME 20 and AWAY 20 times: p_e = 0.5 * 0.5 + 0.5 * 0.5 = 0.5.
+    # kappa = (0.9 - 0.5) / (1 - 0.5) = 0.8.
+    assert "winning side: 36/40 agree (0.900); Cohen's kappa 0.800" in out
+    assert "below 30" not in out.split("serving side")[0]
+    assert "serving side: no matched pair has this field from both annotators" in out
+    assert "  not comparable, one annotator left the field empty: 40 pair(s)" in out
+    assert "disagreements for the adjudicator: 4 row(s)" in out
+
+    document = json.loads(run(capsys, "agreement", "--a", a, "--b", b, "--json")[1])
+    winner = document["fields"]["winningSide"]
+    assert winner["percentagesReliable"] is True and winner["minReliable"] == 30
+    assert winner["agreementRate"] == pytest.approx(0.9)
+    assert winner["kappa"] == pytest.approx(0.8)
+    # Each video has only 20 pairs and carries no ratio.
+    assert document["videos"]["V2"]["fields"]["winningSide"]["agreementRate"] is None
+    assert document["boundaries"]["medianAbsStartDiffMs"] == 300
+
+
+def test_agreement_says_why_kappa_is_undefined(tmp_path, capsys):
+    rows = [("V1", index * 20000, index * 20000 + 8000, "", "HOME", "OBSERVED") for index in range(30)]
+    a = write_rows(tmp_path / "a.csv", LABEL_COLUMNS, rows)
+    b = write_rows(tmp_path / "b.csv", LABEL_COLUMNS, rows)
+    code, out, _ = run(capsys, "agreement", "--a", a, "--b", b)
+    assert code == 0
+    line = next(line for line in out.splitlines() if line.startswith("winning side:"))
+    assert line.startswith("winning side: 30/30 agree (1.000); Cohen's kappa not defined: ")
+    assert "HOME" in line and "expected agreement is 1" in line
+    assert "kappa 0" not in out and "kappa 1" not in out
+
+    document = json.loads(run(capsys, "agreement", "--a", a, "--b", b, "--json")[1])
+    winner = document["fields"]["winningSide"]
+    assert winner["kappa"] is None and winner["agreementRate"] == 1.0
+    assert "expected agreement is 1" in winner["kappaUndefinedReason"]
+
+
+def test_agreement_lists_videos_only_one_annotator_labelled(tmp_path, capsys):
+    a = [write_json(tmp_path / "a1.json", labelled("V1", [(0, 8000, "HOME", None)])),
+         write_json(tmp_path / "a2.json", labelled("V2", [(0, 8000, "HOME", None), (9000, 15000, "AWAY", None)]))]
+    b = write_rows(tmp_path / "b.csv", LABEL_COLUMNS,
+                   [("V1", 200, 8000, "", "HOME", "OBSERVED"), ("V3", 0, 4000, "", "AWAY", "OBSERVED")])
+    code, out, _ = run(capsys, "agreement", "--a", *a, "--b", b)
+    assert code == 0
+    assert "videos compared: 1 (V1)" in out
+    assert "not compared, labelled by annotator A only: V2" in out
+    assert "not compared, labelled by annotator B only: V3" in out
+    assert "rallies: A 1   B 1   matched pairs 1   only in A 0   only in B 0" in out
+
+    document = json.loads(run(capsys, "agreement", "--a", *a, "--b", b, "--json")[1])
+    assert document["notCompared"] == {"onlyA": ["V2"], "onlyB": ["V3"]}
+    assert list(document["videos"]) == ["V1"]
+
+
+def test_agreement_refuses_input_without_a_common_video(tmp_path, capsys):
+    a = write_json(tmp_path / "a.json", labelled("V1", [(0, 8000, "HOME", None)]))
+    b = write_json(tmp_path / "b.json", labelled("V2", [(0, 8000, "HOME", None)]))
+    assert_unusable(run(capsys, "agreement", "--a", a, "--b", b), "no video id appears in the files of both annotators")
+    assert_unusable(run(capsys, "agreement", "--a", a, "--b", tmp_path / "missing.csv"), "No such file")
+    assert_unusable(run(capsys, "agreement", "--a", a, "--b", b, "--tolerance-ms", -1), "argument --tolerance-ms: ")
+
+
+@pytest.mark.parametrize("side", ["--a", "--b"])
+def test_agreement_holds_both_annotators_to_the_gold_rules(tmp_path, capsys, side):
+    clean = write_rows(tmp_path / "clean.csv", LABEL_COLUMNS, [("V1", 4000, 10000, "", "HOME", "OBSERVED")])
+    rows = [("V1", 4000, 10000, "", "HOME", "OBSERVED"), ("V1", 4000, 10000, "", "HOME", "OBSERVED"),
+            ("V1", 16000, 24000, "", "AWAY", "OBSERVED"), ("V1", 17000, 23000, "", "AWAY", "OBSERVED")]
+    broken = write_rows(tmp_path / "broken.csv", LABEL_COLUMNS, rows)
+    other = "--b" if side == "--a" else "--a"
+    label = "A" if side == "--a" else "B"
+    code, out, err = run(capsys, "agreement", side, broken, other, clean)
+    assert code == 2 and out == ""
+    assert err.splitlines() == [
+        f"error: {broken}: the intervals of annotator {label} are not valid:",
+        "  row 3: start_ms (4000) is not after start_ms (4000) of row 2; rallies must be listed in time order",
+        "  row 3: start_ms (4000) is before end_ms (10000) of row 2; rallies must not overlap",
+        "  row 5: start_ms (17000) is before end_ms (24000) of row 4; rallies must not overlap",
+    ]
+
+    document = labelled("V1", [(5000, 1000, "HOME", None)])
+    as_json = write_json(tmp_path / "broken.json", document)
+    code, out, err = run(capsys, "agreement", side, as_json, other, clean)
+    assert code == 2 and out == ""
+    assert f"{as_json}: the annotation of annotator {label} is not valid" in err
+    assert "$.rallies[0]: startMs (5000) must be less than endMs (1000)" in err
+
+
+def test_agreement_writes_the_disagreements_for_the_adjudicator(tmp_path, capsys):
+    a = write_rows(tmp_path / "a.csv", LABEL_COLUMNS, [
+        ("V2", 0, 8000, "HOME", "HOME", "OBSERVED"), ("V2", 20000, 26000, "", "AWAY", "OBSERVED"),
+        ("V1", 5000, 9000, "", "HOME", "OBSERVED"),
+    ])
+    b = write_json(tmp_path / "b1.json", labelled("V1", [(1000, 3000, "HOME", None), (5000, 9000, "AWAY", None)]))
+    b2 = write_json(tmp_path / "b2.json", labelled("V2", [(0, 8000, "AWAY", "AWAY"), (12000, 15000, "HOME", None)]))
+    out_file = tmp_path / "disagreements.csv"
+
+    code, out, _ = run(capsys, "agreement", "--a", a, "--b", b, b2, "--out", out_file)
+    assert code == 0
+    assert "disagreements for the adjudicator: 6 row(s)" in out
+    assert f"wrote {out_file}" in out
+    with open(out_file, encoding="utf-8", newline="") as handle:
+        rows = list(csv.reader(handle))
+    assert rows == [
+        ["video_id", "kind", "a_start_ms", "a_end_ms", "b_start_ms", "b_end_ms", "a_value", "b_value"],
+        ["V1", "ONLY_B", "", "", "1000", "3000", "", ""],
+        ["V1", "WINNER", "5000", "9000", "5000", "9000", "HOME", "AWAY"],
+        ["V2", "WINNER", "0", "8000", "0", "8000", "HOME", "AWAY"],
+        ["V2", "SERVING", "0", "8000", "0", "8000", "HOME", "AWAY"],
+        ["V2", "ONLY_B", "", "", "12000", "15000", "", ""],
+        ["V2", "ONLY_A", "20000", "26000", "", "", "", ""],
+    ]
+
+    # An existing file is never overwritten, and nothing is printed for a run that wrote nothing.
+    before = out_file.read_bytes()
+    code, out, err = run(capsys, "agreement", "--a", a, "--b", b, b2, "--out", out_file)
+    assert (code, out) == (2, "") and "File exists" in err and err.startswith("error: ")
+    assert out_file.read_bytes() == before
+    assert_unusable(run(capsys, "agreement", "--a", a, "--b", b, b2, "--out", tmp_path / "missing" / "d.csv"),
+                    "the folder does not exist")
+    assert_unusable(run(capsys, "agreement", "--a", a, "--b", b, b2, "--out", tmp_path), "is a directory")
+
+    # With --json the file is written the same way and its path is in the document.
+    second = tmp_path / "second.csv"
+    document = json.loads(run(capsys, "agreement", "--a", a, "--b", b, b2, "--out", second, "--json")[1])
+    assert document["disagreements"] == 6 and document["disagreementsFile"] == str(second)
+    assert second.read_bytes() == before
+
+
 def test_a_command_is_required():
     with pytest.raises(SystemExit) as stopped:
         cli.main([])
     assert stopped.value.code == 2
 
 
-@pytest.mark.parametrize("command", ["segment", "evaluate", "validate-labels", "make-splits", "check-leakage"])
+@pytest.mark.parametrize("command", ["segment", "evaluate", "agreement", "validate-labels", "make-splits", "check-leakage"])
 def test_every_subcommand_is_reachable_through_the_module(command):
     completed = subprocess.run([sys.executable, "-m", "volleystat_ml", command, "--help"], capture_output=True, text=True)
     assert completed.returncode == 0, completed.stderr
@@ -567,3 +784,50 @@ def test_every_subcommand_is_reachable_through_the_module(command):
 def test_unknown_subcommand_is_refused_by_the_module():
     completed = subprocess.run([sys.executable, "-m", "volleystat_ml", "train"], capture_output=True, text=True)
     assert completed.returncode == 2 and "invalid choice: 'train'" in completed.stderr
+
+
+def test_agreement_says_that_kappa_is_undefined_below_thirty_pairs_too(tmp_path, capsys):
+    # Undefined is not the same as unreliable: with one single value kappa does not exist,
+    # however many pairs there are, and the small-sample note must not suggest otherwise.
+    rows = [("V1", index * 10000, index * 10000 + 5000, "HOME") for index in range(20)]
+    header = ("video_id", "start_ms", "end_ms", "winning_side")
+    first, second = write_rows(tmp_path / "a.csv", header, rows), write_rows(tmp_path / "b.csv", header, rows)
+
+    code, out, _ = run(capsys, "agreement", "--a", first, "--b", second)
+    assert code == 0
+    assert "winning side: 20/20 agree\n" in out
+    assert "Cohen's kappa not defined: both annotators gave the single value HOME" in out
+    assert "the agreement rate is not reliable at this sample size and is not printed" in out
+    assert "Cohen's kappa are not reliable" not in out
+
+
+def test_agreement_refuses_a_label_value_the_schema_does_not_know(tmp_path, capsys):
+    # A misspelt value would be compared as a category of its own, and a misspelt
+    # NOT_ANNOTATED would turn a placeholder into a disagreement.
+    header = ("video_id", "start_ms", "end_ms", "serving_side", "winning_side", "observation_status")
+    good = write_rows(tmp_path / "b.csv", header, [("V1", 0, 5000, "HOME", "HOME", "OBSERVED"), ("V1", 10000, 15000, "", "AWAY", "")])
+    bad = write_rows(tmp_path / "a.csv", header, [("V1", 0, 5000, "HOME", "UNKNOWN", "not_annotated"), ("V1", 10000, 15000, "Away", "home", "OBSERVED")])
+
+    for arguments in (("--a", bad, "--b", good), ("--a", good, "--b", bad)):
+        code, out, err = run(capsys, "agreement", *arguments)
+        assert (code, out) == (2, "")
+        assert "the labels of annotator" in err and "Traceback" not in err
+        assert "row 2: observation_status must be one of OBSERVED, INFERRED, UNKNOWN, NOT_ANNOTATED, NOT_APPLICABLE or empty, found 'not_annotated'" in err
+        assert "row 3: serving_side must be one of HOME, AWAY, UNKNOWN or empty, found 'Away'" in err
+        assert "row 3: winning_side must be one of HOME, AWAY, UNKNOWN or empty, found 'home'" in err
+
+    # The same values are no reason to refuse a gold file of `evaluate`, which reads the intervals only.
+    code, _, _ = run(capsys, "evaluate", "--gold", bad, "--pred", good)
+    assert code == 0
+
+
+def test_agreement_prints_the_counts_of_each_video(tmp_path, capsys):
+    header = ("video_id", "start_ms", "end_ms", "winning_side")
+    first = write_rows(tmp_path / "a.csv", header, [(video, index * 10000, index * 10000 + 5000, "HOME") for video in ("V1", "V2") for index in range(3)])
+    second = write_rows(tmp_path / "b.csv", header, [("V1", index * 10000, index * 10000 + 5000, "AWAY" if index == 0 else "HOME") for index in range(3)]
+                        + [("V2", index * 10000 + 5000, index * 10000 + 10000, "HOME") for index in range(3)])
+
+    code, out, _ = run(capsys, "agreement", "--a", first, "--b", second)
+    assert code == 0
+    assert "  V1: A 3   B 3   matched pairs 3   only in A 0   only in B 0\n    winning side 2/3 agree; serving side not compared\n" in out
+    assert "  V2: A 3   B 3   matched pairs 0   only in A 3   only in B 3\n    winning side not compared; serving side not compared\n" in out

@@ -209,9 +209,10 @@ Aşağıdaki dört parça `docs/API_V1.md` sözleşmesinde yoktur. Ekip ilgili b
 | `make-splits` | Komut videoları `match_group_id` değerine göre train, validation ve test kümelerine ayırır. Komut `training_allowed` değeri `true` olmayan videoyu train kümesine koymaz ve kilit manifestini özetiyle yazar. Komut `--previous` seçeneğiyle önceki kilidin atamalarını korur ve yalnız yeni videoları ve maç gruplarını dağıtır. |
 | `check-leakage` | Komut iki kümede birden görünen maç grubunu ve SHA-256 değerini bulur. Komut manifestin kilitten sonra değiştiğini de bildirir: Manifestin içerik özetini yazar ve `--expect-sha256` seçeneğiyle gelen özetle karşılaştırır. Komut birden çok dosya aldığında kümesi dosyadan dosyaya değişen videoyu ve maç grubunu da bulur. |
 | `evaluate` | Komut ralli sınırı metriklerini ve %95 bootstrap güven aralığını hesaplar. Komut 30'dan az gold rallide oran yazmaz: Metin çıktısı yalnız ham sayıları verir ve `--json` çıktısı oran alanlarını `null` yazar. |
+| `agreement` | Komut iki anotatörün aynı videolara verdiği etiketleri karşılaştırır (B0). Komut ralli çiftlerinde sınır farkını ve aralık IoU değerini, kazanan tarafta ve servis tarafında uyum oranını ve Cohen's kappa değerini hesaplar. Komut 30'dan az karşılaştırılan çiftte oran ve kappa yazmaz. Komut `--out` seçeneğiyle uyuşmazlık listesini hakem için CSV olarak yazar. |
 | `segment` | Komut hareket enerjisi baseline'ını bir videoda çalıştırır. Komut `ffmpeg` programının sonuna kadar çözemediği videoyu reddeder ve okuyabildiği bölüm için aralık yazmaz. |
 
-Şemalar `ml/schemas/` klasöründedir: `ANNOTATION_SCHEMA_V3.json`, `01_VIDEO_ENVANTERI.csv`, `03_RALLI_GOLD.csv` ve `11_TEST_MANIFEST.csv`. Paket şu ölçümleri henüz içermez: anotatör uyumu, kazanan metrikleri, kalibrasyon, aksiyon ve oyuncu metrikleri. Ekip bu araçları sentetik veriyle gerçek video gelmeden yazabilir.
+Şemalar `ml/schemas/` klasöründedir: `ANNOTATION_SCHEMA_V3.json`, `01_VIDEO_ENVANTERI.csv`, `03_RALLI_GOLD.csv` ve `11_TEST_MANIFEST.csv`. Paket şu ölçümleri henüz içermez: kazanan metrikleri, kalibrasyon, aksiyon ve oyuncu metrikleri. Ekip bu araçları sentetik veriyle gerçek video gelmeden yazabilir.
 
 ### 4.6 İki değişmez veri kuralı
 
@@ -253,7 +254,7 @@ Aşağıdaki işleri yalnız ürün sahibi yapabilir:
 1. Ürün sahibi kendi çektiği bir ya da iki amatör salon maçını bölüm 4.1'deki açıyla kaydeder ve maçtan önce iki dakikalık deneme çeker.
 2. Ürün sahibi sahadaki herkesten analiz, model eğitimi ve paylaşım için ayrı ayrı yazılı izin alır. Ürün sahibi 18 yaşından küçük oyuncu için veli izni alır.
 3. Ürün sahibi videoları depoya koymadan mühendise teslim eder ve her video için tarihi, salonu, kamera kurulumunu ve izin durumunu bildirir.
-4. Ürün sahibi voleybol bilen ikinci bir anotatör bulur. İki anotatör ilk 20–50 ralliyi birbirinden bağımsız etiketler (B0).
+4. Ürün sahibi voleybol bilen ikinci bir anotatör bulur. İki anotatör ilk 20–50 ralliyi birbirinden bağımsız etiketler (B0). `agreement` komutu uyum oranını ve kappa değerini ancak 30 ortak ralliden itibaren yazar. İki anotatör bu yüzden en az 30 ralliyi ortak etiketler.
 5. Ürün sahibi her maç için iki takımın forma numaralarını içeren kadroyu verir.
 6. Ürün sahibi lisans yönünü seçer: Kod kapalı bir ticari ürün olur ya da bütün kod AGPL ile açık kalır. Bu karar bölüm 2'deki tabloyu doğrudan etkiler. Ürün sahibi GPL-3.0 kaynakları için ayrıca bir hukukçuya danışır, çünkü bu lisans yalnız sunucuda çalışan kodu AGPL gibi bağlamaz (bölüm 2).
 7. Ürün sahibi önce açılacak üç aksiyon sınıfını seçer (G5). Bu belge servis, hücum ve bloğu önerir. Sözleşmedeki bitiren aksiyon kartı hücumu, bloğu ve servis asını (`ACE`) zaten sorar. Kart oyunda kalan servisi sormaz. Servis yine de adaydır, çünkü her rallinin ilk teması servistir (2.5) ve bileşen servisi bir kuralla bulabilir.
