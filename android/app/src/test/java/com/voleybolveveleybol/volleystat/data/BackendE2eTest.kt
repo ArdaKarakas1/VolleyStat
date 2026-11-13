@@ -136,8 +136,12 @@ class BackendE2eTest {
             val scored = api.report(matchId)!!
             assertEquals("VERIFIED", scored.verificationStatus)
             assertEquals(total, scored.ralliesVerified)
-            assertEquals(StatValue(1, StatValue.MEASURED), scored.home.points)
-            assertEquals(StatValue(total - 1, StatValue.MEASURED), scored.away.points)
+            // The demo analyzer may have missed rallies and the review can not add one, so the
+            // counts are lower bounds even with every card answered.
+            assertTrue(scored.ralliesMayBeMissing)
+            assertEquals(StatValue(1, StatValue.PARTIAL), scored.home.points)
+            assertEquals(StatValue(total - 1, StatValue.PARTIAL), scored.away.points)
+            assertNull(scored.scoreStoppedAtRally)
             assertEquals(listOf(1 to total - 1), scored.sets.map { it.home to it.away })
             assertTrue(scored.sets.none { it.complete })
             // Nobody said how the points were scored, so the kinds of points stay unknown.

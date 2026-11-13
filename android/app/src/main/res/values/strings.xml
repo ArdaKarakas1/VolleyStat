@@ -324,6 +324,7 @@
     <string name="report_verification_done">Senin kararlarınla tamamlandı</string>
     <string name="report_rules">Skor kuralı: Set 25 sayıda, beşinci set 15 sayıda ve iki farkla biter.</string>
     <string name="report_set_open">%1$d. set sürüyor</string>
+    <string name="report_may_miss">Rapor yalnızca sunucunun önerdiği rallileri sayar. Sunucu bir ralliyi kaçırdıysa o sayı raporda yoktur. Bu yüzden sayılar alt sınırdır.</string>
     <string name="report_score_stopped">%1$d. rallinin kazananı belli değil. Sunucu set skorunu bu ralliden sonrası için hesaplamaz.</string>
     <string name="report_stats">Maç İstatistikleri</string>
     <string name="report_team_stats">Takım İstatistikleri</string>
@@ -350,7 +351,7 @@
     <string name="report_unavailable_body">Bu maç için analiz işi yok.</string>
     <string name="report_load_failed">Uygulama raporu sunucudan alamadı.</string>
     <string name="value_not_measured">Ölçüm yok</string>
-    <string name="value_partial_note">Artı işareti alt sınırı gösterir. Doğrulama bitince sayı artabilir.</string>
+    <string name="value_partial_note">Artı işareti alt sınırı gösterir. Sayı doğrulama sürdükçe artabilir.</string>
     <string name="value_missing_note">Kesik çizgili kutu ölçüm olmadığını gösterir. Uygulama eksik ölçümü sıfır yazmaz.</string>
 
     <!-- 10 Player stats -->

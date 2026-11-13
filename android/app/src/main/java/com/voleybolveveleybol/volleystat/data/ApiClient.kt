@@ -162,6 +162,7 @@ class ApiClient(private val baseUrl: String) {
             setsWonAway = if (setsWon.isNull("away")) null else setsWon.getInt("away"),
             sets = score.getJSONArray("sets").objects().map { SetScore(it.getInt("number"), it.getInt("home"), it.getInt("away"), it.getBoolean("complete")) },
             scoreStoppedAtRally = if (score.isNull("stoppedAtRally")) null else score.getInt("stoppedAtRally"),
+            ralliesMayBeMissing = json.optBoolean("ralliesMayBeMissing", false),
             home = team("home"), away = team("away"),
             players = json.getJSONArray("players").objects().map {
                 PlayerLine(it.getString("side") == "HOME", it.getInt("jersey"), it.getInt("points"), it.getInt("attackPoints"), it.getInt("blockPoints"), it.getInt("aces"))

@@ -98,6 +98,7 @@ class ScreenshotTest {
         "j1", "motion-baseline", "BASELINE", mock = false, verificationStatus = "PARTIALLY_VERIFIED",
         ralliesProposed = 42, ralliesVerified = 30, ralliesRejected = 2, ralliesUnresolved = 1, ralliesOpen = 9,
         scoreStatus = "PARTIAL", setsWonHome = 1, setsWonAway = 0, sets = listOf(SetScore(1, 25, 21, true), SetScore(2, 3, 4, false)),
+        ralliesMayBeMissing = true,
         home = TeamStats(StatValue(28, "PARTIAL"), StatValue(11, "PARTIAL"), StatValue(3, "PARTIAL"), StatValue(2, "PARTIAL"), StatValue(null, "UNKNOWN")),
         away = TeamStats(StatValue(25, "PARTIAL"), StatValue(9, "PARTIAL"), StatValue(null, "UNKNOWN"), StatValue(1, "PARTIAL"), StatValue(4, "PARTIAL")),
         players = listOf(PlayerLine(true, 4, 6, 5, 1, 0), PlayerLine(true, 7, 4, 2, 1, 1), PlayerLine(true, 9, 3, 3, 0, 0), PlayerLine(false, 3, 5, 4, 0, 1)),

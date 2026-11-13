@@ -183,6 +183,9 @@ fun ReportScreen(
                 if (report.scoreStoppedAtRally != null) {
                     Notice(stringResource(R.string.report_score_stopped, report.scoreStoppedAtRally), Tone.CAUTION)
                 }
+                // Answering every card does not make the score complete: a rally the analyzer never
+                // proposed has no card. The report says so for as long as that can happen.
+                if (report.ralliesMayBeMissing) Notice(stringResource(R.string.report_may_miss), Tone.NEUTRAL)
                 if (report.ralliesOpen > 0) {
                     PrimaryButton(stringResource(R.string.report_open_review, report.ralliesOpen), onOpenReview, icon = R.drawable.ic_fact_check)
                 }
@@ -261,7 +264,7 @@ fun PlayersScreen(
     val unattributed = if (home) report?.unattributedHome else report?.unattributedAway
     // A player's count can still grow while rallies are undecided or points have no player yet,
     // so until then every number in the table is a lower bound and must not read as a final total.
-    val lowerBound = report != null && (report.verificationStatus != "VERIFIED" || (unattributed ?: 0) > 0)
+    val lowerBound = report != null && (report.ralliesMayBeMissing || report.verificationStatus != "VERIFIED" || (unattributed ?: 0) > 0)
     val missing = stringResource(R.string.value_not_measured)
     FlowScaffold(title = stringResource(R.string.players_title), onBack = onBack) {
         if (report?.mock == true) DemoBanner(compact = true)

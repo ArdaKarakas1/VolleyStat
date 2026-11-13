@@ -94,6 +94,11 @@ data class MatchReport(
     val sets: List<SetScore>,
     /** Sequence number of the first rally without a winner. Set scores stop there; null when none. */
     val scoreStoppedAtRally: Int? = null,
+    /**
+     * True when nothing measured how many rallies the analyzer finds. The review can not add a
+     * missed rally, so every count is then a lower bound, however many cards are answered.
+     */
+    val ralliesMayBeMissing: Boolean = false,
     val home: TeamStats,
     val away: TeamStats,
     val players: List<PlayerLine>,
