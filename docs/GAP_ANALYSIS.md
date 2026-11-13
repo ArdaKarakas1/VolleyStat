@@ -109,10 +109,10 @@ Sayılar son yerel koşudan gelir. CI aynı testleri her PR'da çalıştırır.
 
 | Kanıt | Sonuç |
 |---|---|
-| Arka uç `pytest` | 332 test geçti (yerelde Python 3.13, CI'da Python 3.12) |
-| `ml` `pytest` | 149 test geçti (yerel ve CI) |
-| Android JVM testleri (`:core:test`, `:app:testDebugUnitTest`) | 39 test geçti, hiçbiri atlanmadı (yerel). Testler 41 ekran görüntüsü üretti. |
-| Uygulama gerçek sunucuya karşı (JVM) | 5 test geçti (yerel ve CI): `BackendE2eTest` 4, `AppFlowE2eTest` 1 |
+| Arka uç `pytest` | 402 test geçti (yerelde Python 3.13, CI'da Python 3.12) |
+| `ml` `pytest` | 209 test geçti (yerel ve CI) |
+| Android JVM testleri (`:core:test`, `:app:testDebugUnitTest`) | 40 test geçti, hiçbiri atlanmadı (yerel). Testler 42 ekran görüntüsü üretti. |
+| Uygulama gerçek sunucuya karşı (JVM) | 6 test geçti (yerel ve CI): `BackendE2eTest` 4, `AppFlowE2eTest` 1, `AppUploadFlowE2eTest` 1. Bu altı test yukarıdaki 40 testin içindedir. |
 | Lint | 0 hata |
 | Emülatörde cihaz testleri (CI, API 34) | 2 test geçti: kamera kaydı ve baştan sona akış (yeni maç, kayıt, yükleme, dosya kontrolü, deneme analizi, sunucudan klip, karar, rapor). İlk iki koşu kırmızıydı ve uygulamada gerçek bir gezinme hatasını gösterdi. |
 | Gerçek telefonda deneme | **Yok.** |
