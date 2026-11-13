@@ -137,3 +137,43 @@ Bir test koşmadıysa raporda "koşmadı" yazar.
 Sıra: sözleşme → tasarım sistemi → gezinme ve ekran 01–05 → arka uç iş API'si → ekran 06–10.
 
 İlk geliştirilen modül tasarım sistemidir (`ui/theme`, `ui/components`). Gerekçe: On ekranın tamamı ona bağlıdır, yanlış bir token kararı her ekranı yeniden yazdırır ve veri katmanı zaten hazırdır. Sözleşme (`API_V1.md`) aynı anda yazılır, çünkü ekran 07–10 ile arka uç ona göre paralel gelişir.
+
+## 10. Uygulama sonucu ve plandan sapmalar
+
+Ekip bu bölümü 13 Kasım 2026'da, kodu yazdıktan sonra ekledi. Üstteki bölümler planı anlatır. Bu bölüm planla kod arasındaki farkı anlatır.
+
+### Plandan sapan mimari kararlar
+
+| Planda | Kodda | Neden |
+|---|---|---|
+| `AppViewModel` ve `AnalysisViewModel` | Tek `AppViewModel` | İş, kartlar ve rapor aynı maç kaydına bağlıdır. İkinci ViewModel durumu ikiye bölerdi (ADR-0107). |
+| `AppContainer`, `AnalysisRepository` | Yok | `AppViewModel` üç veri sınıfını kendisi kurar. Tek kullanıcısı olan bir ara katman yalnız dosya ekler. |
+| `HeroCard`, `SetChips`, `ProvenanceBadge` bileşenleri | Ana ekrandaki yeni maç kartı, `ScoreHeader` içindeki set satırı, yanıt satırındaki "Senin kararın" yazısı | Her biri tek ekranda kullanılır. Ayrı bileşen gerekmedi. |
+| Sistem kamerası yedek yol | Yok | Uygulama içi kayıt ve galeri seçimi yeter. Sistem kamerası yolu `FileProvider` ve ek izin akışı isterdi. |
+
+### Ekran görüntülerine bakarak eklenen sapmalar
+
+| Konu | Uygulamada | Neden |
+|---|---|---|
+| Kayıt ekranı | Yatay düzen ve dikey tutuşta "telefonu çevir" uyarısı | Çekim rehberi yatay çekim ister. Görsel dikey ekranı gösterir. |
+| Hizalama köşeleri | Köşeler düğmelerin arasındaki boş alanda durur | İlk çizimde köşeler geri ve kamera değiştir düğmelerinin altında kalıyordu. |
+| Doğrulama yanıtları | İki takım yan yana, diğer iki yanıt alt satırda | 320 dp telefonda dört satırlık liste klibin altında ekran dışına taşıyordu. |
+| Oyuncu tablosu | Dar ekranda ve büyük yazıda ad sayıların üstüne geçer | Ad sütunu 320 dp genişlikte çöküyordu. |
+| Oyuncu sayıları | Doğrulama bitene kadar `5+` | Sayı hâlâ artabilir. Kesin görünen bir `0` eksik ölçümü sıfır gibi gösterirdi. |
+| Sütun adları | "Hücum" ve "As" | Sütun plaseyi de sayar. "Servis" sütunu servis sayısını değil ası sayar. |
+| DEMO bandı | Doğrulama ve oyuncu ekranında tek satır | Tam açıklama yanıtları ekranın dışına itiyordu. Durum ve rapor ekranı tam açıklamayı taşır. |
+| Profil | "Bu sürümde neler var" listesi | "Çalışıyor" etiketi cihazda denenmemiş özellik için fazla iddialıydı. |
+| Rapor | Kararsız ralli uyarısı | Sunucu set skorunu kazananı belli olmayan ilk rallide durdurur. Ekran bunu söyler. |
+
+### Gerçekleşen test katmanları
+
+| Katman | Test | Nerede çalıştı |
+|---|---|---|
+| Veri | `UploadEngineTest`, `LocalStoreTest` | Yerel ve CI |
+| Görsel | `ScreenshotTest`: açık, koyu, 320 dp, 1,5 kat yazı, yatay kayıt | Yerel ve CI |
+| Gezinme | `JourneyTest`: gerçek etkinlik, gezinme grafiği, ViewModel ve yerel kayıt | Yerel ve CI |
+| İstemci ve sunucu | `BackendE2eTest` | Yerel ve CI |
+| Ekranlar ve sunucu | `AppFlowE2eTest`: analiz, kararlar, rapor, oyuncu tablosu | Yerel ve CI |
+| Cihaz | `RecordingDeviceTest`, `DeviceFlowE2eTest` | Yalnız CI emülatörü. İlk koşu PR #4'te sürüyor. |
+
+Geliştirici görsel hedefle karşılaştırmayı elle yaptı: Her ekran görüntüsüne baktı ve görüntüyü tasarım panosuyla yan yana koydu. Depoda piksel karşılaştırması yapan bir test yok, çünkü tasarım paketi Figma dosyası içermez ve görseller 234 × 455 pikseldir.
