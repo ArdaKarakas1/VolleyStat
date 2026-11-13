@@ -17,6 +17,7 @@
     <string name="action_retry">Yeniden Dene</string>
     <string name="action_add">Ekle</string>
     <string name="action_delete">Sil</string>
+    <string name="action_ok">Tamam</string>
     <string name="team_home">Ev sahibi takım</string>
     <string name="team_away">Misafir takım</string>
     <string name="state_not_yet">Henüz yok</string>
@@ -231,9 +232,11 @@
     <string name="upload_error_checksum">Sunucuya ulaşan dosya telefondaki dosyayla iki kez uyuşmadı.</string>
     <string name="upload_busy">Uygulama aynı anda tek video yükler. Öteki yükleme bitince bu yüklemeyi başlat.</string>
     <string name="upload_blocked">Uygulama bu videoyu yükleyemez. Yüklemeyi iptal et ve başka bir videoyla yeni maç başlat.</string>
-    <string name="removal_failed">Uygulama sunucuya ulaşamadı. Sunucudaki dosya ve maç kaydı duruyor.</string>
+    <string name="removal_unconfirmed">Uygulama bu maçın silindiğini sunucudan doğrulayamadı. Sunucunun açık olduğunu denetle ve yeniden dene.</string>
+    <string name="removal_verifying">Sunucu bu maçın videosunu hâlâ denetliyor ve maçı şimdi silmiyor. Denetim bitince yeniden dene.</string>
+    <string name="removal_refused">Sunucu bu maçı silmedi ve sunucudaki kayıtlar duruyor. Sunucunun güncel sürümle çalıştığını denetle ve yeniden dene.</string>
     <string name="cancel_title">Yüklemeyi iptal edeyim mi?</string>
-    <string name="cancel_body">Sunucu aldığı kısmı siler ve uygulama bu maçı listeden kaldırır. Video telefonunda kalır.</string>
+    <string name="cancel_body">Sunucu aldığı kısmı ve maç bilgilerini siler. Uygulama bu maçı listeden kaldırır. Video telefonunda kalır.</string>
     <string name="cancel_confirm">İptal Et</string>
     <string name="stage_upload">Video yükleme</string>
     <string name="stage_upload_done">Sunucu videoyu aldı.</string>
@@ -273,7 +276,7 @@
     <string name="action_open_report">Raporu Aç</string>
     <string name="action_delete_match">Maçı sil</string>
     <string name="delete_title">Bu maçı sileyim mi?</string>
-    <string name="delete_body_uploaded">Uygulama maç kaydını, sunucudaki videoyu ve analiz sonuçlarını siler. Telefonundaki video dosyası kalır.</string>
+    <string name="delete_body_uploaded">Uygulama maç kaydını siler. Sunucu bu maçın videosunu, analiz sonuçlarını, verdiğin kararları ve maç bilgilerini siler. Telefonundaki video dosyası kalır.</string>
     <string name="delete_body_local">Uygulama maç kaydını siler. Telefonundaki video dosyası kalır.</string>
     <string name="warn_low_resolution">Çözünürlük 720p altında. Top ve forma numaraları net görünmez.</string>
     <string name="warn_low_frame_rate">Kare hızı düşük. Hızlı toplar karelerin arasında kaybolabilir.</string>
@@ -325,6 +328,12 @@
     <string name="review_no_job">Sunucu bu maç için doğrulanacak bir analiz tutmuyor.</string>
     <string name="review_loading">Uygulama kartları alıyor</string>
     <string name="review_your_answer">Senin kararın</string>
+    <string name="definitions_open">Sayı türlerinin tanımlarını aç</string>
+    <string name="definitions_title">Sayı Türleri</string>
+    <string name="define_attack">Takım sayıyı hücum vuruşuyla doğrudan alır. Top bloğa çarpıp dışarı çıkarsa ya da rakip savunduğu topu oyunda tutamazsa sayı yine hücum sayısıdır.</string>
+    <string name="define_block">Takım sayıyı blokla doğrudan alır. Rakip, bloktan dönen topu oyunda tutamaz.</string>
+    <string name="define_ace">Takım sayıyı servisle doğrudan alır. Rakip servisi karşılayamaz ya da karşıladığı topu oyunda tutamaz.</string>
+    <string name="define_error">Sayı servisle, hücumla ya da blokla gelmediyse rakip hatasıdır. Rakip servisini, pasını ya da hücum vuruşunu dışarı veya fileye atar ya da kural hatası yapar. Topla oynarken fileye değmek, dört vuruş, çift vuruş ve taşıma kural hatasıdır. Rakip çift vuruşu ya da taşımayı servisi karşılarken ya da hücumu savunurken yaparsa sayı servis ası ya da hücum sayısıdır.</string>
 
     <!-- 09 Match report -->
     <string name="report_title">Maç Sonucu</string>
@@ -392,10 +401,13 @@
     <string name="feature_review">Ralli doğrulama ve rapor</string>
     <string name="feature_analysis">Otomatik analiz modeli</string>
     <string name="profile_privacy">Gizlilik</string>
-    <string name="privacy_server">Video yalnızca geliştirme bilgisayarındaki yerel sunucuya gider.</string>
+    <string name="privacy_server">Uygulama videoyu, takım adlarını ve maç bilgilerini yalnızca geliştirme bilgisayarındaki yerel sunucuya gönderir.</string>
     <string name="privacy_picker">Uygulama yalnızca senin seçtiğin videoyu okur ve depolama izni istemez.</string>
     <string name="privacy_training">Uygulama videoyu model eğitimi için göndermez.</string>
-    <string name="privacy_accounts">Yerel sunucuda hesap sistemi yok. Gerçek oyuncuların videolarını ve telifli yayınları yükleme.</string>
+    <string name="privacy_accounts">Sunucuda hesap sistemi yok. Sunucunun çalıştığı bilgisayarı kullanan herkes yüklediğin videoları görebilir. Gerçek oyuncuların videolarını ve telifli yayınları yükleme.</string>
+    <string name="privacy_retention">Sunucu videoyu ve maç bilgilerini sen maçı silene kadar saklar.</string>
+    <string name="privacy_delete">Sen maçı silince sunucu o maçın videosunu, analiz sonuçlarını, verdiğin kararları ve maç bilgilerini siler. Telefonundaki video dosyası kalır.</string>
+    <string name="privacy_faces">Uygulama ve sunucu yüz tanımaz. Rapor bir sayıyı oyuncuya yalnızca sen forma numarasını seçince yazar.</string>
     <string name="profile_server">Sunucu bağlantısı</string>
     <string name="server_emulator">Emülatör</string>
     <string name="server_emulator_body">Uygulama bilgisayardaki sunucuya 10.0.2.2:8000 adresinden bağlanır.</string>

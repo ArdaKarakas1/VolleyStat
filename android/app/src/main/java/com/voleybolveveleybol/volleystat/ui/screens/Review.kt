@@ -20,6 +20,7 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -30,6 +31,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -48,6 +53,7 @@ import com.voleybolveveleybol.volleystat.model.Team
 import com.voleybolveveleybol.volleystat.ui.components.DemoBanner
 import com.voleybolveveleybol.volleystat.ui.components.EmptyState
 import com.voleybolveveleybol.volleystat.ui.components.Notice
+import com.voleybolveveleybol.volleystat.ui.components.PointTypesDialog
 import com.voleybolveveleybol.volleystat.ui.components.PrimaryButton
 import com.voleybolveveleybol.volleystat.ui.components.SecondaryButton
 import com.voleybolveveleybol.volleystat.ui.components.TeamBadge
@@ -184,14 +190,24 @@ fun ReviewScreen(
                     else -> Unit
                 }
 
-                Text(
-                    stringResource(when (card.questionType) {
-                        ReviewCard.TERMINAL_ACTION -> R.string.review_question_action
-                        ReviewCard.SCORER -> R.string.review_question_scorer
-                        else -> R.string.review_question_winner
-                    }),
-                    style = MaterialTheme.typography.titleMedium,
-                )
+                var pointTypesOpen by rememberSaveable { mutableStateOf(false) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        stringResource(when (card.questionType) {
+                            ReviewCard.TERMINAL_ACTION -> R.string.review_question_action
+                            ReviewCard.SCORER -> R.string.review_question_scorer
+                            else -> R.string.review_question_winner
+                        }),
+                        style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f),
+                    )
+                    // The four answers are terms of the sport. Their definitions are one tap away, off the card.
+                    if (card.questionType == ReviewCard.TERMINAL_ACTION) {
+                        IconButton(onClick = { pointTypesOpen = true }) {
+                            Icon(painterResource(R.drawable.ic_info), contentDescription = stringResource(R.string.definitions_open), tint = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                }
+                if (pointTypesOpen) PointTypesDialog { pointTypesOpen = false }
                 // Only a real suggestion gets a line. It is a hint; the app never selects it for the user.
                 if (card.questionType == ReviewCard.RALLY_WINNER && card.suggestedValue != null) {
                     Text(stringResource(R.string.review_hint, optionLabel(card.suggestedValue, match)), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

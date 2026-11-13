@@ -5,6 +5,7 @@ import com.voleybolveveleybol.volleystat.model.VideoCheck
 import java.io.IOException
 import java.io.InputStream
 import java.security.MessageDigest
+import java.util.UUID
 
 /** The bytes of the chosen video. [open] must return a fresh stream positioned at byte 0. */
 class VideoBytes(val sizeBytes: Long, val open: () -> InputStream)
@@ -18,9 +19,10 @@ class UploadException(val failure: UploadFailure, val serverCode: String? = null
 class UploadCancelled : IOException("cancelled")
 
 /**
- * Sends one video with the resumable protocol. Every step that the server confirmed is
- * reported through [onSession], so a later run with the saved session continues instead of
- * creating a second match or starting again from byte 0.
+ * Sends one video with the resumable protocol. The id of the match is chosen here and reported
+ * through [onSession] before the first request; every later step is reported once the server
+ * confirmed it. A later run with the saved session continues instead of creating a second
+ * match or starting again from byte 0.
  */
 class UploadEngine(private val api: ApiClient) {
 
@@ -61,13 +63,15 @@ class UploadEngine(private val api: ApiClient) {
                 save(session.copy(sha256 = hash(bytes, onProgress, ::checkCancelled)))
             }
             if (session.serverMatchId == null) {
-                save(session.copy(serverMatchId = api.createMatch(match)))
+                // The phone picks the id and saves it before the server hears of it. Whatever happens
+                // to the first request, the phone can name the match: to create it again or to delete it.
+                save(session.copy(serverMatchId = UUID.randomUUID().toString()))
             }
 
             var checksumRetries = 0
             while (true) {
                 checkCancelled()
-                var offset = openOrResume(session, fileName, mimeType, bytes.sizeBytes, ::save)?.let { return it.result } ?: session.sentBytes
+                var offset = openOrResume(session, match, fileName, mimeType, bytes.sizeBytes, ::save)?.let { return it.result } ?: session.sentBytes
                 offset = send(session.uploadId!!, offset, bytes, onProgress, ::checkCancelled) { sent -> save(session.copy(sentBytes = sent)) }
                 onProgress(UploadPhase.VERIFYING, offset, bytes.sizeBytes)
                 try {
@@ -104,6 +108,7 @@ class UploadEngine(private val api: ApiClient) {
     /** Creates the upload on the server or adopts the saved one. Returns the video if it already exists. */
     private fun openOrResume(
         session: UploadSession,
+        match: MatchInfo,
         fileName: String,
         mimeType: String,
         sizeBytes: Long,
@@ -125,7 +130,9 @@ class UploadEngine(private val api: ApiClient) {
                 }
             }
         }
-        // No usable upload on the server (first run, aborted, or the server was reset).
+        // No usable upload on the server (first run, aborted, or the server was reset). The match
+        // comes first; the call changes nothing when the server already has it.
+        api.putMatch(session.serverMatchId!!, match)
         val ticket = api.createUpload(session.serverMatchId!!, fileName, sizeBytes, mimeType, session.sha256!!)
         save(session.copy(uploadId = ticket.uploadId, sentBytes = ticket.nextOffset))
         return null

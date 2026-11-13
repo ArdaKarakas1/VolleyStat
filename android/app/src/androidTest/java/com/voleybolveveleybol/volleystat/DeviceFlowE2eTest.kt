@@ -61,7 +61,7 @@ class DeviceFlowE2eTest {
         }
 
         override fun after() {
-            runCatching { storedMatch()?.check?.videoId?.let(api::deleteVideo) }
+            runCatching { storedMatch()?.session?.serverMatchId?.let(api::deleteMatch) }
         }
     }
     @get:Rule(order = 2) val app = createAndroidComposeRule<MainActivity>()

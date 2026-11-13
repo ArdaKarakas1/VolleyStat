@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import com.voleybolveveleybol.volleystat.AnalysisUi
 import com.voleybolveveleybol.volleystat.JobLoad
 import com.voleybolveveleybol.volleystat.R
+import com.voleybolveveleybol.volleystat.RemovalFailure
 import com.voleybolveveleybol.volleystat.UploadProgress
 import com.voleybolveveleybol.volleystat.data.UploadFailure
 import com.voleybolveveleybol.volleystat.data.UploadPhase
@@ -91,7 +92,7 @@ fun StatusScreen(
     match: MatchRecord,
     upload: UploadProgress?,
     analysis: AnalysisUi,
-    removalFailed: Boolean,
+    removalFailure: RemovalFailure?,
     onPause: () -> Unit,
     onResume: () -> Unit,
     onRemove: () -> Unit,
@@ -293,7 +294,16 @@ fun StatusScreen(
             Notice(what + kept + next, if (deadEnd) Tone.NEGATIVE else Tone.CAUTION)
         }
         if (busyElsewhere) Notice(stringResource(R.string.upload_busy), Tone.NEUTRAL)
-        if (removalFailed) Notice(stringResource(R.string.removal_failed), Tone.NEGATIVE)
+        if (removalFailure != null) {
+            Notice(
+                stringResource(when (removalFailure) {
+                    RemovalFailure.UNCONFIRMED -> R.string.removal_unconfirmed
+                    RemovalFailure.VERIFYING -> R.string.removal_verifying
+                    RemovalFailure.REFUSED -> R.string.removal_refused
+                }),
+                if (removalFailure == RemovalFailure.VERIFYING) Tone.CAUTION else Tone.NEGATIVE,
+            )
+        }
 
         VsCard {
             val fileOk = check?.status == VideoCheck.READY

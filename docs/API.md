@@ -7,11 +7,15 @@ Makinece okunur sözleşme: [openapi-local-dev.json](openapi-local-dev.json). Do
 
 Sürüm 0.4 analiz işlerini, rallileri, inceleme kartlarını, kanıt videosunu ve maç raporunu ekler. Bu uçların sözleşmesi [API_V1.md](API_V1.md) belgesindedir. Bu belge maç, yükleme ve video uçlarını anlatır.
 
+Sürüm 0.4.1 `PUT /matches/{id}` ve `DELETE /matches/{id}` uçlarını ekler. Daha eski bir sunucu bu iki çağrıya `405 METHOD_NOT_ALLOWED` döner. Android uygulamasının 0.4.2 sürümü bu iki ucu kullanır ve bu yüzden sunucunun 0.4.1 sürümünü ister.
+
 | Uç | Görev | Başarı | Hatalar |
 |---|---|---|---|
 | `GET /health` | Sunucu, model ve ffprobe durumu, boyut sınırları | 200 | |
-| `POST /matches` | İki farklı takım adıyla maç açar | 201 | 422 |
+| `POST /matches` | İki farklı takım adıyla maç açar. Sunucu kimliği üretir | 201 | 422 |
+| `PUT /matches/{id}` | Maçı istemcinin seçtiği kimlikle açar ya da o kimlikteki maçı döner | 201, 200 | 422 |
 | `GET /matches/{id}` | Maçı okur | 200 | 404 |
+| `DELETE /matches/{id}` | Maçı ve sunucunun o maç için tuttuğu her şeyi siler | 204 | 404, 409 |
 | `POST /matches/{id}/uploads` | Yükleme oturumu açar | 201 | 404, 422 |
 | `GET /uploads/{id}` | Sunucudaki offset ve durumu verir (devam için) | 200 | 404 |
 | `PUT /uploads/{id}/chunks?offset=n` | En çok 4 MiB'lık parça yükler | 200 | 404, 409, 413 |
@@ -20,8 +24,16 @@ Sürüm 0.4 analiz işlerini, rallileri, inceleme kartlarını, kanıt videosunu
 | `GET /videos/{id}` | Video durumu, hash ve kalite raporu | 200 | 404 |
 | `GET /videos/{id}/quality` | Yalnız kalite raporu | 200 | 404 |
 | `POST /videos/{id}/quality` | Doğrulanamamış videonun dosya kontrolünü yeniden çalıştırır | 200 | 404, 409 |
-| `DELETE /videos/{id}` | Videoyu, kaydını ve o videonun analiz işlerini siler | 204 | 404 |
+| `DELETE /videos/{id}` | Videoyu, kaydını ve o videonun analiz işlerini siler. Maç kaydı kalır | 204 | 404 |
 | `POST /videos/{id}/analyses` | Analiz işi açar. Analizör seçili değilse bunu bildirir | 202 | 404, 409, **503** |
+
+## Maç kimliği
+
+`PUT /matches/{id}` gövdesi `POST /matches` gövdesiyle aynıdır. Kimlik küçük harfli ve tireli bir UUID olmalıdır. Sunucu başka bir biçimi `422 MATCH_ID_INVALID` ile reddeder.
+
+- Sunucu o kimlikte maç yoksa maçı açar ve `201` döner. Maç varsa sunucu maçı değiştirmeden `200` ile döner. İstemci aynı çağrıyı güvenle yineleyebilir.
+- Android uygulaması kimliği kendisi üretir ve ilk isteği göndermeden önce telefona kaydeder. İlk isteğin yanıtı kaybolsa da uygulama maçı adresleyebilir: Uygulama aynı kimlikle çağrıyı yineler ya da `DELETE /matches/{id}` ile maçı siler.
+- `POST /matches` kimliği yalnız yanıtta verir. Yanıtı kaybolan bir `POST` sunucuda kimsenin adresleyemediği bir maç bırakır. Yeni istemciler bu yüzden `PUT` kullanır.
 
 ## Yükleme
 
@@ -75,6 +87,26 @@ Uyarılar videoyu reddetmez, daha düşük bir kalite katmanına koyar: `LOW_RES
 
 `sceneChecks` altındaki her alan `NOT_MEASURED` döner. Sunucu sahanın, topun ya da kamera sabitliğinin görünürlüğünü ölçmez. Bu alanlar ölçüm eklenene kadar değer taşımaz.
 
+## Silme ve saklama
+
+Sunucu aldığı veriyi bir silme çağrısı gelene kadar saklar. Sunucuda süreye bağlı otomatik silme yoktur.
+
+| Çağrı | Sunucunun sildiği | Sunucuda kalan |
+|---|---|---|
+| `DELETE /matches/{id}` | Maç kaydı (takım adları, maç adı, tarih, salon, tür), maçın bütün yükleme kayıtları ve baytları, videolar, analiz işleri, ralliler, inceleme kartları, kararlar ve istek anahtarları | Hiçbir şey |
+| `DELETE /videos/{id}` | Video kaydı ve baytları, o videonun analiz işleri, rallileri, kartları ve kararları | Maç kaydı ve `DELETED` durumundaki yükleme kaydı |
+| `DELETE /uploads/{id}` | Bitmemiş yüklemenin baytları | Maç kaydı ve `ABORTED` durumundaki yükleme kaydı |
+
+`DELETE /matches/{id}` kuralları:
+
+- Sunucu bütün satırları tek veritabanı işleminde siler. Sunucu dosyaları işlemi onaylamadan hemen önce kaldırır, çünkü silme geride dosya bırakmamalıdır. Onay başarısız olursa satırlar dosyaları olmadan geri gelir ve istemci aynı çağrıyı yineleyince sunucu onları da siler.
+- Sunucu silinen satırların üzerine veritabanı dosyasında sıfır yazar (`PRAGMA secure_delete`) ve silmeden sonra veritabanı günlüğünü boşaltır. Silinen takım adları ve kararlar veritabanı dosyalarından okunamaz. O anda başka bir istek veritabanını okuyorsa günlük bir sonraki silmede ya da son bağlantı kapanınca boşalır.
+- Sunucu maçın bir yüklemesini doğruluyorsa `409 UPLOAD_FINALIZING` döner ve hiçbir şeyi silmez. İstemci doğrulama bitince yeniden dener. Sunucu 15 dakikadan eski bir doğrulamayı terk edilmiş sayar ve o durumda maçı siler.
+- Sunucu çalışan analiz işini durdurur. Sunucu iş satırını sildiği için iş hiçbir şey yazamaz.
+- Silinen maç için `GET /matches/{id}` ve ikinci bir `DELETE /matches/{id}` çağrısı `404 MATCH_NOT_FOUND` döner.
+- Android uygulaması "Maçı sil" ve "Yüklemeyi iptal et" işlerinde yalnız bu ucu çağırır. Uygulama maçı telefondan yalnız `204` ya da `404 MATCH_NOT_FOUND` yanıtından sonra kaldırır. Uygulama başka her yanıtı ve yanıtsız kalan çağrıyı silinmemiş sayar ve nedenini ekrana yazar.
+- Sunucu 0.2 önizlemesinin eski dosya düzenindeki baytları da siler (`videos/<id>.bin` ve `uploads/<id>.part`).
+
 ## Analiz
 
 `POST /videos/{id}/analyses`:
@@ -94,7 +126,9 @@ Bütün hatalar bu zarfla döner. Tanımsız adres `NOT_FOUND`, yanlış yöntem
 ## Bilinen sınırlar
 
 - Tek süreç, tek bilgisayar. Eşzamanlı çok süreçli kullanım desteklenmez.
-- Terk edilen yüklemeler kendiliğinden silinmez. İstemci `DELETE /uploads/{id}` çağırır.
+- Sunucu terk edilen yüklemeleri kendiliğinden silmez. İstemci `DELETE /uploads/{id}` ya da `DELETE /matches/{id}` çağırır.
+- `POST /matches` kullanan bir istemci yanıtı kaybederse sunucuda adresleyemediği bir maç bırakır. `PUT /matches/{id}` bu boşluğu kapatır ve Android uygulaması yalnız onu kullanır.
+- Sunucu silinen dosyanın diskteki bloklarının üzerine yazmaz. Dosya sistemi o blokları yeniden kullanana kadar bir disk kurtarma aracı video baytlarını bulabilir.
 - Dosya kontrolü videonun tamamını çözmez. Ortasındaki bozuk kareleri yakalamaz.
 - Sunucu klip kesmez. `GET /videos/{id}/content` videonun tamamını `Range` desteğiyle sunar ve istemci klip aralığını kendisi oynatır.
 - Nihai ürün sözleşmesi bundan geniştir. Fark [GAP_ANALYSIS.md](GAP_ANALYSIS.md) içindedir.

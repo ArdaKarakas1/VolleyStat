@@ -22,6 +22,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -36,7 +37,8 @@ import java.util.concurrent.TimeUnit
 
 /**
  * The view model against a scripted stand-in server: what it does with slow, lost and refused
- * answers. Every case here was a defect an independent review found in version 0.4.0.
+ * answers. The analysis cases were defects an independent review found in version 0.4.0; the
+ * removal cases keep the app from forgetting a match the server still holds.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
@@ -46,13 +48,16 @@ class AppViewModelTest {
     /** "METHOD path" of every request, in the order the server saw them. */
     private val requests = CopyOnWriteArrayList<String>()
     private val script = ConcurrentHashMap<String, (RecordedRequest) -> MockResponse>()
+    /** Answers for addresses that carry an id the phone chose itself. */
+    private val patterns = CopyOnWriteArrayList<Pair<Regex, (RecordedRequest) -> MockResponse>>()
 
     @Before fun start() {
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
                 val key = "${request.method} ${request.requestUrl!!.encodedPath.removePrefix("/v1")}"
                 requests += key
-                return script[key]?.invoke(request) ?: refuse(404, "NOT_FOUND")
+                val answer = script[key] ?: patterns.firstOrNull { it.first.matches(key) }?.second
+                return answer?.invoke(request) ?: refuse(404, "NOT_FOUND")
             }
         }
         server.start()
@@ -61,6 +66,7 @@ class AppViewModelTest {
     @After fun stop() = server.shutdown()
 
     private fun on(request: String, answer: (RecordedRequest) -> MockResponse) { script[request] = answer }
+    private fun onMatching(request: String, answer: (RecordedRequest) -> MockResponse) { patterns += Regex(request) to answer }
     private fun ok(json: JSONObject) = MockResponse().setResponseCode(200).setHeader("Content-Type", "application/json").setBody(json.toString())
     private fun refuse(status: Int, code: String) = MockResponse().setResponseCode(status).setHeader("Content-Type", "application/json")
         .setBody(JSONObject().put("error", JSONObject().put("code", code).put("message", code).put("details", JSONObject())).toString())
@@ -228,5 +234,112 @@ class AppViewModelTest {
         vm.discardDraft()
         vm.deleteRecording(ofDraft.path)
         assertFalse(ofDraft.exists())
+    }
+
+    @Test fun removingAMatchDeletesTheWholeMatchOnTheServerAndForgetsItOnlyThen() {
+        on("DELETE /matches/server-A") { MockResponse().setResponseCode(204) }
+        val vm = viewModel(StoredState(matches = listOf(accepted("A"), accepted("B"))))
+        var done = false
+        vm.removeMatch("A") { done = true }
+        await("the removal") { done }
+        // One request covers the video, the analyses, the decisions and the match record itself.
+        assertEquals(listOf("DELETE /matches/server-A"), requests.toList())
+        assertEquals(listOf("B"), vm.state.value.matches.map { it.localId })
+        assertNull(vm.state.value.removalProblem)
+    }
+
+    @Test fun removingAMatchWithAnUnfinishedUploadAlsoDeletesTheWholeMatch() {
+        on("DELETE /matches/server-U") { MockResponse().setResponseCode(204) }
+        val uploading = MatchRecord("U", "Ev", "Misafir", 1L, video("/none/U.mp4"), session = UploadSession("sha", "server-U", "upload-U", 4))
+        val vm = viewModel(StoredState(matches = listOf(uploading)))
+        var done = false
+        vm.removeMatch("U") { done = true }
+        await("the removal") { done }
+        assertEquals(listOf("DELETE /matches/server-U"), requests.toList())
+        assertTrue(vm.state.value.matches.isEmpty())
+    }
+
+    @Test fun aMatchTheServerAlreadyForgotIsRemovedFromThePhone() {
+        on("DELETE /matches/server-A") { refuse(404, "MATCH_NOT_FOUND") }
+        val vm = viewModel(StoredState(matches = listOf(accepted("A"))))
+        var done = false
+        vm.removeMatch("A") { done = true }
+        await("the removal") { done }
+        assertTrue(vm.state.value.matches.isEmpty())
+        // The answer that counts is the one of the match route, not any 404 the server happens to give.
+        assertEquals(listOf("DELETE /matches/server-A"), requests.toList())
+    }
+
+    @Test fun aMatchThatNeverReachedTheServerIsRemovedWithoutARequest() {
+        val vm = viewModel(StoredState(matches = listOf(MatchRecord("L", "Ev", "Misafir", 1L, video("/none/L.mp4")))))
+        var done = false
+        vm.removeMatch("L") { done = true }
+        await("the removal") { done }
+        assertTrue(vm.state.value.matches.isEmpty())
+        assertTrue(requests.isEmpty())
+    }
+
+    @Test fun aMatchTheServerDidNotDeleteStaysOnThePhoneAndTheAppSaysWhy() {
+        val vm = viewModel(StoredState(matches = listOf(accepted("A"))))
+        val html = { MockResponse().setResponseCode(200).setHeader("Content-Type", "text/html").setBody("<html>another service</html>") }
+        // None of these answers is the match route saying "deleted": a server that is still verifying
+        // the upload, an older server without the route, an address that answers 404 to everything,
+        // and another service on the port that answers 200 with a page or with nothing at all.
+        val answers = listOf(
+            { refuse(409, "UPLOAD_FINALIZING") } to RemovalFailure.VERIFYING,
+            { refuse(405, "METHOD_NOT_ALLOWED") } to RemovalFailure.REFUSED,
+            { refuse(404, "NOT_FOUND") } to RemovalFailure.REFUSED,
+            html to RemovalFailure.REFUSED,
+            { MockResponse().setResponseCode(200) } to RemovalFailure.REFUSED,
+        )
+        answers.forEach { (answer, failure) ->
+            on("DELETE /matches/server-A") { answer() }
+            vm.removeMatch("A") { fail("the app forgot a match the server still holds") }
+            await("the refusal") { vm.state.value.removalProblem != null }
+            assertEquals(RemovalProblem("A", failure), vm.state.value.removalProblem)
+            assertEquals(listOf("A"), vm.state.value.matches.map { it.localId })
+            vm.clearRemovalFailure()
+        }
+        assertEquals(List(answers.size) { "DELETE /matches/server-A" }, requests.toList())
+    }
+
+    @Test fun aMatchStaysOnThePhoneWhenTheServerCanNotBeReached() {
+        val vm = viewModel(StoredState(matches = listOf(accepted("A"))))
+        vm.baseUrlOverride = "http://127.0.0.1:1/v1"  // nothing listens there
+        vm.removeMatch("A") { fail("the app forgot a match the server still holds") }
+        await("the failure") { vm.state.value.removalProblem != null }
+        // The app can not know what the server did, so it does not say that the records are still there.
+        assertEquals(RemovalProblem("A", RemovalFailure.UNCONFIRMED), vm.state.value.removalProblem)
+        assertEquals(listOf("A"), vm.state.value.matches.map { it.localId })
+    }
+
+    @Test fun removingAMatchWhileItsUploadRunsStopsTheUploadAndThenDeletesTheMatchThePhoneCreated() {
+        val file = File(File(context.filesDir, "recordings").apply { mkdirs() }, "kayit-9.mp4").apply { writeBytes(ByteArray(10) { it.toByte() }) }
+        val chunkArrived = CountDownLatch(1)
+        val answerChunk = CountDownLatch(1)
+        on("GET /health") { ok(JSONObject().put("status", "ok").put("mediaProbe", "available").put("maxVideoBytes", 1_000_000)) }
+        onMatching("PUT /matches/[0-9a-f-]{36}") { MockResponse().setResponseCode(201).setHeader("Content-Type", "application/json").setBody("{}") }
+        onMatching("POST /matches/[0-9a-f-]{36}/uploads") { ok(JSONObject().put("uploadId", "upload-1").put("nextOffset", 0).put("chunkSizeBytes", 4 * 1024 * 1024)) }
+        on("PUT /uploads/upload-1/chunks") {
+            chunkArrived.countDown()
+            answerChunk.await(10, TimeUnit.SECONDS)
+            ok(JSONObject().put("nextOffset", 10))
+        }
+        onMatching("DELETE /matches/[0-9a-f-]{36}") { MockResponse().setResponseCode(204) }
+        val vm = viewModel(StoredState(matches = listOf(MatchRecord("U", "Ev", "Misafir", 1L, video(file.path)))))
+
+        vm.resumeUpload("U")
+        await("the first chunk on its way") { chunkArrived.count == 0L }
+        var done = false
+        vm.removeMatch("U") { done = true }
+        settle()
+        assertFalse("the app deleted while the upload was still sending", requests.any { it.startsWith("DELETE") })
+        answerChunk.countDown()
+        await("the removal") { done }
+
+        val created = requests.single { it.startsWith("PUT /matches/") }.removePrefix("PUT /matches/")
+        assertEquals("DELETE /matches/$created", requests.last())
+        assertFalse(requests.any { it.endsWith("/complete") })
+        assertTrue(vm.state.value.matches.isEmpty())
     }
 }

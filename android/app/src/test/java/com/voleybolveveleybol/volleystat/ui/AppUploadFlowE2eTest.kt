@@ -70,7 +70,7 @@ class AppUploadFlowE2eTest {
         }
 
         override fun after() {
-            runCatching { LocalStore(storeFile).load().matches.singleOrNull()?.check?.videoId?.let { ApiClient(url!!).deleteVideo(it) } }
+            runCatching { LocalStore(storeFile).load().matches.singleOrNull()?.session?.serverMatchId?.let { ApiClient(url!!).deleteMatch(it) } }
         }
     }
     @get:Rule(order = 1) val app = createAndroidComposeRule<MainActivity>()

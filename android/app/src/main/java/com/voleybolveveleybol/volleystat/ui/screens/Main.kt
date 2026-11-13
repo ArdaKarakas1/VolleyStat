@@ -342,11 +342,15 @@ fun ProfileScreen(
         SectionTitle(stringResource(R.string.profile_privacy))
         VsCard {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                // In the order a user asks: what leaves the phone, who sees it, how long it stays, how it goes away.
                 PrivacyLine(stringResource(R.string.privacy_server), R.drawable.ic_smartphone)
-                PrivacyLine(stringResource(R.string.privacy_picker), R.drawable.ic_photo_library)
-                PrivacyLine(stringResource(R.string.privacy_training), R.drawable.ic_shield)
                 PrivacyLine(stringResource(R.string.roster_privacy), R.drawable.ic_groups)
                 PrivacyLine(stringResource(R.string.privacy_accounts), R.drawable.ic_lock)
+                PrivacyLine(stringResource(R.string.privacy_retention), R.drawable.ic_schedule)
+                PrivacyLine(stringResource(R.string.privacy_delete), R.drawable.ic_delete)
+                PrivacyLine(stringResource(R.string.privacy_faces), R.drawable.ic_person)
+                PrivacyLine(stringResource(R.string.privacy_training), R.drawable.ic_shield)
+                PrivacyLine(stringResource(R.string.privacy_picker), R.drawable.ic_photo_library)
             }
         }
 
