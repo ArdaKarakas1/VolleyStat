@@ -35,6 +35,14 @@ pytest -q          # başka bir terminalde
 
 Sunucuda hesap sistemi ve TLS yoktur. İnternete açmayın. Yalnızca sentetik ya da kullanım izni açık test videoları yükleyin.
 
+Sunucu varsayılan olarak analizör olmadan başlar ve analiz isteğine `503 MODEL_NOT_CONFIGURED` yanıtını verir. Analiz, inceleme ve rapor ekranlarını denemek için sunucuyu demo analizörle başlatın:
+
+```bash
+python -m app --analyzer demo      # ya da: VOLLEYSTAT_ANALYZER=demo python -m app
+```
+
+Demo analizör videonun görüntüsüne bakmaz. Demo analizör ralli aralıklarını yalnızca videonun süresinden uydurur, kazanan ve güven puanı önermez. Sunucu demo analizörün her işini ve raporunu `mock: true` ve `kind: "MOCK"` ile işaretler. Demo çıktısı uydurmadır. Bu çıktı gerçek bir analizin ya da maçın sonucu değildir.
+
 Test klibi üretmek için:
 
 ```bash
