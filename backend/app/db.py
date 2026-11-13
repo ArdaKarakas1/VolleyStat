@@ -41,7 +41,6 @@ CREATE TABLE IF NOT EXISTS analysis_jobs (
   stage TEXT, progress_done INTEGER, progress_total INTEGER, progress_unit TEXT,
   analyzer_id TEXT NOT NULL, analyzer_version TEXT NOT NULL, analyzer_kind TEXT NOT NULL,
   failure_code TEXT, failure_message TEXT,
-  idempotency_key TEXT,
   -- run_token names the one worker run that may write this job; heartbeat_at proves it is alive.
   run_token TEXT, heartbeat_at REAL, recoveries INTEGER NOT NULL DEFAULT 0,
   revision INTEGER NOT NULL DEFAULT 0,
@@ -49,9 +48,14 @@ CREATE TABLE IF NOT EXISTS analysis_jobs (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS analysis_jobs_one_active
   ON analysis_jobs(video_id) WHERE state IN ('QUEUED', 'PROCESSING');
-CREATE UNIQUE INDEX IF NOT EXISTS analysis_jobs_idempotency
-  ON analysis_jobs(video_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS analysis_jobs_match ON analysis_jobs(match_id);
+-- Every Idempotency-Key that was answered with a job: the request that created the job and each
+-- request that was answered with it while it was pending.
+CREATE TABLE IF NOT EXISTS analysis_request_keys (
+  video_id TEXT NOT NULL, idempotency_key TEXT NOT NULL,
+  job_id TEXT NOT NULL REFERENCES analysis_jobs(id) ON DELETE CASCADE,
+  PRIMARY KEY (video_id, idempotency_key)
+);
 
 -- proposed_winner and confidence are the model's proposal. status, winner, terminal_action and
 -- scorer_jersey are written by user decisions only.
@@ -87,8 +91,10 @@ CREATE TABLE IF NOT EXISTS review_decisions (
   idempotency_key TEXT, response_json TEXT,
   created_at TEXT NOT NULL
 );
-CREATE UNIQUE INDEX IF NOT EXISTS review_decisions_idempotency
-  ON review_decisions(card_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
+-- A key names one decision request on the whole server. The decision route checks that inside
+-- its write transaction; storage written before that rule may hold a key on two cards.
+CREATE INDEX IF NOT EXISTS review_decisions_key
+  ON review_decisions(idempotency_key) WHERE idempotency_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS review_decisions_job ON review_decisions(job_id);
 CREATE TRIGGER IF NOT EXISTS review_decisions_append_only BEFORE UPDATE ON review_decisions
 BEGIN SELECT RAISE(ABORT, 'review_decisions is append-only'); END;
@@ -127,6 +133,11 @@ def migrate(db_path: Path) -> None:
             for column, kind in columns:
                 if column not in present:
                     setup.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
+        if any(row[1] == "idempotency_key" for row in setup.execute("PRAGMA table_info(analysis_jobs)")):
+            # Earlier storage kept the key in a column of the job that the request created.
+            setup.execute(
+                "INSERT OR IGNORE INTO analysis_request_keys(video_id, idempotency_key, job_id)"
+                " SELECT video_id, idempotency_key, id FROM analysis_jobs WHERE idempotency_key IS NOT NULL")
         setup.commit()
     finally:
         setup.close()

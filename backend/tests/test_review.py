@@ -440,13 +440,56 @@ def test_a_retry_for_a_card_that_was_removed_since_gets_the_original_answer(revi
     assert late.status_code == 200 and late.json() == first
 
 
-def test_an_idempotency_key_belongs_to_one_card(review):
+def reused(response):
+    return response.status_code == 409 and response.json()["error"]["code"] == "IDEMPOTENCY_KEY_REUSED"
+
+
+def test_a_key_reused_with_another_selection_is_refused_and_the_correction_stays(review):
+    client, job_id, storage = review
+    card = card_of(client, job_id, 1)
+    first = post_decision(client, card["id"], selection="HOME", expectedVersion=1, idempotencyKey="card1-HOME")
+    corrected = post_decision(client, card["id"], selection="AWAY", expectedVersion=2, idempotencyKey="card1-AWAY")
+    assert first.status_code == corrected.status_code == 200
+    # The user goes back to HOME; the client derives the same key as for the first tap.
+    again = post_decision(client, card["id"], selection="HOME", expectedVersion=3, idempotencyKey="card1-HOME")
+    assert reused(again), again.text
+    # The answer did not claim a decision that was never stored.
+    current = card_of(client, job_id, 1)
+    assert (current["answer"], current["version"]) == ("AWAY", 3)
+    assert rally(client, job_id, 1)["winner"] == "AWAY"
+    assert len(audit(storage)) == 2 and revision(storage, job_id) == 2
+
+
+@pytest.mark.parametrize("body", [
+    {"selection": "AWAY", "expectedVersion": 1},
+    {"selection": "HOME", "expectedVersion": 2},
+    {"selection": "NOT_AN_OPTION", "expectedVersion": 999},
+])
+def test_a_key_reused_with_a_different_request_is_refused_and_changes_nothing(review, body):
+    client, job_id, storage = review
+    card = card_of(client, job_id, 1)
+    first = post_decision(client, card["id"], selection="HOME", expectedVersion=1, idempotencyKey="tap-1")
+    assert first.status_code == 200
+    trail = audit(storage)
+    assert reused(post_decision(client, card["id"], idempotencyKey="tap-1", **body))
+    assert card_of(client, job_id, 1) == first.json()["card"]
+    assert audit(storage) == trail and revision(storage, job_id) == 1
+    # The original request is still answered with its stored response.
+    replay = post_decision(client, card["id"], selection="HOME", expectedVersion=1, idempotencyKey="tap-1")
+    assert replay.status_code == 200 and replay.json() == first.json()
+
+
+def test_a_key_reused_on_another_card_is_refused(review):
     client, job_id, storage = review
     first = decide(client, card_of(client, job_id, 1), "HOME", idempotencyKey="tap-1")
-    second = decide(client, card_of(client, job_id, 2), "AWAY", idempotencyKey="tap-1")
-    assert first["decisionId"] != second["decisionId"]
-    assert (second["card"]["rallySequence"], second["card"]["answer"]) == (2, "AWAY")
-    assert len(audit(storage)) == 2
+    other = card_of(client, job_id, 2)
+    assert reused(post_decision(client, other["id"], selection="HOME", expectedVersion=1, idempotencyKey="tap-1"))
+    assert card_of(client, job_id, 2) == other and rally(client, job_id, 2)["status"] == "PROPOSED"
+    assert [row["id"] for row in audit(storage)] == [first["decisionId"]]
+    # The key is taken, whatever the request names: an unknown card does not free it.
+    assert reused(post_decision(client, "unknown", selection="HOME", expectedVersion=1, idempotencyKey="tap-1"))
+    # With its own key the second card is decided as usual.
+    assert decide(client, other, "AWAY", idempotencyKey="tap-2")["card"]["answer"] == "AWAY"
 
 
 # --- reopen ----------------------------------------------------------------------------------

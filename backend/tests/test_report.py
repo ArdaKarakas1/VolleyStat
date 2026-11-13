@@ -36,6 +36,10 @@ def score(rallies):
     return build_report(rallies)["score"]
 
 
+def set_line(number, home, away, complete=True):
+    return {"number": number, "home": home, "away": away, "complete": complete}
+
+
 def coverage(rallies, metric):
     return next(entry for entry in build_report(rallies)["coverage"] if entry["metricId"] == metric)
 
@@ -58,17 +62,19 @@ def test_unreviewed_rallies_give_a_draft_with_unknown_values_and_no_zero():
     report = build_report([OPEN, OPEN, OPEN])
     assert report["verificationStatus"] == "DRAFT"
     assert report["rallies"] == {"proposed": 3, "verified": 0, "rejected": 0, "unresolved": 0, "open": 3}
-    assert report["score"] == {"status": "UNKNOWN", "setsWon": {"home": None, "away": None}, "sets": []}
+    # The score walk stops at the first rally: it has no winner yet.
+    assert report["score"] == {"status": "UNKNOWN", "setsWon": {"home": None, "away": None}, "sets": [], "stoppedAtRally": 1}
     for side in ("home", "away"):
         assert report["teams"][side] == {field: UNKNOWN_VALUE for field in TEAM_FIELDS}
     assert report["players"] == []
+    assert report["unattributed"] == {"home": None, "away": None}
     assert [(entry["metricId"], entry["eligibleN"], entry["observedN"], entry["verifiedN"], entry["status"])
             for entry in report["coverage"]] == [
         ("RALLY_WINNER", 3, 0, 0, "UNKNOWN"), ("TERMINAL_ACTION", 3, 0, 0, "UNKNOWN"), ("SCORER", 3, 0, 0, "UNKNOWN")]
 
 
 def test_the_rules_in_use_are_part_of_the_report():
-    assert build_report([OPEN])["rules"] == {"setTarget": 25, "decidingSetTarget": 15, "winBy": 2, "bestOf": 5}
+    assert build_report([OPEN])["rules"] == {"setTarget": 25, "decidingSetTarget": 15, "winBy": 2, "decidingSetNumber": 5}
     # A caller that edits its copy must not change the rules of the next report.
     build_report([OPEN])["rules"]["setTarget"] = 1
     assert RULES["setTarget"] == 25
@@ -90,13 +96,13 @@ def test_a_model_proposal_alone_scores_nothing():
 def test_a_set_ends_at_25_with_a_two_point_lead():
     result = score([won(AWAY)] * 23 + [won(HOME)] * 25)
     assert result == {"status": "MEASURED", "setsWon": {"home": 1, "away": 0},
-                      "sets": [{"number": 1, "home": 25, "away": 23, "complete": True}]}
+                      "sets": [{"number": 1, "home": 25, "away": 23, "complete": True}], "stoppedAtRally": None}
 
 
 def test_24_points_do_not_end_a_set():
     result = score([won(HOME)] * 24)
     assert result == {"status": "MEASURED", "setsWon": {"home": 0, "away": 0},
-                      "sets": [{"number": 1, "home": 24, "away": 0, "complete": False}]}
+                      "sets": [{"number": 1, "home": 24, "away": 0, "complete": False}], "stoppedAtRally": None}
 
 
 def test_a_set_tied_at_24_runs_until_one_side_leads_by_two():
@@ -113,7 +119,7 @@ def test_points_after_a_finished_set_open_the_next_set():
     result = score([won(HOME)] * 25 + [won(AWAY)] * 3)
     assert result == {"status": "MEASURED", "setsWon": {"home": 1, "away": 0}, "sets": [
         {"number": 1, "home": 25, "away": 0, "complete": True},
-        {"number": 2, "home": 0, "away": 3, "complete": False}]}
+        {"number": 2, "home": 0, "away": 3, "complete": False}], "stoppedAtRally": None}
 
 
 def test_the_fifth_set_is_played_to_15_and_the_fourth_is_not():
@@ -137,45 +143,91 @@ def test_the_fifth_set_also_needs_a_two_point_lead():
     assert result["setsWon"] == {"home": 2, "away": 3}
 
 
-def test_three_won_sets_decide_the_match_and_no_further_set_opens():
+def test_three_won_sets_do_not_end_the_match_and_further_rallies_open_the_next_set():
+    # Training matches often play a fixed number of sets, so a 3-0 lead closes nothing.
     result = score([won(AWAY)] * 75 + [won(HOME)] * 4)
-    assert result["setsWon"] == {"home": 0, "away": 3}
-    assert [entry["number"] for entry in result["sets"]] == [1, 2, 3]
-    assert all(entry == {"number": entry["number"], "home": 0, "away": 25, "complete": True} for entry in result["sets"])
+    assert result == {"status": "MEASURED", "setsWon": {"home": 0, "away": 3}, "stoppedAtRally": None,
+                      "sets": [set_line(1, 0, 25), set_line(2, 0, 25), set_line(3, 0, 25), set_line(4, 4, 0, complete=False)]}
+
+
+def test_a_fourth_set_after_three_to_nil_is_scored_and_agrees_with_the_team_points():
+    report = build_report([won(HOME)] * 75 + [won(AWAY)] * 25)
+    assert report["score"] == {"status": "MEASURED", "setsWon": {"home": 3, "away": 1}, "stoppedAtRally": None,
+                               "sets": [set_line(1, 25, 0), set_line(2, 25, 0), set_line(3, 25, 0), set_line(4, 0, 25)]}
+    for side in ("home", "away"):
+        assert report["teams"][side]["points"] == measured(sum(entry[side] for entry in report["score"]["sets"]))
+
+
+def test_a_set_after_the_fifth_is_played_to_25_again():
+    five_sets = [won(HOME)] * 25 + [won(AWAY)] * 25 + [won(HOME)] * 25 + [won(AWAY)] * 25 + [won(HOME)] * 15
+    assert score(five_sets)["setsWon"] == {"home": 3, "away": 2}
+    # 15 points close the fifth set only.
+    assert score(five_sets + [won(AWAY)] * 15)["sets"][5] == set_line(6, 0, 15, complete=False)
+    sixth = score(five_sets + [won(AWAY)] * 25)
+    assert sixth["sets"][5] == set_line(6, 0, 25) and sixth["setsWon"] == {"home": 3, "away": 3}
+    # A sixth set tied at 24 also needs the two-point lead.
+    tied = five_sets + [won(HOME)] * 24 + [won(AWAY)] * 24 + [won(AWAY)]
+    assert score(tied)["sets"][5] == set_line(6, 24, 25, complete=False)
+    assert score(tied + [won(AWAY)])["sets"][5] == set_line(6, 24, 26)
 
 
 @pytest.mark.parametrize("undecided", [OPEN, UNSURE])
-def test_an_undecided_rally_leaves_its_set_incomplete(undecided):
+def test_the_score_stops_at_the_first_undecided_rally(undecided):
     result = score([won(HOME)] * 10 + [undecided] + [won(HOME)] * 15)
-    # 25 counted points, but the undecided rally may have been the 25th: the end of the set is unknown.
+    # Rally 11 may have gone to either side, so nothing after it can be placed in a set.
     assert result == {"status": "PARTIAL", "setsWon": {"home": 0, "away": 0},
-                      "sets": [{"number": 1, "home": 25, "away": 0, "complete": False}]}
+                      "sets": [set_line(1, 10, 0, complete=False)], "stoppedAtRally": 11}
 
 
-def test_no_set_boundary_is_placed_after_an_undecided_rally():
+def test_rallies_after_the_undecided_rally_enter_no_set_line():
     result = score([won(HOME)] * 10 + [OPEN] + [won(HOME)] * 40)
-    assert result["status"] == "PARTIAL" and result["setsWon"] == {"home": 0, "away": 0}
-    assert [(entry["number"], entry["complete"]) for entry in result["sets"]] == [(1, False)]
+    assert result == {"status": "PARTIAL", "setsWon": {"home": 0, "away": 0},
+                      "sets": [set_line(1, 10, 0, complete=False)], "stoppedAtRally": 11}
+
+
+def test_one_unsure_answer_never_produces_a_set_line_beyond_the_rules():
+    # Three sets that HOME won 25-20, with the third rally answered UNSURE.
+    one_set = [won(HOME)] * 20 + [won(AWAY)] * 20 + [won(HOME)] * 5
+    rallies = one_set * 3
+    rallies[2] = UNSURE
+    report = build_report(rallies)
+    assert report["score"] == {"status": "PARTIAL", "setsWon": {"home": 0, "away": 0},
+                               "sets": [set_line(1, 2, 0, complete=False)], "stoppedAtRally": 3}
+    # The team totals still count every verified rally of the match.
+    assert report["teams"]["home"]["points"] == partial(74) and report["teams"]["away"]["points"] == partial(60)
 
 
 def test_sets_finished_before_the_undecided_rally_stay_finished():
     result = score([won(HOME)] * 25 + [won(AWAY)] * 2 + [UNSURE] + [won(AWAY)] * 30)
-    assert result["status"] == "PARTIAL"
-    assert result["setsWon"] == {"home": 1, "away": 0}
-    assert result["sets"] == [{"number": 1, "home": 25, "away": 0, "complete": True},
-                              {"number": 2, "home": 0, "away": 32, "complete": False}]
+    assert result == {"status": "PARTIAL", "setsWon": {"home": 1, "away": 0}, "stoppedAtRally": 28,
+                      "sets": [set_line(1, 25, 0), set_line(2, 0, 2, complete=False)]}
 
 
 def test_an_undecided_rally_right_after_a_finished_set_makes_the_score_partial():
     result = score([won(HOME)] * 25 + [OPEN])
+    # The second set has no counted point, so it gets no line.
     assert result == {"status": "PARTIAL", "setsWon": {"home": 1, "away": 0},
-                      "sets": [{"number": 1, "home": 25, "away": 0, "complete": True}]}
+                      "sets": [{"number": 1, "home": 25, "away": 0, "complete": True}], "stoppedAtRally": 26}
 
 
 def test_review_in_progress_shows_the_counted_points_of_the_open_set():
     result = score([won(HOME), won(AWAY), won(HOME)] + [OPEN] * 10)
     assert result == {"status": "PARTIAL", "setsWon": {"home": 0, "away": 0},
-                      "sets": [{"number": 1, "home": 2, "away": 1, "complete": False}]}
+                      "sets": [{"number": 1, "home": 2, "away": 1, "complete": False}], "stoppedAtRally": 4}
+
+
+def test_an_undecided_first_rally_stops_the_score_before_any_point():
+    result = score([OPEN, won(HOME), won(HOME)])
+    assert result == {"status": "PARTIAL", "setsWon": {"home": 0, "away": 0}, "sets": [], "stoppedAtRally": 1}
+
+
+def test_the_score_walk_skips_rejected_rallies_and_names_the_stop_by_its_sequence_number():
+    result = score([won(HOME), NOT_A_RALLY, UNSURE, won(AWAY)])
+    assert result == {"status": "PARTIAL", "setsWon": {"home": 0, "away": 0},
+                      "sets": [set_line(1, 1, 0, complete=False)], "stoppedAtRally": 3}
+    # A record may carry its own sequence number; without one its position in the list counts.
+    numbered = [{**rally, "sequence": 10 * position} for position, rally in enumerate([won(HOME), UNSURE, won(AWAY)], start=1)]
+    assert score(numbered)["stoppedAtRally"] == 20
 
 
 # --- rejected rallies ------------------------------------------------------------------------
@@ -186,7 +238,7 @@ def test_a_rejected_rally_takes_part_in_nothing():
     assert report["rallies"] == {"proposed": 26, "verified": 25, "rejected": 1, "unresolved": 0, "open": 0}
     # It is not an undecided rally either: the set closes across it.
     assert report["score"] == {"status": "MEASURED", "setsWon": {"home": 1, "away": 0},
-                               "sets": [{"number": 1, "home": 25, "away": 0, "complete": True}]}
+                               "sets": [{"number": 1, "home": 25, "away": 0, "complete": True}], "stoppedAtRally": None}
     assert report["verificationStatus"] == "VERIFIED"
     assert report["teams"]["home"]["points"] == measured(25)
     assert [entry["eligibleN"] for entry in report["coverage"]] == [25, 25, 25]
@@ -197,18 +249,30 @@ def test_only_rejected_rallies_leave_every_value_unknown():
     report = build_report([NOT_A_RALLY, NOT_A_RALLY])
     # No open card and no unresolved rally: the review is finished, and it found no rally.
     assert report["verificationStatus"] == "VERIFIED"
-    assert report["score"] == {"status": "UNKNOWN", "setsWon": {"home": None, "away": None}, "sets": []}
+    assert report["score"] == {"status": "UNKNOWN", "setsWon": {"home": None, "away": None}, "sets": [], "stoppedAtRally": None}
     assert report["teams"]["home"] == {field: UNKNOWN_VALUE for field in TEAM_FIELDS}
+    assert report["unattributed"] == {"home": None, "away": None}
     assert [(entry["eligibleN"], entry["status"]) for entry in report["coverage"]] == [(0, "UNKNOWN")] * 3
 
 
 # --- unknown, partial and measured values ----------------------------------------------------
 
-def test_a_lower_bound_of_zero_is_unknown_not_zero():
-    teams = build_report([won(HOME), won(HOME), won(HOME), OPEN])["teams"]
-    assert teams["home"]["points"] == partial(3)
-    # The open rally may still be an away point. Zero would read as a measured result.
-    assert teams["away"]["points"] == UNKNOWN_VALUE
+def test_once_a_rally_is_verified_both_sides_carry_a_number():
+    report = build_report([won(HOME), won(HOME), won(HOME), OPEN])
+    assert report["teams"]["home"]["points"] == partial(3)
+    # Away won none of the verified rallies. PARTIAL says that the open rally can still add to the count.
+    assert report["teams"]["away"]["points"] == partial(0)
+    assert report["unattributed"] == {"home": 3, "away": 0}
+    # The kinds of points keep their own rule: nothing was counted for them, so they stay unknown.
+    assert all(report["teams"]["away"][field] == UNKNOWN_VALUE for field in TEAM_FIELDS[1:])
+
+
+@pytest.mark.parametrize("rallies", [[OPEN, OPEN], [UNSURE, OPEN], [NOT_A_RALLY, OPEN], [{**OPEN, "proposed_winner": HOME}]])
+def test_without_a_verified_rally_points_and_unattributed_are_null_for_both_sides(rallies):
+    report = build_report(rallies)
+    for side in ("home", "away"):
+        assert report["teams"][side]["points"] == UNKNOWN_VALUE
+    assert report["unattributed"] == {"home": None, "away": None}
 
 
 def test_a_counted_zero_is_measured_once_every_rally_has_a_winner():
@@ -223,7 +287,7 @@ def test_an_unresolved_rally_keeps_points_partial():
     report = build_report([won(HOME), UNSURE])
     assert report["rallies"] == {"proposed": 2, "verified": 1, "rejected": 0, "unresolved": 1, "open": 0}
     assert report["teams"]["home"]["points"] == partial(1)
-    assert report["teams"]["away"]["points"] == UNKNOWN_VALUE
+    assert report["teams"]["away"]["points"] == partial(0)
 
 
 def test_point_kinds_count_only_rallies_with_a_terminal_action_decision():
@@ -277,11 +341,18 @@ def test_unknown_is_always_null_and_a_number_is_always_counted(name):
     for item in found:
         if item["status"] == "UNKNOWN":
             assert item["value"] is None
-        elif item["status"] == "PARTIAL":
-            # A lower bound is only shown when something was counted.
-            assert isinstance(item["value"], int) and item["value"] > 0
         else:
-            assert item["status"] == "MEASURED" and isinstance(item["value"], int) and item["value"] >= 0
+            assert item["status"] in ("PARTIAL", "MEASURED") and isinstance(item["value"], int) and item["value"] >= 0
+    any_verified = report["rallies"]["verified"] > 0
+    for side in ("home", "away"):
+        team = report["teams"][side]
+        # Points are a number for both sides or for neither, and unattributed follows them.
+        assert (team["points"]["value"] is not None) == any_verified
+        assert (report["unattributed"][side] is None) == (team["points"]["value"] is None)
+        assert (team["points"]["status"] == "MEASURED") == (any_verified and report["verificationStatus"] == "VERIFIED")
+        for field in TEAM_FIELDS[1:]:
+            # A lower bound of a kind of point is only shown when something was counted for it.
+            assert team[field]["status"] != "PARTIAL" or team[field]["value"] > 0
     if report["score"]["status"] == "UNKNOWN":
         assert report["score"]["setsWon"] == {"home": None, "away": None} and report["score"]["sets"] == []
     else:
@@ -367,13 +438,35 @@ def test_the_example_of_the_contract_is_reproduced():
     assert report["verificationStatus"] == "PARTIALLY_VERIFIED"
     assert report["rallies"] == {"proposed": 18, "verified": 7, "rejected": 1, "unresolved": 0, "open": 10}
     assert report["score"] == {"status": "PARTIAL", "setsWon": {"home": 0, "away": 0},
-                               "sets": [{"number": 1, "home": 4, "away": 3, "complete": False}]}
+                               "sets": [{"number": 1, "home": 4, "away": 3, "complete": False}], "stoppedAtRally": 9}
     assert report["teams"]["home"] == {"points": partial(4), "attackPoints": partial(2), "blockPoints": UNKNOWN_VALUE,
                                        "aces": UNKNOWN_VALUE, "opponentErrors": UNKNOWN_VALUE}
     assert report["players"] == [{"side": "HOME", "jersey": 7, "points": 2, "attackPoints": 2, "blockPoints": 0, "aces": 0}]
     assert report["unattributed"] == {"home": 2, "away": 3}
     assert report["coverage"][0] == {"metricId": "RALLY_WINNER", "eligibleN": 17, "observedN": 7, "verifiedN": 7, "status": "PARTIAL"}
-    assert set(report) == {"verificationStatus", "rallies", "rules", "score", "teams", "players", "unattributed", "coverage"}
+    assert set(report) == {"verificationStatus", "rallies", "ralliesMayBeMissing", "rules", "score", "teams", "players",
+                           "unattributed", "coverage"}
+
+
+def test_nothing_is_measured_while_the_analyzer_may_have_missed_rallies():
+    """Answering every card can not make a count exact when rallies may be missing from the list."""
+    rallies = [won(HOME, "ATTACK", 7), won(AWAY, "OPPONENT_ERROR"), won(HOME, "BLOCK", 3)]
+    exact = build_report(rallies)
+    assert exact["ralliesMayBeMissing"] is False
+    assert exact["score"]["status"] == "MEASURED"
+    assert exact["teams"]["home"]["points"] == measured(2) and exact["teams"]["home"]["aces"] == measured(0)
+
+    cautious = build_report(rallies, rallies_may_be_missing=True)
+    assert cautious["ralliesMayBeMissing"] is True
+    assert cautious["verificationStatus"] == "VERIFIED"
+    assert cautious["score"] == {**exact["score"], "status": "PARTIAL"}
+    assert cautious["teams"]["home"] == {"points": partial(2), "attackPoints": partial(1), "blockPoints": partial(1),
+                                         # A lower bound of zero says nothing and is not printed as a number.
+                                         "aces": UNKNOWN_VALUE, "opponentErrors": UNKNOWN_VALUE}
+    assert cautious["teams"]["away"]["points"] == partial(1)
+    # What the user decided is unchanged: only the claim of completeness is withdrawn.
+    for key in ("rallies", "players", "unattributed", "coverage"):
+        assert cautious[key] == exact[key]
 
 
 # --- the function itself ---------------------------------------------------------------------
@@ -386,6 +479,9 @@ def test_the_report_is_a_pure_function_of_the_records():
     # proposed_winner is optional: records without it are read as "no proposal".
     without = [{key: value for key, value in rally.items() if key != "proposed_winner"} for rally in rallies]
     assert build_report(without) == build_report(rallies)
+    # sequence is optional too: the position in the list stands in for it.
+    numbered = [{**rally, "sequence": position} for position, rally in enumerate(rallies, start=1)]
+    assert build_report(numbered) == build_report(rallies)
 
 
 @pytest.mark.parametrize("record", [
@@ -430,7 +526,9 @@ def test_report_route_names_its_job_and_follows_the_decisions(storage, make_clip
         assert (draft["matchId"], draft["jobId"], draft["revision"]) == (video["matchId"], job["id"], 0)
         assert draft["analyzer"] == {"id": "scripted", "version": "t1", "kind": "BASELINE"} and draft["mock"] is False
         assert set(draft) == {"matchId", "jobId", "revision", "analyzer", "mock", "verificationStatus", "rallies",
-                              "rules", "score", "teams", "players", "unattributed", "coverage"}
+                              "ralliesMayBeMissing", "rules", "score", "teams", "players", "unattributed", "coverage"}
+        # A baseline has no measured recall, so its report says that rallies may be missing.
+        assert draft["ralliesMayBeMissing"] is True
         assert draft["verificationStatus"] == "DRAFT" and draft["score"]["status"] == "UNKNOWN"
 
         first = decide(client, card_of(client, job["id"], 1), "HOME")
@@ -441,10 +539,13 @@ def test_report_route_names_its_job_and_follows_the_decisions(storage, make_clip
 
         report = client.get(report_url).json()
         assert report["revision"] == 4
-        computed = build_report([won("HOME", "BLOCK", 11), NOT_A_RALLY, OPEN, OPEN])
+        computed = build_report([won("HOME", "BLOCK", 11), NOT_A_RALLY, OPEN, OPEN], rallies_may_be_missing=True)
         assert {key: report[key] for key in computed} == computed
         assert report["players"] == [{"side": "HOME", "jersey": 11, "points": 1, "attackPoints": 0, "blockPoints": 1, "aces": 0}]
-        assert report["teams"]["home"]["points"] == partial(1) and report["teams"]["away"]["points"] == UNKNOWN_VALUE
+        assert report["teams"]["home"]["points"] == partial(1) and report["teams"]["away"]["points"] == partial(0)
+        # Rally 2 was rejected and is skipped; rally 3 is the first one without a winner.
+        assert report["score"] == {"status": "PARTIAL", "setsWon": {"home": 0, "away": 0},
+                                   "sets": [set_line(1, 1, 0, complete=False)], "stoppedAtRally": 3}
 
 
 def test_a_model_proposal_reaches_the_report_only_as_observed(storage, make_clip):
@@ -455,7 +556,9 @@ def test_a_model_proposal_reaches_the_report_only_as_observed(storage, make_clip
         video, job = reviewed_job(client, make_clip)
         report = client.get(f"/v1/matches/{video['matchId']}/report").json()
         assert report["verificationStatus"] == "DRAFT"
-        assert report["score"] == {"status": "UNKNOWN", "setsWon": {"home": None, "away": None}, "sets": []}
+        # Only a measured model is trusted to have found every rally.
+        assert report["ralliesMayBeMissing"] is False
+        assert report["score"] == {"status": "UNKNOWN", "setsWon": {"home": None, "away": None}, "sets": [], "stoppedAtRally": 1}
         assert report["teams"]["home"]["points"] == UNKNOWN_VALUE
         assert report["coverage"][0] == {"metricId": "RALLY_WINNER", "eligibleN": 2, "observedN": 1, "verifiedN": 0, "status": "UNKNOWN"}
 
@@ -481,3 +584,32 @@ def test_a_newer_job_without_rallies_does_not_hide_the_reviewed_one(storage, mak
         report = client.get(report_url).json()
         assert report["jobId"] == newer["id"] and report["rallies"] == {
             "proposed": 1, "verified": 0, "rejected": 0, "unresolved": 0, "open": 1}
+
+
+def test_a_match_whose_only_job_was_cancelled_has_no_report(storage, make_clip):
+    with serve(storage, ScriptedAnalyzer()) as client:
+        video = ready_video(client, make_clip)
+        job = request_job(client, video["id"])
+        assert client.post(f"/v1/analyses/{job['id']}/cancel").json()["state"] == "CANCELLED"
+        missing = client.get(f"/v1/matches/{video['matchId']}/report")
+        assert missing.status_code == 404 and missing.json()["error"]["code"] == "REPORT_NOT_AVAILABLE"
+
+
+def test_the_revision_belongs_to_the_job_the_report_follows(storage, make_clip):
+    with serve(storage, ScriptedAnalyzer()) as client:
+        video, job = reviewed_job(client, make_clip)
+        report_url = f"/v1/matches/{video['matchId']}/report"
+        for sequence in (1, 2, 3):
+            decide(client, card_of(client, job["id"], sequence), "HOME")
+        assert (client.get(report_url).json()["jobId"], client.get(report_url).json()["revision"]) == (job["id"], 3)
+
+        newer = request_job(client, video["id"])
+        run_pending(client)
+        followed = client.get(report_url).json()
+        # The newer job starts its own count, so the revision of the report can go down.
+        assert (followed["jobId"], followed["revision"], followed["verificationStatus"]) == (newer["id"], 0, "DRAFT")
+
+        # A decision on the earlier job is still stored. Its answer names that job, not the one the report follows.
+        late = decide(client, card_of(client, job["id"], 4), "AWAY")
+        assert (late["job"]["id"], late["reportRevision"]) == (job["id"], 4)
+        assert client.get(report_url).json() == followed

@@ -6,8 +6,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.__main__ as cli
-from app.analyzers import AnalyzerNotAvailable, load_analyzer
-from app.analyzers.base import MOCK, UNKNOWN
+from app.analyzers import REGISTRY, AnalyzerNotAvailable, load_analyzer
+from app.analyzers.base import BASELINE, MOCK, MODEL, UNKNOWN, AnalyzerInfo
 from app.analyzers.demo import MOCK_DATA, DemoAnalyzer
 from app.main import create_app
 from tests.helpers import ScriptedAnalyzer, serve
@@ -56,6 +56,39 @@ def test_unknown_analyzer_stops_the_start_and_touches_no_storage(tmp_path, monke
     with pytest.raises(AnalyzerNotAvailable):
         create_app(target)
     assert not target.exists()
+
+
+def test_a_registered_analyzer_whose_module_is_missing_stops_the_start_and_says_what_is_missing(tmp_path, monkeypatch, capsys):
+    monkeypatch.setitem(REGISTRY, "ghost", "app.analyzers.ghost_module:GhostAnalyzer")
+    target = tmp_path / "never-created"
+    with pytest.raises(AnalyzerNotAvailable) as refused:
+        create_app(target, analyzer="ghost")
+    assert "Analyzer 'ghost' is not installed" in str(refused.value) and "app.analyzers.ghost_module" in str(refused.value)
+    assert not target.exists()
+    # The command line turns it into one readable line instead of a traceback.
+    monkeypatch.setenv("VOLLEYSTAT_ANALYZER", "ghost")
+    with pytest.raises(SystemExit):
+        run_cli(monkeypatch, target)
+    assert "Analyzer 'ghost' is not installed" in capsys.readouterr().err
+    assert not target.exists()
+
+
+@pytest.mark.parametrize("kind", ["mock", "DEMO", "Model", " MOCK", "", None, 7])
+def test_an_analyzer_with_a_kind_outside_the_contract_stops_the_start(tmp_path, kind):
+    target = tmp_path / "never-created"
+    probe = ScriptedAnalyzer(info=AnalyzerInfo("probe", "0", kind))
+    with pytest.raises(AnalyzerNotAvailable) as refused:
+        create_app(target, analyzer=probe)
+    message = str(refused.value)
+    assert "'probe'" in message and repr(kind) in message
+    assert all(allowed in message for allowed in (MOCK, BASELINE, MODEL))
+    assert not target.exists()
+
+
+@pytest.mark.parametrize("kind, ai", [(MOCK, "not-configured"), (BASELINE, "not-configured"), (MODEL, "configured")])
+def test_the_three_kinds_of_the_contract_are_accepted(storage, kind, ai):
+    body = health(storage, analyzer=ScriptedAnalyzer(info=AnalyzerInfo("probe", "0", kind)))
+    assert (body["analyzer"], body["ai"]) == ({"id": "probe", "version": "0", "kind": kind}, ai)
 
 
 def test_without_an_analyzer_the_analyses_route_keeps_its_answers(storage, make_clip, monkeypatch):

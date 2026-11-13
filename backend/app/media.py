@@ -10,6 +10,7 @@ import json
 import math
 import shutil
 import subprocess
+import threading
 from dataclasses import dataclass, field
 from fractions import Fraction
 from pathlib import Path
@@ -121,32 +122,61 @@ def _iso_boxes_fit(path: Path) -> bool:
 
 
 def _tail_is_readable(path: Path, demuxer: str, duration: float) -> bool | None:
-    """Read the packets of the last seconds. None means the check itself timed out."""
+    """Read the packets of the last seconds. None means the check itself timed out.
+
+    The listing grows with the number of packets, which the uploader controls, so it is read line
+    by line and only the latest packet time is kept.
+    """
     start = max(0.0, duration - TAIL_WINDOW_SECONDS)
     command = [
         "ffprobe", "-v", "error", "-protocol_whitelist", "file", "-f", demuxer,
         "-read_intervals", f"{start:.3f}%",
-        "-show_entries", "packet=pts_time,dts_time", "-of", "json", str(path),
+        # One line per packet: "pts_time,dts_time", with "N/A" for a time the packet does not carry.
+        "-show_entries", "packet=pts_time,dts_time", "-of", "csv=p=0", str(path),
     ]
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace")
+    timed_out = threading.Event()
+    truncated = threading.Event()
+
+    def stop_late_process() -> None:
+        timed_out.set()
+        process.kill()
+
+    def scan_errors() -> None:
+        for line in process.stderr:
+            if any(marker in line for marker in _TRUNCATION_MARKERS):
+                truncated.set()
+
+    watchdog = threading.Timer(PROBE_TIMEOUT_SECONDS, stop_late_process)
+    # ffprobe blocks once a pipe is full, so the error stream is drained while the packets are read.
+    errors = threading.Thread(target=scan_errors, name="volleystat-ffprobe-errors", daemon=True)
+    watchdog.start()
+    errors.start()
+    latest = None
     try:
-        completed = subprocess.run(command, capture_output=True, text=True, timeout=PROBE_TIMEOUT_SECONDS)
-    except subprocess.TimeoutExpired:
-        return None
-    if completed.returncode != 0 or any(marker in completed.stderr for marker in _TRUNCATION_MARKERS):
-        return False
-    try:
-        packets = json.loads(completed.stdout).get("packets", [])
-    except ValueError:
-        return False
-    times = []
-    for packet in packets:
-        for key in ("pts_time", "dts_time"):
-            try:
-                times.append(float(packet[key]))
+        for line in process.stdout:
+            for field in line.split(",")[:2]:
+                try:
+                    stamp = float(field)
+                except ValueError:
+                    continue
+                latest = stamp if latest is None else max(latest, stamp)
                 break
-            except (KeyError, TypeError, ValueError):
-                continue
-    return bool(times) and max(times) >= duration - TAIL_WINDOW_SECONDS
+        process.wait()
+    except BaseException:
+        process.kill()
+        raise
+    finally:
+        process.wait()
+        watchdog.cancel()
+        errors.join()
+        process.stdout.close()
+        process.stderr.close()
+    if timed_out.is_set():
+        return None
+    if process.returncode != 0 or truncated.is_set():
+        return False
+    return latest is not None and latest >= duration - TAIL_WINDOW_SECONDS
 
 
 def probe_video(path: Path, declared_mime: str | None = None) -> ProbeResult:

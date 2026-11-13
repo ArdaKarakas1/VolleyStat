@@ -12,12 +12,22 @@ from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
 BLOCK_SIZE = 256 * 1024
-# At most 19 digits: enough for any file size, and int() never sees an absurdly long number.
-_RANGE = re.compile(r"\s*(\d{0,19})\s*-\s*(\d{0,19})\s*", re.ASCII)
+_RANGE = re.compile(r"\s*(\d*)\s*-\s*(\d*)\s*", re.ASCII)
 
 
 class RangeNotSatisfiable(Exception):
     pass
+
+
+def _capped(digits: str, size: int) -> int:
+    """The number that `digits` spell, or `size` when it is larger than that.
+
+    A player may write "to the end" as the largest number it knows, and a header can hold thousands
+    of digits. Any number beyond the file means the same, so a long run is settled by its length
+    and never converted.
+    """
+    digits = digits.lstrip("0")
+    return size if len(digits) > len(str(size)) else min(int(digits or "0"), size)
 
 
 def parse_range(header: str | None, size: int) -> tuple[int, int] | None:
@@ -33,13 +43,15 @@ def parse_range(header: str | None, size: int) -> tuple[int, int] | None:
     if not match or not (match[1] or match[2]):
         raise RangeNotSatisfiable
     if match[1]:
-        first = int(match[1])
-        last = min(int(match[2]), size - 1) if match[2] else size - 1
+        first = _capped(match[1], size)
+        # RFC 9110, 14.1.2: a last position at or beyond the end means "to the end of the file".
+        last = min(_capped(match[2], size), size - 1) if match[2] else size - 1
     else:
-        # "-N" asks for the last N bytes.
-        if int(match[2]) == 0:
+        # "-N" asks for the last N bytes; more than the file holds is the whole file.
+        length = _capped(match[2], size)
+        if length == 0:
             raise RangeNotSatisfiable
-        first, last = max(0, size - int(match[2])), size - 1
+        first, last = size - length, size - 1
     if first >= size or first > last:
         raise RangeNotSatisfiable
     return first, last
