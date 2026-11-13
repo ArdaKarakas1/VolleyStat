@@ -34,9 +34,11 @@ CASES = {
         "rallyStatuses": ["VERIFIED", "VERIFIED", "VERIFIED"],
         "verificationStatus": "VERIFIED",
         "rallies": {"proposed": 3, "verified": 3, "rejected": 0, "unresolved": 0, "open": 0},
-        "score": {"status": "MEASURED", "setsWon": {"home": 0, "away": 0},
-                  "sets": [{"number": 1, "home": 2, "away": 1, "complete": False}]},
-        "points": {"home": measured(2), "away": measured(1)},
+        # Every card is answered, and still nothing is MEASURED: the demo analyzer may have missed
+        # rallies, and the review can not add one.
+        "score": {"status": "PARTIAL", "setsWon": {"home": 0, "away": 0},
+                  "sets": [{"number": 1, "home": 2, "away": 1, "complete": False}], "stoppedAtRally": None},
+        "points": {"home": partial(2), "away": partial(1)},
         "unattributed": {"home": 2, "away": 1},
         "winnerCoverage": {"metricId": "RALLY_WINNER", "eligibleN": 3, "observedN": 3, "verifiedN": 3, "status": "MEASURED"},
     },
@@ -46,8 +48,9 @@ CASES = {
         "verificationStatus": "PARTIALLY_VERIFIED",
         "rallies": {"proposed": 3, "verified": 1, "rejected": 1, "unresolved": 1, "open": 0},
         "score": {"status": "PARTIAL", "setsWon": {"home": 0, "away": 0},
-                  "sets": [{"number": 1, "home": 0, "away": 1, "complete": False}]},
-        "points": {"home": UNKNOWN_VALUE, "away": partial(1)},
+                  "sets": [{"number": 1, "home": 0, "away": 1, "complete": False}], "stoppedAtRally": 2},
+        # Home won none of the verified rallies; the unsure rally can still add to either side.
+        "points": {"home": partial(0), "away": partial(1)},
         "unattributed": {"home": 0, "away": 1},
         "winnerCoverage": {"metricId": "RALLY_WINNER", "eligibleN": 2, "observedN": 1, "verifiedN": 1, "status": "PARTIAL"},
     },
@@ -56,9 +59,9 @@ CASES = {
         "rallyStatuses": ["REJECTED", "REJECTED", "REJECTED"],
         "verificationStatus": "VERIFIED",
         "rallies": {"proposed": 3, "verified": 0, "rejected": 3, "unresolved": 0, "open": 0},
-        "score": {"status": "UNKNOWN", "setsWon": {"home": None, "away": None}, "sets": []},
+        "score": {"status": "UNKNOWN", "setsWon": {"home": None, "away": None}, "sets": [], "stoppedAtRally": None},
         "points": {"home": UNKNOWN_VALUE, "away": UNKNOWN_VALUE},
-        "unattributed": {"home": 0, "away": 0},
+        "unattributed": {"home": None, "away": None},
         "winnerCoverage": {"metricId": "RALLY_WINNER", "eligibleN": 0, "observedN": 0, "verifiedN": 0, "status": "UNKNOWN"},
     },
 }
@@ -125,14 +128,14 @@ def test_match_upload_demo_analysis_review_and_report(storage, make_clip, monkey
         assert (draft["matchId"], draft["jobId"], draft["revision"]) == (match_id, job_id, 0)
         assert (draft["mock"], draft["analyzer"]) == (True, DEMO)
         assert draft["verificationStatus"] == "DRAFT"
-        assert draft["score"] == {"status": "UNKNOWN", "setsWon": {"home": None, "away": None}, "sets": []}
+        assert draft["score"] == {"status": "UNKNOWN", "setsWon": {"home": None, "away": None}, "sets": [], "stoppedAtRally": 1}
         for side in ("home", "away"):
             assert draft["teams"][side] == {field: UNKNOWN_VALUE for field in TEAM_FIELDS}
         assert draft["players"] == []
-        # What remains are counts of rallies and decisions, not values of the match:
-        # three proposals, no decision on any of them, hence no point without a player either.
+        # What remains are counts of rallies and decisions, not values of the match.
         assert draft["rallies"] == {"proposed": 3, "verified": 0, "rejected": 0, "unresolved": 0, "open": 3}
-        assert draft["unattributed"] == {"home": 0, "away": 0}
+        # No point is known yet, so the points without a player are unknown as well, not zero.
+        assert draft["unattributed"] == {"home": None, "away": None}
         assert [(entry["metricId"], entry["eligibleN"], entry["observedN"], entry["verifiedN"], entry["status"])
                 for entry in draft["coverage"]] == [
             ("RALLY_WINNER", 3, 0, 0, "UNKNOWN"), ("TERMINAL_ACTION", 3, 0, 0, "UNKNOWN"), ("SCORER", 3, 0, 0, "UNKNOWN")]
@@ -174,6 +177,7 @@ def test_match_upload_demo_analysis_review_and_report(storage, make_clip, monkey
         assert report["verificationStatus"] == case["verificationStatus"]
         assert report["rallies"] == case["rallies"]
         assert report["rallies"]["verified"] == sum(answer in ("HOME", "AWAY") for answer in case["answers"])
+        assert report["ralliesMayBeMissing"] is True
         assert report["score"] == case["score"]
         for side in ("home", "away"):
             assert report["teams"][side]["points"] == case["points"][side]

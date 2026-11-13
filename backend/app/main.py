@@ -19,12 +19,14 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import content, jobs, media, review
-from .analyzers import load_analyzer
+from .analyzers import load_analyzer, require_known_kind
 from .analyzers.base import MODEL, Analyzer
+from .bodylimit import BodyLimit
 from .db import connector, find_video, migrate, new_id
 from .errors import fail
 
 CHUNK_SIZE = 4 * 1024 * 1024
+CHUNK_ROUTE = re.compile(r"/v1/uploads/[^/]+/chunks")
 MAX_VIDEO_BYTES = 4 * 1024 * 1024 * 1024
 ALLOWED_MIMES = {"video/mp4", "video/quicktime", "video/webm", "video/x-matroska"}
 # A finalize that has been running longer than this is treated as abandoned
@@ -88,6 +90,11 @@ class UploadInput(BaseModel):
         return self
 
 
+def is_chunk_upload(scope) -> bool:
+    """The one request whose body is not JSON. Its route streams the body and enforces CHUNK_SIZE itself."""
+    return scope["method"] == "PUT" and CHUNK_ROUTE.fullmatch(scope["path"]) is not None
+
+
 def match_payload(match) -> dict[str, Any]:
     return {
         "id": match["id"], "homeTeamName": match["home_team"], "awayTeamName": match["away_team"],
@@ -107,6 +114,8 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
     # Resolved before storage is touched: an unknown analyzer name must stop the start-up.
     if analyzer is None or isinstance(analyzer, str):
         analyzer = load_analyzer(analyzer if analyzer is not None else os.environ.get("VOLLEYSTAT_ANALYZER"))
+    if analyzer is not None:
+        require_known_kind(analyzer)
     storage = Path(storage_root or os.environ.get("VOLLEYSTAT_STORAGE") or (Path(__file__).parent.parent / "storage")).resolve()
     storage.mkdir(parents=True, exist_ok=True, mode=0o700)
     (storage / "media").mkdir(exist_ok=True, mode=0o700)
@@ -167,6 +176,7 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
     app = FastAPI(title="VolleyStat Local Development API", version="0.4.0", lifespan=lifespan,
                   description="LOCAL TEST DATA ONLY. No authentication, no trained AI. Never expose to the internet.")
     app.state.worker = worker
+    app.add_middleware(BodyLimit, exempt=is_chunk_upload)
 
     @app.exception_handler(StarletteHTTPException)
     async def http_error(_request: Request, exc: StarletteHTTPException):

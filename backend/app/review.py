@@ -12,7 +12,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 from . import report
-from .analyzers.base import AWAY, HOME
+from .analyzers.base import AWAY, HOME, MODEL
 from .analyzers.demo import MOCK_DATA
 from .db import new_id, utc_now
 from .errors import fail
@@ -204,12 +204,20 @@ def router(connect) -> APIRouter:
         with connect(write=True) as db:
             if payload.idempotencyKey is not None:
                 # Looked up before the card: a later decision may have removed the card or moved its version.
-                replay = db.execute(
-                    "SELECT response_json FROM review_decisions WHERE card_id=? AND idempotency_key=?",
-                    (card_id, payload.idempotencyKey),
+                earlier = db.execute(
+                    "SELECT response_json FROM review_decisions WHERE idempotency_key=? ORDER BY rowid LIMIT 1",
+                    (payload.idempotencyKey,),
                 ).fetchone()
-                if replay:
-                    return json.loads(replay["response_json"])
+                if earlier:
+                    stored = json.loads(earlier["response_json"])
+                    answered = stored["card"]
+                    # A decision moves its card exactly one version on, so the stored answer also tells
+                    # which version its request expected.
+                    if (answered["id"], answered["answer"], answered["version"] - 1) != (
+                            card_id, payload.selection, payload.expectedVersion):
+                        # Replaying the old answer here would report a decision as stored that never was.
+                        fail("IDEMPOTENCY_KEY_REUSED", "This idempotency key already belongs to another decision", 409)
+                    return stored
             card = find_card(db, card_id)
             _check_version(card, payload.expectedVersion)
             if payload.selection not in QUESTIONS[card["question_type"]][1]:
@@ -244,13 +252,14 @@ def router(connect) -> APIRouter:
                 fail("REPORT_NOT_AVAILABLE", "No analysis of this match has produced rallies yet", 404)
             rallies = [
                 dict(rally) for rally in db.execute(
-                    "SELECT status, proposed_winner, winner, terminal_action, scorer_jersey FROM rallies"
+                    "SELECT sequence, status, proposed_winner, winner, terminal_action, scorer_jersey FROM rallies"
                     " WHERE job_id=? ORDER BY sequence", (job["id"],))
             ]
         return {
             "matchId": match_id, "jobId": job["id"], "revision": job["revision"],
             "analyzer": analyzer_payload(job), "mock": is_mock(job),
-            **report.build_report(rallies),
+            # Nobody has measured how many rallies a mock or a baseline finds.
+            **report.build_report(rallies, rallies_may_be_missing=job["analyzer_kind"] != MODEL),
         }
 
     return api

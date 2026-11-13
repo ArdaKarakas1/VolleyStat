@@ -13,7 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import jobs
-from app.analyzers.base import BASELINE, MOCK, AnalyzerError, AnalyzerInfo, RallyProposal
+from app.analyzers.base import BASELINE, MOCK, MODEL, AnalyzerError, AnalyzerInfo, RallyProposal
 from app.main import create_app
 from tests.helpers import (
     SPANS, BlockingAnalyzer, ScriptedAnalyzer, cards, execute, ready_video, request_job, reviewed_job, rows,
@@ -165,6 +165,62 @@ def test_the_same_idempotency_key_returns_the_same_job(storage, make_clip):
         assert len(rows(storage, "SELECT 1 FROM analysis_jobs")) == 3
 
 
+def test_a_key_answered_with_the_pending_job_returns_that_job_after_the_run_ended(storage, make_clip):
+    with serve(storage, ScriptedAnalyzer()) as client:
+        video = ready_video(client, make_clip)
+        first = request_job(client, video["id"], **{"Idempotency-Key": "tap-1"})
+        joined = client.post(f"/v1/videos/{video['id']}/analyses", headers={"Idempotency-Key": "tap-2"})
+        assert joined.status_code == 200 and joined.json()["id"] == first["id"]
+        run_pending(client)
+        # The retry of the second request must not start a second analysis of the same video.
+        for key in ("tap-2", "tap-1"):
+            retry = client.post(f"/v1/videos/{video['id']}/analyses", headers={"Idempotency-Key": key})
+            assert retry.status_code == 200
+            assert (retry.json()["id"], retry.json()["state"]) == (first["id"], "NEEDS_REVIEW")
+        assert len(rows(storage, "SELECT 1 FROM analysis_jobs")) == 1
+        # A key that never met this job is a new request.
+        fresh = client.post(f"/v1/videos/{video['id']}/analyses", headers={"Idempotency-Key": "tap-3"})
+        assert fresh.status_code == 202 and fresh.json()["id"] != first["id"]
+
+
+def test_a_key_keeps_its_job_after_the_job_was_cancelled(storage, make_clip):
+    with serve(storage, ScriptedAnalyzer()) as client:
+        video = ready_video(client, make_clip)
+        first = request_job(client, video["id"], **{"Idempotency-Key": "tap-1"})
+        client.post(f"/v1/videos/{video['id']}/analyses", headers={"Idempotency-Key": "tap-2"})
+        assert client.post(f"/v1/analyses/{first['id']}/cancel").status_code == 200
+        for key in ("tap-1", "tap-2"):
+            retry = client.post(f"/v1/videos/{video['id']}/analyses", headers={"Idempotency-Key": key})
+            assert retry.status_code == 200
+            assert (retry.json()["id"], retry.json()["state"]) == (first["id"], "CANCELLED")
+        assert len(rows(storage, "SELECT 1 FROM analysis_jobs")) == 1
+
+
+def test_the_keys_of_a_job_leave_with_its_video(storage, make_clip):
+    with serve(storage, ScriptedAnalyzer()) as client:
+        video = ready_video(client, make_clip)
+        request_job(client, video["id"], **{"Idempotency-Key": "tap-1"})
+        client.post(f"/v1/videos/{video['id']}/analyses", headers={"Idempotency-Key": "tap-2"})
+        assert len(rows(storage, "SELECT 1 FROM analysis_request_keys")) == 2
+        assert client.delete(f"/v1/videos/{video['id']}").status_code == 204
+        assert rows(storage, "SELECT 1 FROM analysis_request_keys") == []
+
+
+def test_a_key_stored_by_the_previous_schema_still_returns_its_job(storage, make_clip):
+    with serve(storage, ScriptedAnalyzer()) as client:
+        video = ready_video(client, make_clip)
+        job = request_job(client, video["id"], **{"Idempotency-Key": "tap-1"})
+        run_pending(client)
+    # Until this table existed, the key was a column of the job it had created.
+    execute(storage, "DELETE FROM analysis_request_keys")
+    execute(storage, "ALTER TABLE analysis_jobs ADD COLUMN idempotency_key TEXT")
+    execute(storage, "UPDATE analysis_jobs SET idempotency_key='tap-1'")
+    with serve(storage, ScriptedAnalyzer()) as client:
+        retry = client.post(f"/v1/videos/{video['id']}/analyses", headers={"Idempotency-Key": "tap-1"})
+        assert retry.status_code == 200 and retry.json()["id"] == job["id"]
+        assert len(rows(storage, "SELECT 1 FROM analysis_jobs")) == 1
+
+
 def test_an_idempotency_key_must_be_1_to_128_characters(storage, make_clip):
     with serve(storage, ScriptedAnalyzer()) as client:
         video = ready_video(client, make_clip)
@@ -200,6 +256,46 @@ def test_progress_stays_null_when_the_analyzer_did_not_measure_it(storage, make_
         assert analyzer.started.wait(10)
         running = get_job(client, job["id"])
         assert (running["state"], running["stage"], running["progress"]) == ("PROCESSING", "PREPROCESSING", None)
+        analyzer.release.set()
+        wait_for_state(client, job["id"], "NEEDS_REVIEW")
+
+
+def test_a_withdrawn_measurement_is_written_at_once(storage, make_clip):
+    analyzer = BlockingAnalyzer(reports=(("DETECTING_RALLIES", 5, 10, "FRAMES"), ("DETECTING_RALLIES", None, None, None)),
+                                polls=False)
+    with serve(storage, analyzer, start_worker=True) as client:
+        video = ready_video(client, make_clip)
+        job = request_job(client, video["id"])
+        assert analyzer.started.wait(10)
+        running = get_job(client, job["id"])
+        # The analyzer no longer measures its progress; the job must not keep showing 5 of 10.
+        assert (running["state"], running["stage"], running["progress"]) == ("PROCESSING", "DETECTING_RALLIES", None)
+        analyzer.release.set()
+        wait_for_state(client, job["id"], "NEEDS_REVIEW")
+
+
+def test_a_first_measurement_after_an_unmeasured_report_is_written_at_once(storage, make_clip):
+    analyzer = BlockingAnalyzer(reports=(("DETECTING_RALLIES", None, None, None), ("DETECTING_RALLIES", 3, 10, "FRAMES")),
+                                polls=False)
+    with serve(storage, analyzer, start_worker=True) as client:
+        video = ready_video(client, make_clip)
+        job = request_job(client, video["id"])
+        assert analyzer.started.wait(10)
+        assert get_job(client, job["id"])["progress"] == {"done": 3, "total": 10, "unit": "FRAMES"}
+        analyzer.release.set()
+        wait_for_state(client, job["id"], "NEEDS_REVIEW")
+
+
+def test_repeated_progress_numbers_within_a_stage_are_throttled(storage, make_clip, monkeypatch):
+    monkeypatch.setattr(jobs, "PROGRESS_WRITE_SECONDS", 3600.0)
+    reports = (("DETECTING_RALLIES", 1, 10, "FRAMES"), ("DETECTING_RALLIES", 2, 10, "FRAMES"),
+               ("DETECTING_RALLIES", 3, 10, "FRAMES"))
+    analyzer = BlockingAnalyzer(reports=reports, polls=False)
+    with serve(storage, analyzer, start_worker=True) as client:
+        video = ready_video(client, make_clip)
+        job = request_job(client, video["id"])
+        assert analyzer.started.wait(10)
+        assert get_job(client, job["id"])["progress"] == {"done": 1, "total": 10, "unit": "FRAMES"}
         analyzer.release.set()
         wait_for_state(client, job["id"], "NEEDS_REVIEW")
 
@@ -341,9 +437,36 @@ def test_a_mock_analyzer_can_not_store_a_winner_or_a_confidence(storage, make_cl
         assert stored_rows(storage) == {"rallies": 0, "review_cards": 0}
 
 
+@pytest.mark.parametrize("proposal", [
+    RallyProposal(100, 200, confidence=0.93),
+    RallyProposal(100, 200, proposed_winner="HOME", confidence=0.93),
+    RallyProposal(100, 200, confidence=0),
+])
+def test_a_baseline_analyzer_can_not_store_a_confidence(storage, make_clip, proposal):
+    # The accuracy of a baseline is not measured, so it has no calibrated probability to give.
+    with serve(storage, ScriptedAnalyzer(result=[RallyProposal(300, 400), proposal])) as client:
+        job = run_one(client, make_clip)
+        assert job["analyzer"]["kind"] == "BASELINE"
+        assert job["state"] == "FAILED" and job["failure"]["code"] == "ANALYZER_ERROR"
+        assert stored_rows(storage) == {"rallies": 0, "review_cards": 0}
+
+
+def test_a_baseline_analyzer_may_propose_a_winner_as_a_hint(storage, make_clip):
+    hinting = ScriptedAnalyzer(result=[RallyProposal(100, 200, proposed_winner="AWAY"), RallyProposal(300, 400)])
+    with serve(storage, hinting) as client:
+        _, job = reviewed_job(client, make_clip)
+        rallies = client.get(f"/v1/analyses/{job['id']}/rallies").json()["rallies"]
+        assert [(rally["proposedWinner"], rally["confidence"], rally["winner"], rally["status"]) for rally in rallies] == [
+            ("AWAY", None, None, "PROPOSED"), ("UNKNOWN", None, None, "PROPOSED")]
+        assert [card["suggestedValue"] for card in cards(client, job["id"])] == ["AWAY", None]
+        assert [card["answer"] for card in cards(client, job["id"])] == [None, None]
+
+
 def test_proposals_are_stored_in_time_order_and_cut_at_the_end_of_the_video(storage, make_clip):
+    # Kind MODEL: only a model may carry the confidence that this test follows through the sort.
     analyzer = ScriptedAnalyzer(result=[RallyProposal(700, 60_000), RallyProposal(Indexable(100), Indexable(250)),
-                                        RallyProposal(300, 450, confidence=1)])
+                                        RallyProposal(300, 450, confidence=1)],
+                                info=AnalyzerInfo("scripted", "t1", MODEL))
     with serve(storage, analyzer) as client:
         video, job = reviewed_job(client, make_clip)
         duration = video["quality"]["media"]["durationMs"]
@@ -383,6 +506,20 @@ def test_a_queued_job_of_another_analyzer_is_not_run_under_the_wrong_name(storag
         failed = get_job(client, job["id"])
         assert (failed["state"], failed["failure"]["code"], failed["analyzer"]) == ("FAILED", "ANALYZER_ERROR", SCRIPTED)
         assert replacement.calls == 0
+
+
+def test_a_queued_job_is_not_run_by_an_analyzer_of_another_kind(storage, make_clip):
+    with serve(storage, ScriptedAnalyzer()) as client:
+        video = ready_video(client, make_clip)
+        job = request_job(client, video["id"])
+    # Same id and version, but invented output: it must not land in a job that says BASELINE.
+    replacement = ScriptedAnalyzer(info=AnalyzerInfo("scripted", "t1", MOCK))
+    with serve(storage, replacement) as client:
+        assert run_pending(client) == 0
+        failed = get_job(client, job["id"])
+        assert (failed["state"], failed["failure"]["code"], failed["analyzer"]) == ("FAILED", "ANALYZER_ERROR", SCRIPTED)
+        assert failed["mock"] is False and replacement.calls == 0
+        assert stored_rows(storage) == {"rallies": 0, "review_cards": 0}
 
 
 # --- cancel ----------------------------------------------------------------------------------
