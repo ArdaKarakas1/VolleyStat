@@ -98,7 +98,9 @@ fun VolleyStatApp(viewModel: AppViewModel = viewModel()) {
     // The welcome screen is shown once; the choice is fixed for this launch so it does not jump mid-session.
     val start = remember { if (state.settings.welcomeSeen) Routes.HOME else Routes.WELCOME }
 
-    fun open(match: MatchRecord) = nav.navigate(
+    /** One step forward. A second tap during the transition must not open the same screen twice. */
+    fun go(route: String) = nav.navigate(route) { launchSingleTop = true }
+    fun open(match: MatchRecord) = go(
         if (match.status == MatchStatus.NEEDS_REVIEW || match.status == MatchStatus.REPORT_READY) Routes.report(match.localId) else Routes.status(match.localId)
     )
     fun goTab(tab: String) = nav.navigate(tab) {
@@ -156,13 +158,13 @@ fun VolleyStatApp(viewModel: AppViewModel = viewModel()) {
             }
             composable(Routes.HOME) {
                 HomeScreen(
-                    state, onNewMatch = { nav.navigate(Routes.NEW_MATCH) }, onOpenMatch = ::open,
-                    onOpenMatches = { goTab(Routes.MATCHES) }, onOpenTeams = { goTab(Routes.TEAMS) }, onOpenGuide = { nav.navigate(Routes.GUIDE) },
+                    state, onNewMatch = { go(Routes.NEW_MATCH) }, onOpenMatch = ::open,
+                    onOpenMatches = { goTab(Routes.MATCHES) }, onOpenTeams = { goTab(Routes.TEAMS) }, onOpenGuide = { go(Routes.GUIDE) },
                 )
             }
-            composable(Routes.MATCHES) { MatchesScreen(state, onNewMatch = { nav.navigate(Routes.NEW_MATCH) }, onOpenMatch = ::open) }
+            composable(Routes.MATCHES) { MatchesScreen(state, onNewMatch = { go(Routes.NEW_MATCH) }, onOpenMatch = ::open) }
             composable(Routes.TEAMS) {
-                TeamsScreen(state.teams, onAddTeam = { viewModel.addTeam(it) != null }, onOpenTeam = { nav.navigate(Routes.team(it.id)) })
+                TeamsScreen(state.teams, onAddTeam = { viewModel.addTeam(it) != null }, onOpenTeam = { go(Routes.team(it.id)) })
             }
             composable(Routes.PROFILE) {
                 ProfileScreen(state, BuildConfig.VERSION_NAME, viewModel::setDisplayName, viewModel::setServerTarget, viewModel::testServer, viewModel::deleteRecording)
@@ -182,17 +184,18 @@ fun VolleyStatApp(viewModel: AppViewModel = viewModel()) {
             composable(Routes.GUIDE) { GuideScreen(onBack = { nav.popBackStack() }) }
 
             composable(Routes.NEW_MATCH) {
-                MatchCreateScreen(state.draft, LocalDate.now().toString(), viewModel::editDraft, onContinue = { nav.navigate(Routes.NEW_TEAMS) }, onBack = { nav.popBackStack() })
+                MatchCreateScreen(state.draft, LocalDate.now().toString(), viewModel::editDraft, onContinue = { go(Routes.NEW_TEAMS) }, onBack = { nav.popBackStack() })
             }
             composable(Routes.NEW_TEAMS) {
                 MatchTeamsScreen(
                     state.draft, state.teams, onChoose = { home, team -> viewModel.chooseTeam(home, team) }, onAddTeam = viewModel::addTeam,
-                    onOpenRoster = { nav.navigate(Routes.team(it.id)) }, onContinue = { nav.navigate(Routes.NEW_VIDEO) }, onBack = { nav.popBackStack() },
+                    onOpenRoster = { go(Routes.team(it.id)) }, onContinue = { go(Routes.NEW_VIDEO) }, onBack = { nav.popBackStack() },
                 )
             }
             composable(Routes.NEW_VIDEO) { VideoRoute(state, viewModel, nav) }
             composable(Routes.NEW_RECORD) {
-                val toCheck = { nav.navigate(Routes.NEW_CHECK) { popUpTo(Routes.NEW_VIDEO) } }
+                // Reading the file takes a moment. If the user has left the source screen by then, nothing opens on its own.
+                val toCheck = { if (nav.currentDestination?.route == Routes.NEW_VIDEO) nav.navigate(Routes.NEW_CHECK) { popUpTo(Routes.NEW_VIDEO); launchSingleTop = true } }
                 RecordRoute(
                     prepareFile = viewModel::prepareCapture,
                     // Back to the source screen first: if nothing was recorded, that is where the message appears.
@@ -233,7 +236,7 @@ fun VolleyStatApp(viewModel: AppViewModel = viewModel()) {
                         onPause = viewModel::pauseUpload, onResume = { viewModel.resumeUpload(match.localId) },
                         onRemove = { viewModel.removeMatch(match.localId) {} },
                         onRestartAnalysis = { viewModel.restartAnalysis(match.localId) },
-                        onOpenReview = { nav.navigate(Routes.review(match.localId)) }, onOpenReport = { nav.navigate(Routes.report(match.localId)) },
+                        onOpenReview = { go(Routes.review(match.localId)) }, onOpenReport = { go(Routes.report(match.localId)) },
                         onBack = { nav.popBackStack() },
                     )
                 }
@@ -244,20 +247,28 @@ fun VolleyStatApp(viewModel: AppViewModel = viewModel()) {
                 if (match == null || videoId == null) {
                     LaunchedEffect(Unit) { leave(Routes.REVIEW) }
                 } else {
+                    // The shared state may still hold another match. This screen only ever shows its own.
+                    val shown = if (analysis.matchId == match.localId) analysis else AnalysisUi(matchId = match.localId)
                     LaunchedEffect(match.localId) {
                         if (analysis.matchId != match.localId || analysis.job == null) viewModel.watchAnalysis(match.localId, startIfMissing = false)
                     }
-                    LaunchedEffect(analysis.job?.id) { if (analysis.job != null) viewModel.loadReview() }
+                    LaunchedEffect(shown.job?.id) { if (shown.job != null) viewModel.loadReview() }
                     // The scorer belongs to the side that won the rally, as answered on that rally's winner card.
-                    val winner = analysis.deck?.cards?.firstOrNull { it.rallyId == analysis.card?.rallyId && it.questionType == ReviewCard.RALLY_WINNER }?.answer
+                    val winner = shown.deck?.cards?.firstOrNull { it.rallyId == shown.card?.rallyId && it.questionType == ReviewCard.RALLY_WINNER }?.answer
                     val url = remember(videoId, state.settings.serverTarget) { viewModel.api().videoContentUrl(videoId) }
                     ReviewScreen(
-                        match, analysis,
+                        match, shown,
                         scorerRoster = roster(if (winner == ReviewCard.AWAY) match.awayTeamId else match.homeTeamId),
                         onAnswer = viewModel::answerReview, onMove = viewModel::moveReview, onDetail = viewModel::setReviewDetail,
-                        onOpenReport = { nav.navigate(Routes.report(match.localId)) { popUpTo(Routes.review(match.localId)) { inclusive = true } } },
+                        onOpenReport = {
+                            // Opened from the report: going back to it shows the one report there is, and it reloads.
+                            val below = nav.previousBackStackEntry
+                            if (below?.destination?.route == Routes.REPORT && below.arguments?.getString("id") == match.localId) nav.popBackStack()
+                            else nav.navigate(Routes.report(match.localId)) { popUpTo(Routes.review(match.localId)) { inclusive = true }; launchSingleTop = true }
+                        },
                         onBack = { nav.popBackStack() },
                         clip = { card -> ClipPlayer(url, card.clipStartMs, card.clipEndMs) },
+                        onRetry = { viewModel.retryReview(match.localId) },
                     )
                 }
             }
@@ -270,8 +281,8 @@ fun VolleyStatApp(viewModel: AppViewModel = viewModel()) {
                     LaunchedEffect(match.localId, entry) { viewModel.loadReport(match.localId) }
                     ReportScreen(
                         match, if (analysis.matchId == match.localId) analysis.reportLoad else ReportLoad.LOADING, analysis.report.takeIf { analysis.matchId == match.localId },
-                        onOpenReview = { nav.navigate(Routes.review(match.localId)) }, onOpenPlayers = { nav.navigate(Routes.players(match.localId)) },
-                        onOpenStatus = { nav.navigate(Routes.status(match.localId)) }, onRetry = { viewModel.loadReport(match.localId) },
+                        onOpenReview = { go(Routes.review(match.localId)) }, onOpenPlayers = { go(Routes.players(match.localId)) },
+                        onOpenStatus = { go(Routes.status(match.localId)) }, onRetry = { viewModel.loadReport(match.localId) },
                         onBack = { nav.popBackStack() },
                     )
                 }
@@ -281,7 +292,13 @@ fun VolleyStatApp(viewModel: AppViewModel = viewModel()) {
                 if (match == null) {
                     LaunchedEffect(Unit) { leave(Routes.PLAYERS) }
                 } else {
-                    PlayersScreen(match, analysis.report.takeIf { analysis.matchId == match.localId }, roster(match.homeTeamId), roster(match.awayTeamId), onBack = { nav.popBackStack() })
+                    // After the system ended the app this screen can be the first one to open, with no report in memory.
+                    val own = analysis.matchId == match.localId
+                    LaunchedEffect(match.localId) { if (!own || analysis.report == null) viewModel.loadReport(match.localId) }
+                    PlayersScreen(
+                        match, analysis.report.takeIf { own }, roster(match.homeTeamId), roster(match.awayTeamId), onBack = { nav.popBackStack() },
+                        load = if (own) analysis.reportLoad else ReportLoad.LOADING, onRetry = { viewModel.loadReport(match.localId) },
+                    )
                 }
             }
         }
@@ -293,7 +310,8 @@ fun VolleyStatApp(viewModel: AppViewModel = viewModel()) {
 private fun VideoRoute(state: AppUiState, viewModel: AppViewModel, nav: NavHostController) {
     val context = LocalContext.current
     var camera by rememberSaveable { mutableStateOf(true) }
-    val toCheck = { nav.navigate(Routes.NEW_CHECK) { launchSingleTop = true } }
+    // Reading a picked video takes a moment. If the user has left this screen by then, nothing opens on its own.
+    val toCheck = { if (nav.currentDestination?.route == Routes.NEW_VIDEO) nav.navigate(Routes.NEW_CHECK) { launchSingleTop = true } }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         // A dismissed picker returns null and leaves the current choice alone.
         if (uri != null) {
@@ -305,8 +323,8 @@ private fun VideoRoute(state: AppUiState, viewModel: AppViewModel, nav: NavHostC
     VideoSourceScreen(
         cameraSelected = camera, reading = state.readingVideo, problem = state.sourceProblem,
         onSelect = { camera = it },
-        onGo = { if (camera) nav.navigate(Routes.NEW_RECORD) else picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)) },
-        onOpenGuide = { nav.navigate(Routes.GUIDE) }, onBack = { nav.popBackStack() },
+        onGo = { if (camera) nav.navigate(Routes.NEW_RECORD) { launchSingleTop = true } else picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)) },
+        onOpenGuide = { nav.navigate(Routes.GUIDE) { launchSingleTop = true } }, onBack = { nav.popBackStack() },
         existing = state.draft.video, onContinueExisting = toCheck,
     )
 }

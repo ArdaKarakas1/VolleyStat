@@ -1,6 +1,6 @@
 # Fark analizi: gereksinimler ve mevcut kod
 
-**Tarih:** 13 Kasım 2026 · **Kod sürümü:** 0.4.0 · **Kaynaklar:** V4 devir raporu ve ekleri, UI Tasarım V1 paketi
+**Tarih:** 13 Kasım 2026 · **Kod sürümü:** 0.4.1 · **Kaynaklar:** V4 devir raporu ve ekleri, UI Tasarım V1 paketi
 
 Durum etiketleri:
 
@@ -111,14 +111,36 @@ Sayılar son yerel koşudan gelir. CI aynı testleri her PR'da çalıştırır.
 |---|---|
 | Arka uç `pytest` | 402 test geçti (yerelde Python 3.13, CI'da Python 3.12) |
 | `ml` `pytest` | 209 test geçti (yerel ve CI) |
-| Android JVM testleri (`:core:test`, `:app:testDebugUnitTest`) | 40 test geçti, hiçbiri atlanmadı (yerel). Testler 42 ekran görüntüsü üretti. |
-| Uygulama gerçek sunucuya karşı (JVM) | 6 test geçti (yerel ve CI): `BackendE2eTest` 4, `AppFlowE2eTest` 1, `AppUploadFlowE2eTest` 1. Bu altı test yukarıdaki 40 testin içindedir. |
+| Android JVM testleri (`:core:test`, `:app:testDebugUnitTest`) | 61 test geçti, hiçbiri atlanmadı (yerel). Testler 42 ekran görüntüsü üretti. |
+| Uygulama gerçek sunucuya karşı (JVM) | 6 test geçti (yerel ve CI): `BackendE2eTest` 4, `AppFlowE2eTest` 1, `AppUploadFlowE2eTest` 1. Bu altı test yukarıdaki 61 testin içindedir. |
 | Lint | 0 hata |
 | Emülatörde cihaz testleri (CI, API 34) | 2 test geçti: kamera kaydı ve baştan sona akış (yeni maç, kayıt, yükleme, dosya kontrolü, deneme analizi, sunucudan klip, karar, rapor). İlk iki koşu kırmızıydı ve uygulamada gerçek bir gezinme hatasını gösterdi. |
 | Gerçek telefonda deneme | **Yok.** |
 | Model doğruluğu | **Yok.** Kimse ölçmedi. |
 
 Bütün test klipleri ffmpeg'in ürettiği sentetik desenlerdir. Uçtan uca akış yalnız DEMO etiketli deneme analizörüyle çalıştı. Deneme analizörü ralli aralıklarını uydurur.
+
+### Bağımsız inceleme
+
+Ayrı inceleyiciler üç parçayı ve yapay zekâ planını okudu. Ayrı bir doğrulayıcı her bulguyu koda karşı denedi.
+
+| Parça | Bulgu | Sonuç |
+|---|---|---|
+| Arka uç | 16 | 15 bulgu düzeldi. 1 bulgu tasarım gereğidir: `motion-baseline` modülü `ml` paketiyle gelir. Doğrulayıcının eklediği 4 küçük nokta da kapandı. |
+| `ml` paketi | 8 | 8 bulgu düzeldi. Oturum düzeltmeleri test paketinin dışındaki kliplerle ayrıca denedi. |
+| Yapay zekâ planı | 11 | 11 bulgu belgeye işlendi. |
+| Android uygulaması | 21 | Doğrulayıcı 19 bulguyu doğruladı ve 2 bulguyu reddetti. Doğrulanan 19 bulgu sürüm 0.4.1 ile düzeldi. Reddedilen bulgulardan biri metin kuralıydı ve o metinler de düzeldi. Öbürü uygulanmadı: "Oyuncusu belli olmayan sayı" alt sınır değildir, çünkü kullanıcı oyuncu seçtikçe bu sayı azalır. |
+
+Android incelemesinin bulduğu en ağır hatalar şunlardı:
+
+- Yavaş ağda bir maçın kartları başka bir maçın doğrulama ekranına düşebiliyordu. Kullanıcının kararı o durumda yanlış maça yazılıyordu.
+- Kullanıcı kart atladıysa ekran son karttan sonra "Bütün ralliler için karar verdin" diyordu.
+- Set skoru alt sınırken artı işareti taşımıyordu.
+- Bağlantı koptuktan sonra "Yeniden Dene" düğmesi yeni bir analiz başlatıyordu. Yeni iş, kullanıcının doğruladığı işin yerine geçiyordu.
+- Kartların yenilenmesi başarısız olunca uygulama sunucunun kaydettiği kararı "kaydedemedi" diye gösteriyordu.
+- Uygulama iptal edilen işi hata olarak ve sunucunun hata kodlarını ekranda gösteriyordu.
+
+Üç düzeltmenin otomatik testi yoktur: kamera izninin ayarlardan dönüşte yeniden okunması (cihaz ister), çift dokunmada aynı ekranın iki kez açılmaması ve video okunurken ekrandan ayrılan kullanıcıya kontrol ekranının kendiliğinden açılmaması. Bir bulgu yarım kapandı: Uygulama yerel kayıt dosyasını hâlâ çağıran iş parçacığında yazar. Yazma hatası artık uygulamayı kapatmaz ve ana ekran hatayı bildirir.
 
 ## 7. Sıradaki dilimler
 

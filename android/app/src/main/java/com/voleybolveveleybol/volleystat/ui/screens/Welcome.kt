@@ -3,7 +3,7 @@ package com.voleybolveveleybol.volleystat.ui.screens
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -39,12 +41,17 @@ import com.voleybolveveleybol.volleystat.ui.theme.LocalVsColors
 @Composable
 fun WelcomeScreen(onStart: () -> Unit) {
     val colors = LocalVsColors.current
-    Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(colors.heroStart, colors.heroEnd)))) {
+    BoxWithConstraints(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(colors.heroStart, colors.heroEnd)))) {
+        // In landscape or with large text the content is taller than the screen. It scrolls then,
+        // so the one button of this screen can always be reached. Otherwise it fills the screen
+        // and the two groups sit as before: the name in the middle, the button at the bottom.
         Column(
-            Modifier.fillMaxSize().safeDrawingPadding().padding(horizontal = 24.dp, vertical = 32.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
+            Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).heightIn(min = maxHeight)
+                .safeDrawingPadding().padding(horizontal = 24.dp, vertical = 32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.SpaceBetween,
         ) {
-            Spacer(Modifier.weight(1f))
+          Spacer(Modifier.height(0.dp))
+          Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(painterResource(R.drawable.ic_sports_volleyball_filled), contentDescription = null, tint = colors.onHero, modifier = Modifier.size(88.dp))
             Spacer(Modifier.height(16.dp))
             Text(stringResource(R.string.app_name), style = MaterialTheme.typography.displayMedium, color = colors.onHero, modifier = Modifier.semantics { heading() })
@@ -55,7 +62,9 @@ fun WelcomeScreen(onStart: () -> Unit) {
                 Image(painterResource(R.drawable.brand_logo), contentDescription = stringResource(R.string.logo_description), modifier = Modifier.size(36.dp).clip(CircleShape))
                 Text(stringResource(R.string.brand_name), style = MaterialTheme.typography.titleSmall, color = colors.onHero)
             }
-            Spacer(Modifier.weight(1f))
+            Spacer(Modifier.height(24.dp))
+          }
+          Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(stringResource(R.string.welcome_today), style = MaterialTheme.typography.bodyMedium, color = colors.onHero, textAlign = TextAlign.Center)
             Spacer(Modifier.height(20.dp))
             Button(
@@ -68,6 +77,7 @@ fun WelcomeScreen(onStart: () -> Unit) {
                 Spacer(Modifier.width(8.dp))
                 Icon(painterResource(R.drawable.ic_arrow_forward), contentDescription = null, modifier = Modifier.size(20.dp))
             }
+          }
         }
     }
 }

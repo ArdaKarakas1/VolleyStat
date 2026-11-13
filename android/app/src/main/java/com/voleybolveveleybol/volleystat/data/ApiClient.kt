@@ -90,11 +90,11 @@ class ApiClient(private val baseUrl: String) {
     fun startAnalysis(videoId: String, idempotencyKey: String): AnalysisJob =
         parseJob(request("POST", "/videos/$videoId/analyses", ByteArray(0), headers = mapOf("Idempotency-Key" to idempotencyKey)))
 
-    /** The latest job of a video, or null when it never had one. */
+    /** The latest job of a video, or null when it never had one. A video the server does not know is an error, not "no job". */
     fun latestAnalysis(videoId: String): AnalysisJob? = try {
         parseJob(request("GET", "/videos/$videoId/analyses/latest"))
     } catch (error: ApiException) {
-        if (error.status != 404) throw error
+        if (error.code != "ANALYSIS_NOT_FOUND") throw error
         null
     }
 

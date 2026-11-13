@@ -96,7 +96,14 @@ fun ScoreHeader(match: MatchRecord, report: MatchReport?, modifier: Modifier = M
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TeamColumn(match.homeTeam, home = true, modifier = Modifier.weight(1f))
             if (known) {
-                Text("${report!!.setsWonHome} - ${report.setsWonAway}", style = MaterialTheme.typography.displayLarge)
+                // Sets won under PARTIAL are a lower bound like every other partial number, so they carry the plus too.
+                val atLeast = report!!.scoreStatus == "PARTIAL"
+                val plus = if (atLeast) "+" else ""
+                val spoken = stringResource(R.string.report_score_at_least, report.setsWonHome ?: 0, report.setsWonAway ?: 0)
+                Text(
+                    "${report.setsWonHome}$plus - ${report.setsWonAway}$plus", style = MaterialTheme.typography.displayLarge, maxLines = 1, softWrap = false,
+                    modifier = if (atLeast) Modifier.semantics { contentDescription = spoken } else Modifier,
+                )
             } else {
                 Text(
                     stringResource(R.string.report_score_unknown), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -140,6 +147,12 @@ private fun SectionHeader(text: String) {
     )
 }
 
+@Composable
+private fun ReportLoading() = Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+    Text(stringResource(R.string.report_loading), style = MaterialTheme.typography.bodyMedium)
+}
+
 /** 09: the score, how complete the data is, and the ways deeper. Everything comes from the server's report. */
 @Composable
 fun ReportScreen(
@@ -154,10 +167,7 @@ fun ReportScreen(
 ) {
     FlowScaffold(title = stringResource(R.string.report_title), onBack = onBack) {
         when {
-            load == ReportLoad.LOADING -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                Text(match.title, style = MaterialTheme.typography.bodyMedium)
-            }
+            load == ReportLoad.LOADING -> ReportLoading()
             load == ReportLoad.UNREACHABLE -> {
                 Notice(stringResource(R.string.report_load_failed), Tone.NEGATIVE)
                 PrimaryButton(stringResource(R.string.action_retry), onRetry)
@@ -255,8 +265,24 @@ fun PlayersScreen(
     report: MatchReport?,
     homeRoster: List<Player>,
     awayRoster: List<Player>,
+    load: ReportLoad = ReportLoad.READY,
+    onRetry: () -> Unit = {},
     onBack: () -> Unit,
 ) {
+    // Without a report the table has nothing to show, and an empty table would read as "no points".
+    if (report == null) {
+        FlowScaffold(title = stringResource(R.string.players_title), onBack = onBack) {
+            when (load) {
+                ReportLoad.UNREACHABLE -> {
+                    Notice(stringResource(R.string.report_load_failed), Tone.NEGATIVE)
+                    PrimaryButton(stringResource(R.string.action_retry), onRetry)
+                }
+                ReportLoad.NONE -> NotYetCard(stringResource(R.string.report_unavailable_title), stringResource(R.string.report_unavailable_body))
+                else -> ReportLoading()
+            }
+        }
+        return
+    }
     var side by rememberSaveable { mutableIntStateOf(0) }
     val home = side == 0
     val roster = if (home) homeRoster else awayRoster
@@ -264,7 +290,7 @@ fun PlayersScreen(
     val unattributed = if (home) report?.unattributedHome else report?.unattributedAway
     // A player's count can still grow while rallies are undecided or points have no player yet,
     // so until then every number in the table is a lower bound and must not read as a final total.
-    val lowerBound = report != null && (report.ralliesMayBeMissing || report.verificationStatus != "VERIFIED" || (unattributed ?: 0) > 0)
+    val lowerBound = report.ralliesMayBeMissing || report.verificationStatus != "VERIFIED" || (unattributed ?: 0) > 0
     val missing = stringResource(R.string.value_not_measured)
     FlowScaffold(title = stringResource(R.string.players_title), onBack = onBack) {
         if (report?.mock == true) DemoBanner(compact = true)

@@ -207,6 +207,7 @@ fun HomeScreen(
             if (name.isEmpty()) stringResource(R.string.home_greeting) + " 👋" else stringResource(R.string.home_greeting_name, name) + " 👋",
             style = MaterialTheme.typography.headlineSmall, modifier = Modifier.semantics { heading() },
         )
+        if (state.saveFailed) Notice(stringResource(R.string.store_save_failed), Tone.NEGATIVE)
         NewMatchCard(onNewMatch)
         if (state.draft.started || attention.isNotEmpty()) {
             SectionTitle(stringResource(R.string.home_section_now))
@@ -398,9 +399,15 @@ fun ProfileScreen(
                         Text(recording.name, style = MaterialTheme.typography.bodyMedium)
                         Text(formatBytes(recording.sizeBytes), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    IconButton(onClick = { recordingToDelete = recording.path }) {
-                        Icon(painterResource(R.drawable.ic_delete), contentDescription = stringResource(R.string.recording_delete_description, recording.name))
+                    // A file an unfinished upload still reads from can not be deleted here.
+                    if (!state.recordingInUse(recording.path)) {
+                        IconButton(onClick = { recordingToDelete = recording.path }) {
+                            Icon(painterResource(R.drawable.ic_delete), contentDescription = stringResource(R.string.recording_delete_description, recording.name))
+                        }
                     }
+                }
+                if (state.recordingInUse(recording.path)) {
+                    Text(stringResource(R.string.recordings_in_use), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }

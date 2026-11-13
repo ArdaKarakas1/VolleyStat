@@ -76,10 +76,16 @@ data class AppUiState(
     val sourceProblem: SourceProblem? = null,
     /** Match whose server-side removal failed; the record is kept and the screen says so. */
     val removalFailedFor: String? = null,
-)
+    /** The last change did not reach the disk. It is still in memory and the next change tries again. */
+    val saveFailed: Boolean = false,
+) {
+    /** A camera file that the draft or an upload that has not finished still reads from. */
+    fun recordingInUse(path: String) = draft.video?.location == path || matches.any { it.check == null && it.video.location == path }
+}
 
 /** How much the app knows about the analysis job of the match that is open. */
-enum class JobLoad { LOADING, READY, NO_JOB, NO_ANALYZER, UNREACHABLE }
+/** VIDEO_MISSING: the server answered that it no longer holds a usable video for this match. */
+enum class JobLoad { LOADING, READY, NO_JOB, NO_ANALYZER, VIDEO_MISSING, UNREACHABLE }
 
 enum class ReviewProblem { STALE, SAVE_FAILED, LOAD_FAILED }
 
@@ -123,8 +129,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         state = _state.asStateFlow()
     }
 
+    /** Tests point the view model at a stand-in server with this. It is null everywhere else. */
+    internal var baseUrlOverride: String? = null
+
     private fun baseUrl(target: ServerTarget) =
-        if (target == ServerTarget.EMULATOR) BuildConfig.API_URL_EMULATOR else BuildConfig.API_URL_USB
+        baseUrlOverride ?: if (target == ServerTarget.EMULATOR) BuildConfig.API_URL_EMULATOR else BuildConfig.API_URL_USB
 
     fun api() = ApiClient(baseUrl(_state.value.settings.serverTarget))
 
@@ -136,10 +145,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _state.update(transform)
         // Changes arrive from the main thread and from the upload thread. Writing whatever is
         // current under one lock means a slower writer can never put an older state on disk.
-        synchronized(store) {
+        val saved = synchronized(store) {
             val current = _state.value
-            store.save(StoredState(current.matches, current.teams, current.draft, current.settings))
+            // A full disk must not take the app down in the middle of a keystroke or an upload.
+            runCatching { store.save(StoredState(current.matches, current.teams, current.draft, current.settings)) }.isSuccess
         }
+        if (_state.value.saveFailed == saved) _state.update { it.copy(saveFailed = !saved) }
     }
 
     // ----- New analysis draft -----
@@ -367,15 +378,35 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
      * Follows the job of a match while its screen is open: asks for one if the video never had
      * one, then polls while the server is still working. Only the server's own states are shown.
      */
-    fun watchAnalysis(matchId: String, startIfMissing: Boolean = true) {
+    fun watchAnalysis(matchId: String, startIfMissing: Boolean = true) = watch(matchId, startIfMissing, startNow = false)
+
+    /**
+     * The retry button of the status screen. A new job is asked for only when the last one ended
+     * without a result or the video has none. After a lost connection the app asks again for the
+     * job it was following: a new job there would replace one the user may already have reviewed.
+     */
+    fun restartAnalysis(matchId: String) {
+        val ui = _analysis.value.takeIf { it.matchId == matchId }
+        val ended = ui?.job?.state == AnalysisSummary.FAILED || ui?.job?.state == AnalysisSummary.CANCELLED
+        val startNow = ui != null && (ui.jobLoad == JobLoad.NO_JOB || (ui.jobLoad == JobLoad.READY && ended))
+        _analysis.update { if (it.matchId == matchId) it.copy(jobLoad = JobLoad.LOADING) else it }
+        watch(matchId, startIfMissing = true, startNow = startNow)
+    }
+
+    private fun watch(matchId: String, startIfMissing: Boolean, startNow: Boolean) {
         if (_analysis.value.matchId != matchId) _analysis.value = AnalysisUi(matchId = matchId)
         watchJob?.cancel()
         val videoId = videoIdOf(matchId) ?: return
         watchJob = viewModelScope.launch {
+            // One key for the whole watch: when the answer to a start request is lost, the retry
+            // gets the same job back instead of a second analysis.
+            val startKey = UUID.randomUUID().toString()
+            var mustStart = startNow
             while (isActive) {
                 val outcome = withContext(Dispatchers.IO) {
                     try {
-                        val job = api().latestAnalysis(videoId) ?: if (startIfMissing) api().startAnalysis(videoId, UUID.randomUUID().toString()) else null
+                        val job = if (mustStart) api().startAnalysis(videoId, startKey)
+                        else api().latestAnalysis(videoId) ?: if (startIfMissing) api().startAnalysis(videoId, startKey) else null
                         Result.success(job)
                     } catch (error: IOException) {
                         Result.failure(error)
@@ -383,13 +414,22 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 val job = outcome.getOrNull()
                 val error = outcome.exceptionOrNull()
+                // An answer the server would repeat ends the watch. Only a lost connection is tried again.
+                val refusal = when ((error as? ApiException)?.code) {
+                    "MODEL_NOT_CONFIGURED" -> JobLoad.NO_ANALYZER
+                    "VIDEO_NOT_FOUND", "VIDEO_NOT_READY", "VIDEO_FILE_MISSING" -> JobLoad.VIDEO_MISSING
+                    else -> null
+                }
                 when {
-                    error is ApiException && error.code == "MODEL_NOT_CONFIGURED" -> {
-                        _analysis.update { if (it.matchId == matchId) it.copy(jobLoad = JobLoad.NO_ANALYZER, job = null) else it }
+                    refusal != null -> {
+                        _analysis.update { if (it.matchId == matchId) it.copy(jobLoad = refusal, job = null) else it }
                         return@launch
                     }
                     error != null -> _analysis.update { if (it.matchId == matchId) it.copy(jobLoad = JobLoad.UNREACHABLE) else it }
-                    else -> publish(matchId, job)
+                    else -> {
+                        mustStart = false
+                        publish(matchId, job)
+                    }
                 }
                 val working = job?.state == AnalysisSummary.QUEUED || job?.state == AnalysisSummary.PROCESSING
                 if (error == null && !working) return@launch
@@ -402,16 +442,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         watchJob?.cancel()
     }
 
-    /** Starts a new job for a video whose last job failed or was cancelled. */
-    fun restartAnalysis(matchId: String) {
-        val videoId = videoIdOf(matchId) ?: return
-        _analysis.update { it.copy(jobLoad = JobLoad.LOADING) }
-        viewModelScope.launch {
-            withContext(Dispatchers.IO) { runCatching { api().startAnalysis(videoId, UUID.randomUUID().toString()) } }
-            watchAnalysis(matchId, startIfMissing = false)
-        }
-    }
-
     fun setReviewDetail(detail: Boolean) {
         _analysis.update { it.copy(detail = detail) }
         loadReview(keepCursor = true)
@@ -420,10 +450,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     /** Loads the cards and puts the cursor on the first one that still needs an answer. */
     fun loadReview(keepCursor: Boolean = false) {
         val ui = _analysis.value
+        val matchId = ui.matchId ?: return
         val jobId = ui.job?.id ?: return
         viewModelScope.launch {
             val deck = withContext(Dispatchers.IO) { runCatching { api().reviewCards(jobId, if (ui.detail) "ALL" else "SCORE") }.getOrNull() }
             _analysis.update { current ->
+                // The cards belong to the match and the job they were asked for. By the time a slow
+                // answer arrives another match may be open, and its screen must never get these cards.
+                if (current.matchId != matchId || current.job?.id != jobId) return@update current
                 if (deck == null) return@update current.copy(reviewProblem = ReviewProblem.LOAD_FAILED)
                 val cursor = if (keepCursor) current.cursor.coerceIn(0, deck.cards.size) else deck.cards.indexOfFirst { it.open }.let { if (it < 0) deck.cards.size else it }
                 current.copy(deck = deck, cursor = cursor, reviewProblem = null)
@@ -431,7 +465,25 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Asks again for what the review screen is missing: the job first, then its cards. */
+    fun retryReview(matchId: String) {
+        val ui = _analysis.value
+        if (ui.matchId != matchId || ui.job == null) {
+            watchAnalysis(matchId, startIfMissing = false)
+        } else {
+            _analysis.update { it.copy(reviewProblem = null) }
+            loadReview(keepCursor = ui.deck != null)
+        }
+    }
+
     fun moveReview(step: Int) = _analysis.update { it.copy(cursor = (it.cursor + step).coerceIn(0, it.deck?.cards?.size ?: 0), reviewProblem = null) }
+
+    /**
+     * The decision that is on its way, with its idempotency key. The same decision sent again
+     * reuses the key, so a decision whose answer was lost is answered from the server's record
+     * instead of being refused as a stale version.
+     */
+    private var pendingDecision: Pair<String, String>? = null
 
     /** One tap is one decision: it is saved at once and the next open card comes up. */
     fun answerReview(selection: String) {
@@ -440,28 +492,39 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val matchId = ui.matchId ?: return
         val jobId = ui.job?.id ?: return
         if (ui.saving) return
+        val decision = "${card.id}|$selection|${card.version}"
+        val key = pendingDecision?.takeIf { it.first == decision }?.second ?: UUID.randomUUID().toString().also { pendingDecision = decision to it }
         _analysis.update { it.copy(saving = true, reviewProblem = null) }
         viewModelScope.launch {
-            val outcome = withContext(Dispatchers.IO) {
+            val decided = withContext(Dispatchers.IO) {
                 try {
-                    val job = api().decide(card.id, selection, card.version, UUID.randomUUID().toString())
-                    Result.success(job to api().reviewCards(jobId, if (ui.detail) "ALL" else "SCORE"))
+                    Result.success(api().decide(card.id, selection, card.version, key))
                 } catch (error: IOException) {
                     Result.failure(error)
                 }
             }
-            outcome.onSuccess { (job, deck) ->
-                publish(matchId, job)
-                _analysis.update { current ->
-                    // The answer may have created follow-up cards right after this one; otherwise move on.
-                    val here = deck.cards.indexOfFirst { it.id == card.id }
-                    val next = deck.cards.withIndex().firstOrNull { (index, candidate) -> index > here && candidate.open }?.index ?: deck.cards.size
-                    current.copy(deck = deck, cursor = next, saving = false)
-                }
-            }.onFailure { error ->
+            val job = decided.getOrElse { error ->
+                // A refusal is the server's final word on this key. A lost connection is not: the
+                // server may have stored the decision, so the key is kept for the retry.
+                if (error is ApiException) pendingDecision = null
                 val stale = error is ApiException && error.code == "REVIEW_STALE_VERSION"
-                _analysis.update { it.copy(saving = false, reviewProblem = if (stale) ReviewProblem.STALE else ReviewProblem.SAVE_FAILED) }
-                if (stale) loadReview(keepCursor = true)
+                _analysis.update { if (it.matchId == matchId) it.copy(saving = false, reviewProblem = if (stale) ReviewProblem.STALE else ReviewProblem.SAVE_FAILED) else it }
+                if (stale && _analysis.value.matchId == matchId) loadReview(keepCursor = true)
+                return@launch
+            }
+            // The decision is stored from here on, whatever happens to the reload of the cards.
+            publish(matchId, job)
+            val deck = withContext(Dispatchers.IO) { runCatching { api().reviewCards(jobId, if (ui.detail) "ALL" else "SCORE") }.getOrNull() }
+            _analysis.update { current ->
+                if (current.matchId != matchId || current.job?.id != jobId) return@update current
+                // The screen still shows the card as it was. The key stays, so the same tap again is
+                // answered from the server's record.
+                if (deck == null) return@update current.copy(saving = false, reviewProblem = ReviewProblem.LOAD_FAILED)
+                pendingDecision = null
+                // The answer may have created follow-up cards right after this one; otherwise move on.
+                val here = deck.cards.indexOfFirst { it.id == card.id }
+                val next = deck.cards.withIndex().firstOrNull { (index, candidate) -> index > here && candidate.open }?.index ?: deck.cards.size
+                current.copy(deck = deck, cursor = next, saving = false, reviewProblem = null)
             }
         }
     }
@@ -543,7 +606,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     /** Deletes a camera recording the user explicitly chose to remove in Profil. */
     fun deleteRecording(path: String) {
         val file = File(path)
-        if (file.parentFile == recordingsFolder) file.delete()
+        // A file the draft or an unfinished upload still reads from stays: without it that upload could never finish.
+        if (file.parentFile == recordingsFolder && !_state.value.recordingInUse(path)) file.delete()
         _state.update { it.copy(recordings = listRecordings()) }
     }
 

@@ -38,6 +38,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.voleybolveveleybol.volleystat.AnalysisUi
+import com.voleybolveveleybol.volleystat.JobLoad
 import com.voleybolveveleybol.volleystat.R
 import com.voleybolveveleybol.volleystat.ReviewProblem
 import com.voleybolveveleybol.volleystat.model.MatchRecord
@@ -112,16 +113,30 @@ fun ReviewScreen(
     onDetail: (Boolean) -> Unit,
     onOpenReport: () -> Unit,
     onBack: () -> Unit,
+    onRetry: () -> Unit = {},
     clip: @Composable (ReviewCard) -> Unit,
 ) {
     val deck = analysis.deck
     val card = analysis.card
+    // Without a job there are no cards to wait for. The screen says why instead of spinning.
+    val jobProblem = analysis.jobLoad.takeIf { analysis.job == null && it != JobLoad.LOADING && it != JobLoad.READY }
+    val loadFailed = analysis.reviewProblem == ReviewProblem.LOAD_FAILED
+    // Cards the user skipped stay open. Past the last card the screen must not say that everything is decided.
+    val firstOpen = deck?.cards?.indexOfFirst { it.open } ?: -1
+    val openCards = deck?.cards?.count { it.open } ?: 0
     FlowScaffold(
         title = stringResource(R.string.review_title), onBack = onBack,
-        actions = if (deck == null) null else ({
+        actions = if (deck == null) {
+            if (loadFailed || jobProblem == JobLoad.UNREACHABLE) ({ PrimaryButton(stringResource(R.string.action_retry), onRetry) }) else null
+        } else ({
             if (card == null) {
-                PrimaryButton(stringResource(R.string.action_open_report), onOpenReport, icon = R.drawable.ic_bar_chart)
-                if (deck.cards.isNotEmpty()) SecondaryButton(stringResource(R.string.review_previous), onClick = { onMove(-1) })
+                if (firstOpen >= 0) {
+                    PrimaryButton(stringResource(R.string.review_go_open), onClick = { onMove(firstOpen - analysis.cursor) }, icon = R.drawable.ic_fact_check)
+                    SecondaryButton(stringResource(R.string.action_open_report), onOpenReport)
+                } else {
+                    PrimaryButton(stringResource(R.string.action_open_report), onOpenReport, icon = R.drawable.ic_bar_chart)
+                    if (deck.cards.isNotEmpty()) SecondaryButton(stringResource(R.string.review_previous), onClick = { onMove(-1) })
+                }
             } else {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     SecondaryButton(stringResource(R.string.review_previous), onClick = { onMove(-1) }, enabled = analysis.cursor > 0 && !analysis.saving, modifier = Modifier.weight(1f))
@@ -133,11 +148,21 @@ fun ReviewScreen(
     ) {
         if (analysis.job?.mock == true) DemoBanner(compact = true)
         when {
-            deck == null && analysis.reviewProblem == ReviewProblem.LOAD_FAILED -> Notice(stringResource(R.string.review_save_failed), Tone.NEGATIVE)
+            deck == null && jobProblem != null -> Notice(
+                stringResource(when (jobProblem) {
+                    JobLoad.UNREACHABLE -> R.string.analysis_unreachable
+                    JobLoad.NO_ANALYZER -> R.string.analysis_none_title
+                    JobLoad.VIDEO_MISSING -> R.string.analysis_video_missing_body
+                    else -> R.string.review_no_job
+                }),
+                if (jobProblem == JobLoad.UNREACHABLE) Tone.NEGATIVE else Tone.CAUTION,
+            )
+            deck == null && loadFailed -> Notice(stringResource(R.string.review_load_failed), Tone.NEGATIVE)
             deck == null -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                 Text(stringResource(R.string.review_loading), style = MaterialTheme.typography.bodyMedium)
             }
+            card == null && openCards > 0 -> EmptyState(R.drawable.ic_fact_check, stringResource(R.string.review_skipped_title, openCards), stringResource(R.string.review_skipped_body))
             card == null -> EmptyState(R.drawable.ic_task_alt, stringResource(R.string.review_empty_title), stringResource(R.string.review_empty_body))
             else -> {
                 val answered = deck.cards.count { !it.open }
@@ -151,6 +176,11 @@ fun ReviewScreen(
                 when (analysis.reviewProblem) {
                     ReviewProblem.STALE -> Notice(stringResource(R.string.review_stale), Tone.CAUTION)
                     ReviewProblem.SAVE_FAILED -> Notice(stringResource(R.string.review_save_failed), Tone.NEGATIVE)
+                    // The cards on screen are the ones from before the failed load.
+                    ReviewProblem.LOAD_FAILED -> {
+                        Notice(stringResource(R.string.review_load_failed), Tone.NEGATIVE)
+                        SecondaryButton(stringResource(R.string.action_retry), onRetry)
+                    }
                     else -> Unit
                 }
 

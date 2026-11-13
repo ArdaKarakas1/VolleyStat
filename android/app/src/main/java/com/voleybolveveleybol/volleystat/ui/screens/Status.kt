@@ -167,6 +167,12 @@ fun StatusScreen(
             fraction = 0f
             ringIcon = R.drawable.ic_hourglass_empty
         }
+        jobLoad == JobLoad.VIDEO_MISSING -> {
+            headline = stringResource(R.string.analysis_video_missing_title)
+            detail = stringResource(R.string.analysis_video_missing_body)
+            fraction = 0f
+            ringIcon = R.drawable.ic_error
+        }
         jobLoad == JobLoad.UNREACHABLE -> {
             headline = stringResource(R.string.analysis_unreachable)
             detail = null
@@ -208,13 +214,23 @@ fun StatusScreen(
             fraction = 1f
             ringIcon = R.drawable.ic_task_alt
         }
+        // A cancelled job did not fail: nothing went wrong with the video or the analyzer.
+        job.state == AnalysisSummary.CANCELLED -> {
+            headline = stringResource(R.string.analysis_cancelled_title)
+            detail = stringResource(R.string.analysis_cancelled_body)
+            fraction = 0f
+            ringIcon = R.drawable.ic_hourglass_empty
+        }
         else -> {
             headline = stringResource(R.string.analysis_failed_title)
-            detail = when (job.failureCode) {
-                "NO_RALLIES_FOUND" -> stringResource(R.string.analysis_failed_no_rallies)
-                "VIDEO_UNREADABLE" -> stringResource(R.string.analysis_failed_unreadable)
-                else -> stringResource(R.string.analysis_failed_other, job.failureCode ?: job.state)
-            }
+            // Plain sentences only: the server's codes are for its log, not for the screen.
+            detail = stringResource(when (job.failureCode) {
+                "NO_RALLIES_FOUND" -> R.string.analysis_failed_no_rallies
+                "VIDEO_UNREADABLE" -> R.string.analysis_failed_unreadable
+                "JOB_TIMEOUT" -> R.string.analysis_failed_timeout
+                "ANALYZER_ERROR" -> R.string.analysis_failed_analyzer
+                else -> R.string.analysis_failed_other
+            })
             fraction = 0f
             ringIcon = R.drawable.ic_error
         }
@@ -268,7 +284,7 @@ fun StatusScreen(
                 UploadFailure.SERVER_UNREACHABLE -> stringResource(R.string.upload_error_unreachable)
                 UploadFailure.TOO_LARGE -> stringResource(R.string.upload_error_too_large)
                 UploadFailure.SOURCE_UNREADABLE -> stringResource(R.string.upload_error_source)
-                UploadFailure.SERVER_REFUSED -> stringResource(R.string.upload_error_refused, own.serverCode ?: "")
+                UploadFailure.SERVER_REFUSED -> stringResource(R.string.upload_error_refused)
                 UploadFailure.CHECKSUM_KEEPS_FAILING -> stringResource(R.string.upload_error_checksum)
             }
             // What happened, what the server kept, and (in the buttons below) the one way forward.

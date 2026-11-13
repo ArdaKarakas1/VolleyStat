@@ -70,6 +70,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.voleybolveveleybol.volleystat.R
@@ -281,6 +282,14 @@ fun RecordRoute(prepareFile: () -> File, onRecorded: () -> Unit, onUseGallery: (
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { allowed ->
         granted = allowed
         refused = !allowed
+    }
+    // The user may have allowed the camera in the phone's settings and come back.
+    LifecycleResumeEffect(Unit) {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            granted = true
+            refused = false
+        }
+        onPauseOrDispose {}
     }
     if (!granted) {
         RecordPermissionScreen(

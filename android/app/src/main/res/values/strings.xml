@@ -22,7 +22,7 @@
     <string name="state_not_yet">Henüz yok</string>
     <string name="state_working">Var</string>
     <string name="state_no_check">Kontrol yok</string>
-    <string name="state_unreadable">Okunamadı</string>
+    <string name="state_unreadable">Telefon okuyamadı</string>
     <string name="demo_title">DEMO veri</string>
     <string name="demo_body">Sunucu deneme analizörüyle çalışıyor. Ralli aralıkları uydurmadır, gerçek maç analizi değildir.</string>
     <string name="demo_short">DEMO veri. Bu ekran gerçek maç analizi göstermiyor.</string>
@@ -109,7 +109,7 @@
     <string name="match_date_pick">Tarihi değiştir</string>
     <string name="match_venue">Salon</string>
     <string name="match_kind">Maç türü</string>
-    <string name="match_kind_note">Maç türü yalnızca bir etikettir. Rapor resmî maç kaydı sayılmaz.</string>
+    <string name="match_kind_note">Maç türü yalnızca bir etikettir. Uygulama raporu resmî maç kaydı saymaz.</string>
     <string name="match_rules">Kapalı saha, 6\'ya 6</string>
 
     <!-- 04 Teams of the match -->
@@ -200,7 +200,7 @@
     <string name="record_switch">Kamerayı değiştir</string>
     <string name="record_paused">Duraklamada</string>
     <string name="record_free_space">Boş alan: %1$s</string>
-    <string name="record_low_space">Telefonda az yer kaldı. Kayıt yarıda kesilebilir.</string>
+    <string name="record_low_space">Telefonda az yer kaldı. Telefon kaydı yarıda kesebilir.</string>
     <string name="record_rotate">Telefonu yatay çevir. Dikey çekimde saha kadraja sığmayabilir.</string>
     <string name="record_error">Kamera kaydı sürdüremedi. Kamera o ana kadar çektiği bölümü sakladı.</string>
     <string name="record_no_camera">Uygulama kamerayı açamadı.</string>
@@ -227,10 +227,10 @@
     <string name="upload_error_unreachable">Uygulama sunucuya ulaşamadı.</string>
     <string name="upload_error_too_large">Video sunucunun boyut sınırını aşıyor.</string>
     <string name="upload_error_source">Uygulama videoyu telefondan okuyamadı. Video silinmiş ya da taşınmış olabilir.</string>
-    <string name="upload_error_refused">Sunucu yüklemeyi kabul etmedi (%1$s).</string>
+    <string name="upload_error_refused">Sunucu yüklemeyi kabul etmedi.</string>
     <string name="upload_error_checksum">Sunucuya ulaşan dosya telefondaki dosyayla iki kez uyuşmadı.</string>
     <string name="upload_busy">Uygulama aynı anda tek video yükler. Öteki yükleme bitince bu yüklemeyi başlat.</string>
-    <string name="upload_blocked">Bu video yüklenemez. Yüklemeyi iptal et ve başka bir videoyla yeni maç başlat.</string>
+    <string name="upload_blocked">Uygulama bu videoyu yükleyemez. Yüklemeyi iptal et ve başka bir videoyla yeni maç başlat.</string>
     <string name="removal_failed">Uygulama sunucuya ulaşamadı. Sunucudaki dosya ve maç kaydı duruyor.</string>
     <string name="cancel_title">Yüklemeyi iptal edeyim mi?</string>
     <string name="cancel_body">Sunucu aldığı kısmı siler ve uygulama bu maçı listeden kaldırır. Video telefonunda kalır.</string>
@@ -260,7 +260,13 @@
     <string name="analysis_failed_title">Analiz durdu</string>
     <string name="analysis_failed_no_rallies">Sunucu bu videoda ralli aralığı bulamadı.</string>
     <string name="analysis_failed_unreadable">Sunucu videoyu okuyamadı.</string>
-    <string name="analysis_failed_other">Analiz sırasında bir hata oluştu (%1$s).</string>
+    <string name="analysis_failed_other">Sunucu analizi bitiremedi.</string>
+    <string name="analysis_failed_timeout">Analiz sunucunun süre sınırını aştı.</string>
+    <string name="analysis_failed_analyzer">Sunucudaki analiz programı hata verdi.</string>
+    <string name="analysis_cancelled_title">Analiz iptal oldu</string>
+    <string name="analysis_cancelled_body">Sunucu bu analizi bitirmeden durdurdu. Analizi yeniden başlatabilirsin.</string>
+    <string name="analysis_video_missing_title">Sunucu bu videoyu bulamadı</string>
+    <string name="analysis_video_missing_body">Sunucu bu videoyu artık tutmuyor. Bu maçı silip videoyu yeni bir maçla yeniden yükleyebilirsin.</string>
     <string name="analysis_unreachable">Uygulama sunucudan iş durumunu alamadı.</string>
     <string name="action_start_analysis">Analizi Başlat</string>
     <string name="action_start_review">Doğrulamaya Başla</string>
@@ -312,6 +318,11 @@
     <string name="review_save_failed">Uygulama kararını sunucuya yazamadı.</string>
     <string name="review_empty_title">Karar bekleyen ralli yok</string>
     <string name="review_empty_body">Bütün ralliler için karar verdin.</string>
+    <string name="review_skipped_title">%1$d kart kararını bekliyor</string>
+    <string name="review_skipped_body">Atladığın kartlar açık kaldı. Rapor bu rallileri saymaz.</string>
+    <string name="review_go_open">Açık Karta Dön</string>
+    <string name="review_load_failed">Uygulama kartları sunucudan alamadı.</string>
+    <string name="review_no_job">Sunucu bu maç için doğrulanacak bir analiz tutmuyor.</string>
     <string name="review_loading">Uygulama kartları alıyor</string>
     <string name="review_your_answer">Senin kararın</string>
 
@@ -319,8 +330,10 @@
     <string name="report_title">Maç Sonucu</string>
     <string name="report_score_unknown">Skor yok</string>
     <string name="report_score_partial">Kısmi skor</string>
+    <string name="report_score_at_least">Set skoru en az %1$d - %2$d</string>
+    <string name="report_loading">Uygulama raporu alıyor</string>
     <string name="report_verification_draft">Taslak</string>
-    <string name="report_verification_partial">Kısmen doğrulandı</string>
+    <string name="report_verification_partial">Bir kısmını doğruladın</string>
     <string name="report_verification_done">Senin kararlarınla tamamlandı</string>
     <string name="report_rules">Skor kuralı: Set 25 sayıda, beşinci set 15 sayıda ve iki farkla biter.</string>
     <string name="report_set_open">%1$d. set sürüyor</string>
@@ -362,7 +375,7 @@
     <string name="players_col_block">Blok</string>
     <string name="players_col_serve">As</string>
     <string name="players_col_dig">Sav.</string>
-    <string name="players_col_points">Puan</string>
+    <string name="players_col_points">Sayı</string>
     <string name="players_unattributed">Oyuncusu belli olmayan sayı</string>
     <string name="players_empty">Bu takım için oyuncuya yazılmış sayı yok.</string>
     <string name="players_dig_note">Savunma sütunu boş kalır. Uygulama savunmayı henüz ölçmüyor.</string>
@@ -396,6 +409,8 @@
     <string name="server_none">Bu sürümde sunucu adresi tanımlı değil.</string>
     <string name="profile_recordings">Telefondaki kayıtlar</string>
     <string name="recordings_empty">Uygulamanın tuttuğu kayıt yok.</string>
+    <string name="recordings_in_use">Bitmemiş bir yükleme bu kaydı kullanıyor. Yükleme bitince ya da maçı silince kaydı silebilirsin.</string>
+    <string name="store_save_failed">Uygulama son değişikliği telefona yazamadı. Telefonda boş alan kalmamış olabilir.</string>
     <string name="recordings_helper">Kamerayla çektiğin videolar burada durur. Galeriden seçtiğin videolar galeride kalır.</string>
     <string name="recording_delete_description">%1$s kaydını sil</string>
     <string name="recording_delete_title">Bu kaydı sileyim mi?</string>

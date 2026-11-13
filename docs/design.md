@@ -51,16 +51,17 @@ Ortak bileşenler `ui/components/Components.kt` dosyasındadır.
 Bu kalıplar görsel etkiden önce gelir.
 
 - **Ölçüm yoksa sayı yok.** Uygulama bilinmeyen değeri kesik çizgili boş kutuyla çizer ve ekran okuyucuya "Ölçüm yok" der. Uygulama bilinmeyen değeri hiçbir yerde `0` yazmaz.
-- **Alt sınır artı işareti taşır.** Doğrulama bitmeden görünen sayı `28+` biçimindedir. Ekran artının anlamını bir satırla açıklar.
+- **Alt sınır artı işareti taşır.** Doğrulama bitmeden görünen sayı `28+` biçimindedir. Ekran artının anlamını bir satırla açıklar. Kazanılan set sayısı da alt sınırken artı taşır (`1+ - 0+`).
 - **Bitmemiş set kesik çizgilidir.** Süren setin skoru kesin set skoru gibi görünmez.
 - **DEMO her ekranda yazılıdır.** Deneme analizörünün verisi durum, doğrulama, rapor ve oyuncu ekranlarında DEMO etiketi taşır.
 - **Sahte yüzde yok.** Analiz ekranı yalnız sunucunun bildirdiği adımı ve oranı gösterir.
+- **Atlanan kart açık kalır.** Kullanıcı son karttan sonra atladığı kart varsa "karar bekleyen kart" sayısını görür. Ekran yalnız bütün kartlar yanıtlandığında "Bütün ralliler için karar verdin" der.
 - **Öneri seçili gelmez.** Sunucu bir kazanan önerirse ekran öneriyi ipucu olarak yazar. Kararı kullanıcı verir.
 - **Oyuncuya sayı yazmak karar ister.** Oyuncu tablosu yalnız kullanıcının doğrulamada forma numarası seçtiği sayıları içerir. Oyuncusu belli olmayan sayılar ayrı satırda durur.
 
 ## Durumlar
 
-Her ekran dört durumu çizer: yükleniyor, boş, hata ve dolu. Hata mesajı neyin olmadığını ve kullanıcının ne yapabileceğini söyler. Uygulama hata kodu göstermez.
+Her ekran dört durumu çizer: yükleniyor, boş, hata ve dolu. Hata mesajı neyin olmadığını ve kullanıcının ne yapabileceğini söyler. Uygulama hata kodu göstermez. Uygulama iptal edilen işi hata olarak göstermez.
 
 ## Erişilebilirlik ve ekran boyutları
 
