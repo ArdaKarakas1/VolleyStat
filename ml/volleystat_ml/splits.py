@@ -4,12 +4,15 @@ Rule from the product specification: the split is made at match level, so frames
 (or re-encoded copies, or cut pieces) of one match never end up in two splits.
 The unit is `match_group_id` from the video inventory (01_VIDEO_ENVANTERI.csv).
 
-- A split that the inventory already records is kept. A frozen test set must not
-  move because new videos were added.
+- A split that the inventory already records is kept, and so is every assignment of
+  a previous lock manifest that is handed in. A frozen test set must not move because
+  new videos were added: shares worked out again from nothing can send a locked test
+  match to train.
 - A video whose `training_allowed` is not exactly "true" never enters the train
   split. This module does not judge `right_state` or any other rights column.
 - The lock manifest (11_TEST_MANIFEST.csv columns) ends with the SHA-256 of its
-  own header and rows, so a later edit is detected.
+  own header and rows, so a later edit is detected. An edit that also replaces that
+  line is only found by comparing with the digest noted outside the file at lock time.
 """
 from __future__ import annotations
 
@@ -70,6 +73,9 @@ class LockManifest:
     videos: tuple[Video, ...]
     stored_sha256: str | None
     computed_sha256: str
+    # Rows with more cells than the header. The hash covers the manifest columns only,
+    # so it does not see a cell that was appended to a row.
+    problems: tuple[str, ...] = ()
 
     @property
     def intact(self) -> bool:
@@ -78,13 +84,13 @@ class LockManifest:
 
 def read_inventory(path: Path) -> list[Video]:
     """Read a video inventory CSV. Raises SplitError listing every unusable row."""
-    columns, rows = read_csv(Path(path).read_text(encoding="utf-8-sig"))
+    columns, rows, problems = read_csv(read_text(path))
     missing = [name for name in _REQUIRED_INVENTORY_COLUMNS if name not in columns]
     if missing:
         raise SplitError([f"inventory is missing column(s): {', '.join(missing)}"])
-    videos, problems = _videos_from_rows(rows, has_training_column=True)
-    if problems:
-        raise SplitError(problems)
+    videos, row_problems = _videos_from_rows(rows, has_training_column=True)
+    if problems or row_problems:
+        raise SplitError(problems + row_problems)
     return videos
 
 
@@ -93,12 +99,17 @@ def assign_splits(
     *,
     ratios: Mapping[str, float] = DEFAULT_RATIOS,
     seed: int = 0,
+    previous: Iterable[Video] = (),
 ) -> dict[str, str]:
     """Return {video_id: split} for every video, whole match groups at a time.
 
     Groups are visited in an order derived from `seed` and each goes to the split that
     is furthest below its share of the videos. Ties go to test, then validation: with
     very few matches a held-out test match is worth more than a larger train split.
+
+    `previous` holds the videos of an earlier lock manifest. Every video and every match
+    group named there keeps its split, and only the rest is assigned. A lock that can not
+    be kept (it contradicts itself, the inventory or a training permission) is refused.
     """
     if set(ratios) != set(SPLITS) or min(ratios.values()) < 0 or abs(sum(ratios.values()) - 1) > 1e-6:
         raise ValueError("ratios must give train, validation and test shares that are >= 0 and sum to 1")
@@ -109,14 +120,35 @@ def assign_splits(
     groups: dict[str, list[Video]] = {}
     for video in videos:
         groups.setdefault(video.match_group_id, []).append(video)
+    locked_video: dict[str, str] = {}
+    locked_group: dict[str, set[str]] = {}
+    for video in previous:
+        if video.split:
+            locked_video[video.video_id] = video.split
+            locked_group.setdefault(video.match_group_id, set()).add(video.split)
     fixed: dict[str, str] = {}
     for group, members in groups.items():
         recorded = sorted({video.split for video in members if video.split})
-        if len(recorded) > 1:
+        # A video keeps its locked split even if the inventory now lists it under another
+        # match, and a new video of a locked match joins that match.
+        locked = locked_group.get(group, set()) | {
+            locked_video[video.video_id] for video in members if video.video_id in locked_video
+        }
+        if len(locked) > 1:
+            problems.append(
+                f"match_group_id '{group}' can not keep the previous lock, which has its videos or its match in "
+                f"more than one split: {', '.join(split for split in SPLITS if split in locked)}"
+            )
+        elif locked and set(recorded) - locked:
+            problems.append(
+                f"match_group_id '{group}' is {next(iter(locked))} in the previous lock, but the inventory records "
+                f"{', '.join(split for split in recorded if split not in locked)}"
+            )
+        elif len(recorded) > 1:
             problems.append(f"match_group_id '{group}' is already recorded in more than one split: {', '.join(recorded)}")
-        elif recorded:
-            fixed[group] = recorded[0]
-            if recorded[0] == TRAIN:
+        elif locked or recorded:
+            fixed[group] = next(iter(locked)) if locked else recorded[0]
+            if fixed[group] == TRAIN:
                 problems += [_training_problem(video) for video in members if video.training_allowed is not True]
     if problems:
         raise SplitError(problems)
@@ -171,6 +203,34 @@ def find_leakage(videos: Iterable[Video], assignment: Mapping[str, str] | None =
     return problems
 
 
+def find_changed_splits(files: Mapping[str, Iterable[Video]]) -> list[str]:
+    """Report every video_id and every match_group_id that sits in different splits in
+    different files (lock manifests or inventories, keyed by the name to print).
+
+    A match that is test in one lock and train in a later one has leaked into training,
+    although each file on its own is free of leakage.
+    """
+    by_video: dict[str, dict[str, list[str]]] = {}
+    by_group: dict[str, dict[str, list[str]]] = {}
+    for name, videos in files.items():
+        for video in videos:
+            if not video.split:
+                continue
+            for found, key in ((by_video, video.video_id), (by_group, video.match_group_id)):
+                names = found.setdefault(key, {}).setdefault(video.split, [])
+                if name not in names:
+                    names.append(name)
+
+    def describe(found: dict[str, list[str]]) -> str:
+        return "; ".join(f"{split}: {', '.join(found[split])}" for split in SPLITS if split in found)
+
+    return [
+        f"{label} '{key}' is in different splits across the files ({describe(found)})"
+        for label, table in (("video_id", by_video), ("match_group_id", by_group))
+        for key, found in sorted(table.items()) if len(found) > 1
+    ]
+
+
 def training_violations(videos: Iterable[Video], assignment: Mapping[str, str] | None = None) -> list[str]:
     """Videos in the train split whose training_allowed is not true."""
     problems = []
@@ -220,12 +280,14 @@ def write_lock_manifest(
 
 
 def read_lock_manifest(path: Path) -> LockManifest:
-    """Read a lock manifest. Check `.intact` before trusting it.
+    """Read a lock manifest. Check `.intact` and `.problems` before trusting it.
 
-    The hash is taken over the parsed cells, so a byte-order mark or changed line
-    endings do not count as an edit; any changed, added or removed value does.
+    The hash is taken over the parsed cells of the manifest columns, so a byte-order mark
+    or changed line endings do not count as an edit; any changed or removed value and any
+    added or removed row does. A cell appended after the last column lies outside the
+    hash and is listed in `.problems` instead.
     """
-    lines = Path(path).read_text(encoding="utf-8-sig").splitlines()
+    lines = read_text(path).splitlines()
     while lines and not lines[-1].strip():
         lines.pop()
     stored = None
@@ -233,35 +295,59 @@ def read_lock_manifest(path: Path) -> LockManifest:
     if trailer:
         stored = trailer.group(1)
         lines.pop()
-    columns, rows = read_csv("\n".join(lines))
+    columns, rows, shape_problems = read_csv("\n".join(lines))
     if tuple(columns) != MANIFEST_COLUMNS:
         raise SplitError([f"not a lock manifest: the header must be {','.join(MANIFEST_COLUMNS)}"])
     videos, problems = _videos_from_rows(rows, has_training_column=False)
     if problems:
         raise SplitError(problems)
     digest = hashlib.sha256(_canonical(rows).encode("utf-8")).hexdigest()
-    return LockManifest(tuple(videos), stored, digest)
+    return LockManifest(tuple(videos), stored, digest, tuple(shape_problems))
 
 
 def is_lock_manifest(path: Path) -> bool:
-    first_line = Path(path).read_text(encoding="utf-8-sig").partition("\n")[0]
+    first_line = read_text(path).partition("\n")[0]
     return tuple(read_csv(first_line)[0]) == MANIFEST_COLUMNS
 
 
-def read_csv(text: str) -> tuple[list[str], list[dict[str, str]]]:
-    """Parse CSV text into (columns, rows). Cells are stripped and empty rows are dropped."""
+def read_text(path: Path) -> str:
+    """Read a text file as UTF-8, with or without a byte-order mark."""
+    try:
+        return Path(path).read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError as error:
+        # Decoded with a guessed encoding, an id or a split name could change silently.
+        raise SplitError([
+            f"the file is not UTF-8 text (byte {error.start}: {error.reason}); save it with UTF-8 encoding"
+        ]) from error
+
+
+def read_csv(text: str) -> tuple[list[str], list[dict[str, str]], list[str]]:
+    """Parse CSV text into (columns, rows, problems). Cells are stripped and empty rows
+    are dropped.
+
+    `problems` names every row that has more cells than the header. Such a row was
+    shifted by an unquoted delimiter or had a value added, so its cells can not be
+    trusted to sit under the right column. Rows are numbered like the lines of the file
+    (the header is row 1), not counting empty rows.
+    """
     # A spreadsheet with a Turkish locale saves CSV with semicolons.
     header = text.partition("\n")[0]
     delimiter = ";" if header.count(";") > header.count(",") else ","
     reader = csv.DictReader(io.StringIO(text, newline=""), delimiter=delimiter, restval="")
     columns = [name.strip() for name in (reader.fieldnames or [])]
     reader.fieldnames = columns
-    rows = []
+    rows, problems = [], []
     for row in reader:
         cells = {name: (row.get(name) or "").strip() for name in columns}
-        if any(cells.values()):
+        # The reader collects the cells beyond the last column under the key None.
+        surplus = row.get(None) or []
+        if any(cells.values()) or any(cell.strip() for cell in surplus):
             rows.append(cells)
-    return columns, rows
+            if surplus:
+                problems.append(
+                    f"row {len(rows) + 1}: {len(columns) + len(surplus)} cells, but the header has {len(columns)} columns"
+                )
+    return columns, rows, problems
 
 
 def _canonical(rows: Sequence[Mapping[str, str]]) -> str:

@@ -126,10 +126,21 @@ def test_fewer_than_thirty_gold_rallies_are_flagged_with_raw_counts():
     small = evaluate_boundaries(rallies(20), rallies(18))
     assert small.percentages_reliable is False
     assert (small.tp, small.gold_count, small.predicted_count) == (18, 20, 18)
+    # The object keeps the ratios for callers that compute with them. The dictionary is
+    # what gets written to a report, so there the ratios are null and the counts stay.
+    assert (small.precision, small.recall) == (1.0, 0.9)
     document = small.to_dict()
     assert document["percentagesReliable"] is False and document["minReliableGold"] == 30
-    assert document["recall"] == {"value": 0.9, "numerator": 18, "denominator": 20}
-    assert document["precision"] == {"value": 1.0, "numerator": 18, "denominator": 18}
+    assert document["recall"] == {"value": None, "numerator": 18, "denominator": 20}
+    assert document["precision"] == {"value": None, "numerator": 18, "denominator": 18}
+    assert document["f1"] is None
+    assert (document["tp"], document["fp"], document["fn"]) == (18, 0, 2)
+
+    large = evaluate_boundaries(rallies(30), rallies(27)).to_dict()
+    assert large["percentagesReliable"] is True
+    assert large["recall"] == {"value": 0.9, "numerator": 27, "denominator": 30}
+    assert large["precision"] == {"value": 1.0, "numerator": 27, "denominator": 27}
+    assert large["f1"] == pytest.approx(2 * 27 / 57)
 
     assert evaluate_boundaries(rallies(29), rallies(29)).percentages_reliable is False
     assert evaluate_boundaries(rallies(30), rallies(30)).percentages_reliable is True

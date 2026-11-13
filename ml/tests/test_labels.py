@@ -222,6 +222,19 @@ def test_action_times_are_checked():
     ]
 
 
+def test_action_start_after_the_end_of_the_video_is_reported_with_or_without_an_end():
+    doc = document(rally("R1", 0, 1000, actions=[action("A1", startMs=999999),
+                                                 action("A2", startMs=999999, endMs=999999),
+                                                 action("A3", startMs=4000)]))
+    assert validate_annotation(doc) == []
+    # An action exactly at the last millisecond is still inside the video.
+    assert validate_annotation(doc, video_duration_ms=4000) == [
+        "$.rallies[0].actions[0]: startMs (999999) is after the end of the video (4000 ms)",
+        "$.rallies[0].actions[1]: startMs (999999) is after the end of the video (4000 ms)",
+        "$.rallies[0].actions[1]: endMs (999999) is after the end of the video (4000 ms)",
+    ]
+
+
 def test_every_problem_of_a_file_is_reported_together():
     doc = document(rally("R1", 0, 5000, winningSide="UNKNOWN"), rally("R2", 4000, 3000), rally("R3", 4500, 6000))
     assert validate_annotation(doc, video_duration_ms=5500) == [

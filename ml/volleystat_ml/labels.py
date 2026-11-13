@@ -5,7 +5,8 @@ Two layers:
 1. Structure, read from the schema file itself (schemas/ANNOTATION_SCHEMA_V3.json)
    by a small interpreter for the keywords that schema uses.
 2. Domain rules the schema can not express:
-   - 0 <= startMs < endMs, and endMs <= video duration when the duration is given
+   - 0 <= startMs < endMs, and endMs <= video duration when the duration is given;
+     an action neither starts nor ends after the end of the video
    - rallies are listed in strictly increasing order: by startMs, and by `sequence`
      where the file carries one (within a set when `setNumber` is present)
    - rallies do not overlap
@@ -26,7 +27,7 @@ import json
 from functools import lru_cache
 from importlib import resources
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Sequence
 
 SCHEMA_FILE = "ANNOTATION_SCHEMA_V3.json"
 UNKNOWN = "UNKNOWN"
@@ -139,31 +140,67 @@ def _check(value: Any, schema: dict[str, Any], path: str, errors: list[str]) -> 
             _check(item, schema["items"], f"{path}[{index}]", errors)
 
 
-def _check_rallies(rallies: list[Any], video_duration_ms: int | None, errors: list[str]) -> None:
+def interval_problems(
+    spans: Sequence[tuple[Any, Any]],
+    where: Callable[[int], str],
+    names: tuple[str, str] = ("startMs", "endMs"),
+    video_duration_ms: int | None = None,
+) -> tuple[list[list[str]], list[str]]:
+    """The time rules for the rallies of one video, given as (start, end) in listed order.
+
+    Returns the problems of each item and, separately, the overlaps, which are found in
+    time order. `where(index)` names an item in a message and `names` are the two fields
+    as the file spells them. A value that is not an integer is left to the structure
+    check and takes no part here.
+
+    The gold CSV of `evaluate` goes through this function as well, so gold intervals meet
+    the same rules whichever file format they come in.
+    """
+    start_name, end_name = names
+    per_item: list[list[str]] = [[] for _ in spans]
     timed: list[tuple[int, int, int]] = []
     previous_start: tuple[int, int] | None = None
+    for index, (start, end) in enumerate(spans):
+        if _is_integer(start) and _is_integer(end):
+            if not start < end:
+                per_item[index].append(f"{where(index)}: {start_name} ({start}) must be less than {end_name} ({end})")
+            elif start >= 0:
+                timed.append((int(start), int(end), index))
+            if video_duration_ms is not None and end > video_duration_ms:
+                per_item[index].append(
+                    f"{where(index)}: {end_name} ({end}) is after the end of the video ({video_duration_ms} ms)")
+        if _is_integer(start):
+            if previous_start is not None and start <= previous_start[0]:
+                per_item[index].append(
+                    f"{where(index)}: {start_name} ({start}) is not after {start_name} ({previous_start[0]}) of "
+                    f"{where(previous_start[1])}; rallies must be listed in time order"
+                )
+            previous_start = (start, index)
+
+    # Overlap is checked in time order so that a file with rallies out of order is not
+    # reported a second time as overlapping, and a real overlap is not missed.
+    timed.sort()
+    overlaps = [
+        f"{where(later_index)}: {start_name} ({later_start}) is before {end_name} ({earlier_end}) of "
+        f"{where(earlier_index)}; rallies must not overlap"
+        for (_, earlier_end, earlier_index), (later_start, _, later_index) in zip(timed, timed[1:])
+        if later_start < earlier_end
+    ]
+    return per_item, overlaps
+
+
+def _check_rallies(rallies: list[Any], video_duration_ms: int | None, errors: list[str]) -> None:
     previous_sequence: dict[Any, tuple[int, int]] = {}
     with_sequence = [index for index, rally in enumerate(rallies) if isinstance(rally, dict) and "sequence" in rally]
+    spans = [(rally.get("startMs"), rally.get("endMs")) if isinstance(rally, dict) else (None, None)
+             for rally in rallies]
+    time_problems, overlaps = interval_problems(spans, "$.rallies[{}]".format, video_duration_ms=video_duration_ms)
 
     for index, rally in enumerate(rallies):
         if not isinstance(rally, dict):
             continue
         path = f"$.rallies[{index}]"
-        start, end = rally.get("startMs"), rally.get("endMs")
-        if _is_integer(start) and _is_integer(end):
-            if not start < end:
-                errors.append(f"{path}: startMs ({start}) must be less than endMs ({end})")
-            elif start >= 0:
-                timed.append((int(start), int(end), index))
-            if video_duration_ms is not None and end > video_duration_ms:
-                errors.append(f"{path}: endMs ({end}) is after the end of the video ({video_duration_ms} ms)")
-        if _is_integer(start):
-            if previous_start is not None and start <= previous_start[0]:
-                errors.append(
-                    f"{path}: startMs ({start}) is not after startMs ({previous_start[0]}) of "
-                    f"$.rallies[{previous_start[1]}]; rallies must be listed in time order"
-                )
-            previous_start = (start, index)
+        errors += time_problems[index]
 
         if with_sequence:
             sequence = rally.get("sequence")
@@ -197,15 +234,7 @@ def _check_rallies(rallies: list[Any], video_duration_ms: int | None, errors: li
         if isinstance(actions, list):
             _check_actions(actions, path, video_duration_ms, errors)
 
-    # Overlap is checked in time order so that a file with rallies out of order is not
-    # reported a second time as overlapping, and a real overlap is not missed.
-    timed.sort()
-    for (_, earlier_end, earlier_index), (later_start, _, later_index) in zip(timed, timed[1:]):
-        if later_start < earlier_end:
-            errors.append(
-                f"$.rallies[{later_index}]: startMs ({later_start}) is before endMs ({earlier_end}) of "
-                f"$.rallies[{earlier_index}]; rallies must not overlap"
-            )
+    errors += overlaps
 
 
 def _check_actions(actions: list[Any], rally_path: str, video_duration_ms: int | None, errors: list[str]) -> None:
@@ -218,8 +247,11 @@ def _check_actions(actions: list[Any], rally_path: str, video_duration_ms: int |
         # A single contact may be annotated as one instant, so start == end is allowed here.
         if _is_integer(start) and _is_integer(end) and start > end:
             errors.append(f"{path}: startMs ({start}) must not be after endMs ({end})")
-        if video_duration_ms is not None and _is_integer(end) and end > video_duration_ms:
-            errors.append(f"{path}: endMs ({end}) is after the end of the video ({video_duration_ms} ms)")
+        # An action that carries only a start is an instant, and an instant after the end
+        # of the video is as impossible as an end after it.
+        for name, value in (("startMs", start), ("endMs", end)):
+            if video_duration_ms is not None and _is_integer(value) and value > video_duration_ms:
+                errors.append(f"{path}: {name} ({value}) is after the end of the video ({video_duration_ms} ms)")
         if "endEvent" in action:
             if not isinstance(action["endEvent"], bool):
                 errors.append(f"{path}.endEvent: expected boolean, found {_type_name(action['endEvent'])}")

@@ -7,8 +7,8 @@ import pytest
 
 from volleystat_ml import splits
 from volleystat_ml.splits import (
-    TEST, TRAIN, VALIDATION, SplitError, Video, assign_splits, find_leakage, read_inventory,
-    read_lock_manifest, training_violations, write_lock_manifest,
+    TEST, TRAIN, VALIDATION, SplitError, Video, assign_splits, find_changed_splits, find_leakage,
+    read_inventory, read_lock_manifest, training_violations, write_lock_manifest,
 )
 
 LOCKED_AT = "2026-11-12T00:00:00Z"
@@ -166,6 +166,71 @@ def test_duplicate_video_id_and_bad_ratios_are_refused():
             assign_splits(library(), ratios=ratios)
 
 
+# --- previous lock ---------------------------------------------------------------------
+
+def as_locked(videos, assignment):
+    """What a lock manifest of this assignment gives back when it is read."""
+    return [Video(item.video_id, item.match_group_id, item.sha256, split=assignment[item.video_id])
+            for item in videos]
+
+
+def test_previous_lock_keeps_every_assignment_when_matches_are_added():
+    # Without the previous lock the same seed can move a locked test match into train as
+    # soon as one match is added, because the shares are worked out again from nothing.
+    moved_without = 0
+    for seed in range(3):
+        for count in range(3, 13):
+            videos = library(groups=count + 1, per_group=1)
+            first = assign_splits(videos[:count], seed=seed)
+            again = assign_splits(videos, seed=seed)
+            moved_without += sum(again[video_id] != split for video_id, split in first.items())
+
+            second = assign_splits(videos, seed=seed, previous=as_locked(videos[:count], first))
+            assert {video_id: second[video_id] for video_id in first} == first
+            assert set(second) == {item.video_id for item in videos}
+            assert find_leakage(videos, second) == []
+    assert moved_without > 0
+
+
+def test_new_video_of_a_locked_match_joins_the_split_of_its_match():
+    videos = library(groups=6, per_group=1)
+    first = assign_splits(videos, seed=2)
+    second_camera = [video(f"{item.video_id}-cam2", item.match_group_id) for item in videos]
+    second = assign_splits(videos + second_camera, seed=2, previous=as_locked(videos, first))
+    assert all(second[f"{item.video_id}-cam2"] == first[item.video_id] for item in videos)
+
+
+def test_previous_lock_that_can_not_be_kept_is_refused():
+    locked = [Video("V1", "M1", digest("V1"), split=TEST), Video("V2", "M2", digest("V2"), split=TRAIN)]
+    recorded_elsewhere = [video("V1", "M1", split=TRAIN), video("V2", "M2")]
+    assert problems_of(lambda: assign_splits(recorded_elsewhere, previous=locked)) == [
+        "match_group_id 'M1' is test in the previous lock, but the inventory records train",
+    ]
+    # V1 was locked as test under M1 and now sits in M2, which is locked as train.
+    regrouped = [video("V1", "M2"), video("V2", "M2")]
+    assert problems_of(lambda: assign_splits(regrouped, previous=locked)) == [
+        "match_group_id 'M2' can not keep the previous lock, which has its videos or its match in more than "
+        "one split: train, test",
+    ]
+    no_longer_allowed = [video("V1", "M1"), video("V2", "M2", allowed=False)]
+    assert problems_of(lambda: assign_splits(no_longer_allowed, previous=locked)) == [
+        "video 'V2' is in the train split but its training_allowed is not true",
+    ]
+
+
+def test_video_or_match_in_different_splits_across_files_is_reported():
+    first = [video("V1", "M1", split=TEST), video("V2", "M2", split=TRAIN), video("V3", "M3", split=TRAIN)]
+    second = [video("V1", "M1", split=TRAIN), video("V2", "M2", split=TRAIN),
+              video("V4", "M3", split=VALIDATION), video("V5", "M5")]
+    assert find_changed_splits({"A.csv": first, "B.csv": second}) == [
+        "video_id 'V1' is in different splits across the files (train: B.csv; test: A.csv)",
+        "match_group_id 'M1' is in different splits across the files (train: B.csv; test: A.csv)",
+        "match_group_id 'M3' is in different splits across the files (train: A.csv; validation: B.csv)",
+    ]
+    assert find_changed_splits({"A.csv": first, "copy.csv": first}) == []
+    assert find_changed_splits({"A.csv": first}) == []
+
+
 # --- leakage ---------------------------------------------------------------------------
 
 def test_leakage_by_match_group_and_by_file_hash_is_reported():
@@ -227,6 +292,27 @@ def test_unusable_inventory_rows_are_all_reported(tmp_path):
         "row 4 (video_id 'V3'): sha256 must be 64 hexadecimal characters",
         "video_id 'V1' appears more than once",
     ]
+
+
+def test_inventory_row_with_more_cells_than_the_header_is_refused(tmp_path):
+    path = write_inventory(tmp_path / "inventory.csv", library(groups=2, per_group=1))
+    lines = path.read_text(encoding="utf-8-sig").splitlines()
+    # A comma in the last cell that nobody quoted, and a stray delimiter at the end of a row.
+    lines[1] += ", second camera"
+    lines[2] += ","
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    assert problems_of(lambda: read_inventory(path)) == [
+        "row 2: 21 cells, but the header has 20 columns",
+        "row 3: 21 cells, but the header has 20 columns",
+    ]
+
+
+def test_file_that_is_not_utf8_is_refused_instead_of_decoded_by_guessing(tmp_path):
+    path = write_inventory(tmp_path / "inventory.csv", library(groups=2, per_group=1), encoding="cp1254",
+                           overrides={"V00a": {"notes": "İkinci kamera, ışık düşük"}})
+    for read in (read_inventory, read_lock_manifest, splits.is_lock_manifest):
+        problems = problems_of(lambda: read(path))
+        assert len(problems) == 1 and problems[0].startswith("the file is not UTF-8 text (byte ")
 
 
 def test_inventory_without_the_needed_columns_is_refused(tmp_path):
@@ -302,6 +388,19 @@ def test_manifest_without_a_hash_line_is_not_intact(tmp_path):
     bare.write_text("\n".join(path.read_text(encoding="utf-8").splitlines()[:-1]) + "\n", encoding="utf-8")
     manifest = read_lock_manifest(bare)
     assert manifest.stored_sha256 is None and not manifest.intact
+
+
+def test_manifest_row_with_more_cells_than_the_header_is_a_problem(tmp_path):
+    path, _, _, _ = locked(tmp_path)
+    assert read_lock_manifest(path).problems == ()
+    lines = path.read_text(encoding="utf-8").splitlines()
+    lines[3] += ",appended"
+    extended = tmp_path / "extended.csv"
+    extended.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    manifest = read_lock_manifest(extended)
+    # The hash covers the named columns only, so it does not see the appended cell.
+    assert manifest.intact
+    assert manifest.problems == ("row 4: 10 cells, but the header has 9 columns",)
 
 
 def test_existing_manifest_is_never_overwritten(tmp_path):

@@ -49,7 +49,9 @@ def clips(tmp_path_factory):
     )
 
     # Idle stretches from a still source, active stretches from a moving source, joined
-    # at the same boundaries. Every joint is a scene cut.
+    # at the same boundaries. Every joint is a scene cut. The still stretches decode to
+    # identical frames, except for the first few after each joint where the encoder is
+    # still settling; those few are all the segmenter learns the idle level from.
     inputs, position = [], 0
     for start, end in [*RALLIES_MS, (RALLY_CLIP_MS, RALLY_CLIP_MS)]:
         if start > position:
@@ -75,8 +77,35 @@ def clips(tmp_path_factory):
 
     not_a_video = folder / "not_a_video.mp4"
     not_a_video.write_bytes(b"this is not a video" * 64)
+
+    # Two files ffmpeg opens, decodes in part and still leaves with exit code 0. The index
+    # is moved to the front first, otherwise the cut file would not open at all.
+    indexed = folder / "indexed.mp4"
+    _ffmpeg("-i", moving_box, "-c", "copy", "-movflags", "+faststart", indexed)
+    data = indexed.read_bytes()
+    truncated = folder / "truncated.mp4"
+    truncated.write_bytes(data[: len(data) // 2])
+    first, last = len(data) * 44 // 100, len(data) * 55 // 100
+    damaged = folder / "damaged.mp4"
+    damaged.write_bytes(data[:first] + bytes(index * 131 % 256 for index in range(last - first)) + data[last:])
+
+    # The frames between 10.5 s and 15.5 s are missing and the timestamps keep the hole, as
+    # in a variable-frame-rate recording. The hole lies inside an idle stretch. Matroska is
+    # written with variable frame rate, so the muxer does not fill the hole with copies.
+    timestamp_gap = folder / "timestamp_gap.mkv"
+    _ffmpeg("-i", moving_box, "-vf", "select='not(between(t,10.5,15.5))'", *ENCODE, timestamp_gap)
+
+    # Every timestamp of the file is 5 s later: the container starts at 5 s and ends at 45 s.
+    offset_start = folder / "offset_start.mkv"
+    _ffmpeg("-i", moving_box, "-c", "copy", "-output_ts_offset", 5, offset_start)
+    # The sound starts at 0 and the picture 2 s later.
+    late_picture = folder / "late_picture.mp4"
+    _ffmpeg("-itsoffset", 2, "-i", moving_box, "-f", "lavfi", "-t", seconds + 2, "-i", "sine=frequency=440",
+            "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", late_picture)
     return SimpleNamespace(
         moving_box=moving_box, concatenated=concatenated, still=still, still_noisy=still_noisy,
         busy=busy, short_picture=short_picture, webm=webm, not_a_video=not_a_video,
+        truncated=truncated, damaged=damaged, timestamp_gap=timestamp_gap,
+        offset_start=offset_start, late_picture=late_picture,
         rallies_ms=list(RALLIES_MS), rally_clip_ms=RALLY_CLIP_MS,
     )
