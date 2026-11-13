@@ -92,7 +92,7 @@ class BackendE2eTest {
         val api = ApiClient(url!!)
         val (session, check) = upload(clip!!)
         val videoId = check!!.videoId
-        val matchId = session.matchId!!
+        val matchId = session.serverMatchId!!
         try {
             var job = try {
                 api.startAnalysis(videoId, "e2e-${System.nanoTime()}")
