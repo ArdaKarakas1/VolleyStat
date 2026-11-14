@@ -80,6 +80,7 @@ import com.voleybolveveleybol.volleystat.model.MatchKind
 import com.voleybolveveleybol.volleystat.model.Team
 import com.voleybolveveleybol.volleystat.model.teamNamesValid
 import com.voleybolveveleybol.volleystat.model.uploadFormat
+import com.voleybolveveleybol.volleystat.ui.components.ChoiceCard
 import com.voleybolveveleybol.volleystat.ui.components.FactRow
 import com.voleybolveveleybol.volleystat.ui.components.ListRow
 import com.voleybolveveleybol.volleystat.ui.components.Notice
@@ -171,15 +172,9 @@ fun MatchCreateScreen(
             keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Next),
         )
         // The date is a button, not a text field: nobody types a date by hand.
-        VsCard(onClick = { pickingDate = true }, padding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Icon(painterResource(R.drawable.ic_calendar_today), contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                Column(Modifier.weight(1f)) {
-                    Text(stringResource(R.string.match_date), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(formatDay(day), style = MaterialTheme.typography.titleSmall)
-                }
-                Text(stringResource(R.string.match_date_pick), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-            }
+        ChoiceCard(R.drawable.ic_calendar_today, stringResource(R.string.match_date_pick), onClick = { pickingDate = true }) {
+            Text(stringResource(R.string.match_date), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(formatDay(day), style = MaterialTheme.typography.titleSmall)
         }
         OutlinedTextField(
             value = draft.venue, onValueChange = { text -> onEdit { it.copy(venue = text.take(80)) } },

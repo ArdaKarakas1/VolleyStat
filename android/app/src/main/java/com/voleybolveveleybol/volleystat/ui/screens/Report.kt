@@ -270,6 +270,8 @@ fun ReportScreen(
                         // The rule the server counted this report's set score with. Without one the report names none.
                         report.rules?.let { rules ->
                             Text(stringResource(R.string.report_rules, ruleCounting(rules)), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            // A set played after a team has won is in the score above too, so the report says so.
+                            Text(stringResource(R.string.rule_no_match_end), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }

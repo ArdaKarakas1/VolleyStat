@@ -35,6 +35,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.voleybolveveleybol.volleystat.model.EditTarget
 import com.voleybolveveleybol.volleystat.model.MatchRecord
+import com.voleybolveveleybol.volleystat.model.MatchRules
 import com.voleybolveveleybol.volleystat.model.MatchStatus
 import com.voleybolveveleybol.volleystat.model.RallyList
 import com.voleybolveveleybol.volleystat.model.ReviewCard
@@ -290,6 +291,9 @@ fun VolleyStatApp(
         val shown = rallyState(match)
         val missing = shown.rallies == null
         LaunchedEffect(shown.job?.id, missing) { if (shown.job != null && missing) viewModel.loadRallies(match.localId) }
+        // The user's choice, not saved yet. A winner answer that lands now moves the list on, and screen 13
+        // gives way to the waiting screen until the list is read again. The choice lives here, so it comes back.
+        var chosen by rememberSaveable { mutableStateOf<IntArray?>(null) }
         val list = shown.rallies
         if (list == null) {
             RallyEditorWaiting(stringResource(R.string.rule_title), shown, onRetry = { viewModel.retryRallies(match.localId) }, onBack = { nav.popBackStack() })
@@ -299,7 +303,11 @@ fun VolleyStatApp(
                 // A problem belongs to this screen. Cleared on the way out, it does not flash on the list below.
                 onBack = { viewModel.clearCorrectionProblem(); nav.popBackStack() },
                 onList = true, listConfirmed = list.confirmed, sending = shown.correcting, problem = shown.correctionProblem,
-                onSelectionChanged = viewModel::clearCorrectionProblem,
+                onSelectionChanged = { rules ->
+                    chosen = intArrayOf(rules.setsToWin, rules.setTarget, rules.decidingSetTarget)
+                    viewModel.clearCorrectionProblem()
+                },
+                initial = chosen?.let { MatchRules(it[0], it[1], it[2]) } ?: list.rules,
             )
         }
     }

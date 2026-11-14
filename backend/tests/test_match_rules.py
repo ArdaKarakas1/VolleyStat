@@ -61,8 +61,17 @@ def report_of(client, match_id):
     return response.json()
 
 
-def put_rules(client, match_id, rules):
-    return client.put(f"/v1/matches/{match_id}/rules", json=rules)
+SEEN = object()
+
+
+def put_rules(client, match_id, rules, expected=SEEN):
+    """Ask for `rules` and name the rule the caller saw: by default the rule the match has now."""
+    if rules is None:
+        return client.put(f"/v1/matches/{match_id}/rules", json=None)
+    if expected is SEEN:
+        found = client.get(f"/v1/matches/{match_id}")
+        expected = {key: found.json()["rules"][key] for key in FIVB} if found.status_code == 200 else FIVB
+    return client.put(f"/v1/matches/{match_id}/rules", json={**rules, "expectedRules": expected})
 
 
 def confirm(client, job_id, expected=None):
@@ -180,6 +189,46 @@ def test_setting_the_rule_the_match_already_has_changes_nothing(best_of_three):
     assert again.status_code == 200 and again.json()["rules"] == payload(BEST_OF_THREE_TO_21)
     assert job_row(storage, job_id) == before
     assert listing(client, job_id)["listConfirmed"] is True
+
+
+def test_a_late_request_for_a_rule_does_not_undo_a_later_change(best_of_three):
+    client, match_id, job_id, storage = best_of_three
+    # The phone asked for "every set to 25" and gave up waiting. The user then chose FIVB, which landed.
+    assert put_rules(client, match_id, FIVB, expected=BEST_OF_THREE_TO_21).status_code == 200
+    before = (client.get(f"/v1/matches/{match_id}").json(), job_row(storage, job_id))
+    # The first request arrives now. It names the rule its user saw, which the match no longer has.
+    late = put_rules(client, match_id, {"setsToWin": 2, "setTarget": 25, "decidingSetTarget": 25}, expected=BEST_OF_THREE_TO_21)
+    assert late.status_code == 409
+    assert late.json()["error"]["code"] == "MATCH_RULES_STALE"
+    assert late.json()["error"]["details"]["currentRules"] == payload(FIVB)
+    assert (client.get(f"/v1/matches/{match_id}").json(), job_row(storage, job_id)) == before
+
+
+def test_a_repeated_rule_change_lands_once(best_of_three):
+    client, match_id, job_id, storage = best_of_three
+    assert confirm(client, job_id).status_code == 200
+    assert put_rules(client, match_id, FIVB, expected=BEST_OF_THREE_TO_21).status_code == 200
+    moved = job_row(storage, job_id)
+    assert confirm(client, job_id).status_code == 200
+    confirmed = job_row(storage, job_id)
+    # The answer to the first request was lost and the phone sends it again. The match has the
+    # rule it asks for, so the server writes nothing, even though the request names the old rule.
+    again = put_rules(client, match_id, FIVB, expected=BEST_OF_THREE_TO_21)
+    assert again.status_code == 200 and again.json()["rules"] == payload(FIVB)
+    assert job_row(storage, job_id) == confirmed and confirmed["rally_list_version"] == moved["rally_list_version"]
+    assert listing(client, job_id)["listConfirmed"] is True
+
+
+@pytest.mark.parametrize("expected", [
+    "missing", None, {**FIVB, "setsToWin": 4}, {"setsToWin": 3, "setTarget": 25}, {**FIVB, "winBy": 2},
+], ids=["missing", "null", "sets-4", "missing-key", "extra-key"])
+def test_a_rule_change_must_name_an_offered_rule_as_the_rule_it_saw(best_of_three, expected):
+    client, match_id, job_id, storage = best_of_three
+    before = (client.get(f"/v1/matches/{match_id}").json(), job_row(storage, job_id))
+    body = dict(FIVB) if expected == "missing" else {**FIVB, "expectedRules": expected}
+    refused = client.put(f"/v1/matches/{match_id}/rules", json=body)
+    assert refused.status_code == 422 and refused.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert (client.get(f"/v1/matches/{match_id}").json(), job_row(storage, job_id)) == before
 
 
 def test_a_rule_change_moves_every_reviewable_list_of_the_match_and_nothing_else(storage, make_clip):

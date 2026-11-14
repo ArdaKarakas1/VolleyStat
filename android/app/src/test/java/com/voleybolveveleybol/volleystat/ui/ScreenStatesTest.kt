@@ -384,11 +384,14 @@ class ScreenStatesTest {
     @Test fun theReportNamesTheRuleTheServerCountedWith() {
         show { ReportScreen(match, ReportLoad.READY, report("PARTIAL").copy(rules = MatchRules(2, 21, 15)), {}, {}, {}, {}, {}) }
         compose.onNodeWithText(text(R.string.report_rules, text(R.string.rule_counting, 21, 3, 15))).performScrollTo().assertIsDisplayed()
+        // The score above can hold a set played after a team had won, and the report says why.
+        compose.onNodeWithText(text(R.string.rule_no_match_end)).performScrollTo().assertIsDisplayed()
     }
 
     @Test fun aReportWithoutARuleLeavesTheRuleLineOut() {
         show { ReportScreen(match, ReportLoad.READY, report("PARTIAL"), {}, {}, {}, {}, {}) }
         // "Skor kuralı:" with nothing after it would name no rule; the line is left out instead.
         assertEquals(false, shown(text(R.string.report_rules, "").trim()))
+        assertEquals(false, shown(text(R.string.rule_no_match_end)))
     }
 }

@@ -43,11 +43,17 @@ Yanıt kuralı iki alanla daha verir: `{"setsToWin": 2, "setTarget": 25, "decidi
 
 `PUT /v1/matches/{matchId}/rules`
 
-Gövde yalnız kural nesnesidir. Sunucu `200` ile maçı `GET` yanıtındaki biçimde döner.
+Gövde kural nesnesidir ve kullanıcının ekranda gördüğü kuralı da taşır (`expectedRules`). Sunucu `200` ile maçı `GET` yanıtındaki biçimde döner.
+
+```json
+{"setsToWin": 2, "setTarget": 21, "decidingSetTarget": 15, "expectedRules": {"setsToWin": 3, "setTarget": 25, "decidingSetTarget": 15}}
+```
 
 - Kural değiştiyse sunucu aynı işlemde maçın `NEEDS_REVIEW` ya da `COMPLETE` durumundaki her işinin `rallyListVersion` ve `revision` değerini bir artırır. Kullanıcı listeyi eski kuralın set skorlarıyla onayladı, bu yüzden onay düşer (bölüm 9). Eski sürümle yola çıkmış bir onay ya da düzeltme `409 RALLY_LIST_STALE` alır.
 - Kararlar, kartlar ve düzeltmeler kalır. Sunucu kural değişikliğini düzeltme kaydına yazmaz ve rapordaki `rallyList.corrections` sayısı değişmez.
-- Aynı kural yeniden gelirse sunucu hiçbir şey yazmaz ve hiçbir sürümü artırmaz. İstemci bu yüzden yanıtı kaybolan isteği güvenle yineler.
+- Aynı kural yeniden gelirse sunucu hiçbir şey yazmaz, hiçbir sürümü artırmaz ve `expectedRules` alanına bakmaz. İstemci bu yüzden yanıtı kaybolan isteği güvenle yineler.
+- Maçın kuralı `expectedRules` ile aynı değilse sunucu `409 MATCH_RULES_STALE` döner, maçın şimdiki kuralını `details.currentRules` alanında verir ve hiçbir şey yazmaz. İstemcinin beklemekten vazgeçtiği bir istek sonradan gelirse sunucu böylece kullanıcının sonraki seçimini geri almaz.
+- `expectedRules` zorunludur ve kural nesnesinin kurallarına uyar. Sunucu eksik ya da geçersiz `expectedRules` alanını `422 VALIDATION_ERROR` ile reddeder.
 - Sunucu kuralı işin durumuna ve liste onayına bakmadan kabul eder. Maç yoksa sunucu `404 MATCH_NOT_FOUND` döner ve hiçbir şey yazmaz.
 
 ## 2. Analizör
@@ -126,7 +132,7 @@ Bir videonun aynı anda tek süren işi olur. `Idempotency-Key` başlığı iste
 - `scoreAfter`: `{"set": 1, "home": 4, "away": 3}`. Sunucu bu değeri raporun skor sayımıyla aynı yürüyüşten üretir. Değer `REJECTED` rallide, kazananı belli olmayan ilk rallide ve ondan sonraki her rallide `null` olur. Telefon skor hesaplamaz.
 - `videoDurationMs`: Bir düzeltmenin verebileceği en büyük zaman.
 - `sets`: Listenin bu sürümünün set skorları, raporun `score.sets` alanıyla aynı biçimde ve aynı sayımdan (`{"number": 1, "home": 25, "away": 21, "complete": true}`). Kullanıcı listeyi onaylamadan önce bu skorları maçta oynanan skorlarla karşılaştırır (bölüm 9). İstemci onay ekranında raporu değil bu alanı gösterir, çünkü onay isteği bu yanıttaki `rallyListVersion` değerini taşır.
-- `rules`: Sunucunun `sets` ve `scoreAfter` değerlerini saydığı maç kuralı (bölüm 1). Sunucu `rules` ve `sets` alanını aynı okumadan verir. İstemci skor denetiminde bu kuralı adıyla söyler.
+- `rules`: Sunucunun `sets` ve `scoreAfter` değerlerini saydığı maç kuralı (bölüm 1). Sunucu `rules` ve `sets` alanını aynı okumadan verir. İstemci skor denetiminde bu kuralı bir cümleyle söyler: "Sunucu seti 21 sayıda, 3. seti 15 sayıda ve iki farkla bitirir."
 
 - `status`: `PROPOSED` (karar yok), `VERIFIED` (kullanıcı kazananı seçti), `UNRESOLVED` (kullanıcı emin değil), `REJECTED` (kullanıcı "ralli değil" dedi).
 - `winner`: `HOME`, `AWAY` ya da `null`. Yalnız kullanıcı kararıyla dolar.

@@ -7,7 +7,7 @@
 - Kapsam amatör kapalı saha 6 × 6 maçıdır. Uygulama iki takımı da izler.
 - İlk analiz sunucuda, kayıtlı video üzerinde çalışır. Canlı analiz sonraki iştir.
 - Kullanıcı yalnız sistemin emin olamadığı kararları verir. Bugün eğitilmiş model yoktur, bu yüzden kullanıcı her rallinin kazananını kendisi seçer (önce inceleme akışı).
-- Bu kuralın tek istisnası ralli listesidir: Kullanıcı kaçan ralliyi ekler, birleşmiş ralliyi böler, iki parçayı birleştirir ve bir rallinin sınırını taşır. Kullanıcı sonra listeyi onaylar. Rapor ancak o zaman set skorunu ve takım sayılarını alt sınır işareti olmadan verir. Sayı türü alanları, kullanıcı her sayının türünü seçene kadar alt sınır kalır. Bu kesinlik kullanıcının beyanına dayanır ve sunucu onu doğrulayamaz (ADR-0114).
+- Bu kuralın iki istisnası vardır. Birincisi ralli listesidir: Kullanıcı kaçan ralliyi ekler, birleşmiş ralliyi böler, iki parçayı birleştirir ve bir rallinin sınırını taşır. Kullanıcı sonra listeyi onaylar. Rapor ancak o zaman set skorunu ve takım sayılarını alt sınır işareti olmadan verir. Sayı türü alanları, kullanıcı her sayının türünü seçene kadar alt sınır kalır. Bu kesinlik kullanıcının beyanına dayanır ve sunucu onu doğrulayamaz (ADR-0114). İkincisi maç kuralıdır: Kullanıcı maçı açarken maçı kaç set alan takımın kazandığını ve setlerin kaç sayıda bittiğini bir kez seçer. Uygulama FIVB kuralını seçili getirir ve sunucu setleri bu kurala göre sayar (ADR-0115).
 
 ## Akış
 
@@ -35,7 +35,7 @@ Bilinmeyen değer `{"value": null, "status": "UNKNOWN"}` biçimindedir ve hiçbi
 |---|---|---|
 | Sunum | `ui/screens/*`, `ui/components/*`, `ui/theme/*`, `VolleyStatApp.kt` | Ekranlar, ortak bileşenler, tema, gezinme grafiği |
 | Durum | `AppViewModel.kt` | Tek `ViewModel`. Ekran durumunu `StateFlow` ile yayar. Yükleme, analiz izleme, doğrulama ve rapor işlerini yürütür. |
-| Alan | `model/*`, `android/core` | Maç, takım, iş, kart ve rapor tipleri. `core` modülü Android'den bağımsız skor kurallarını taşır. |
+| Alan | `model/*`, `android/core` | Maç, takım, iş, kart ve rapor tipleri. `core` modülü Android'den bağımsız skor kurallarını taşır, ama uygulama bu modülü bugün kullanmaz. Set skorunu sunucu maçın kuralıyla sayar (ADR-0115). |
 | Veri | `data/ApiClient.kt`, `data/UploadEngine.kt`, `data/LocalStore.kt`, `data/VideoInspector.kt` | HTTP istemcisi, kaldığı yerden süren yükleme, telefondaki JSON kayıt, videonun telefonda okunan özellikleri |
 
 Uygulama kamera kaydı için CameraX, klip oynatma için Media3 kullanır. Uygulama ses kaydetmez. Oyuncu adları yalnız telefonda durur. Uygulama sunucuya yalnız forma numarası gönderir.

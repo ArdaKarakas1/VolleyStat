@@ -7,6 +7,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasScrollToNodeAction
 import androidx.compose.ui.test.hasText
@@ -175,7 +176,9 @@ class RallyListFlowTest {
                                     JSONObject().put("error", JSONObject().put("code", "VALIDATION_ERROR").put("message", "invalid").put("details", JSONObject())).toString()
                                 )
                             } else {
-                                // As on the real server: a new rule recounts the list and moves it on, so the confirmation lapses.
+                                // As on the real server: the request names the rule its user saw, and a new rule moves the list on, so the confirmation lapses.
+                                val seen = body.getJSONObject("expectedRules")
+                                check(MatchRules(seen.getInt("setsToWin"), seen.getInt("setTarget"), seen.getInt("decidingSetTarget")) == rules) { "the app named a rule the list did not have" }
                                 rules = MatchRules(body.getInt("setsToWin"), body.getInt("setTarget"), body.getInt("decidingSetTarget"))
                                 version++
                                 confirmed = false
@@ -476,7 +479,8 @@ class RallyListFlowTest {
         assertTrue(app.onAllNodesWithText(text(R.string.review_position, 2, 3)).fetchSemanticsNodes().isEmpty())
     }
 
-    @Test fun aRuleChangedOnTheListRecountsItAndTakesAwayTheConfirmation() {
+    @Test fun aRuleChangedOnTheListIsNamedOnTheListAndTheReportAndTakesAwayTheConfirmation() {
+        // The stand-in server below counts no sets. Only the server tests show the sets counted with a rule.
         confirmed = true
         openTheRallyList()
         waitFor(text(R.string.rallies_confirmed))
@@ -525,6 +529,21 @@ class RallyListFlowTest {
         assertTrue(app.onAllNodesWithText(text(R.string.rule_sending)).fetchSemanticsNodes().isEmpty())
         assertEquals(1, requests.count { it == "PUT /matches/server-1/rules" })
         assertEquals("the list did not move on", MatchRules.FIVB, rules)
+
+        // The next choice in any of the three questions is a new attempt, and the refusal goes with it.
+        val refusal = text(R.string.rule_refused)
+        fun refusedAgain() {
+            tap(R.string.action_save_rule)
+            waitFor(refusal)
+        }
+        app.onAllNodesWithText(text(R.string.rule_points_option, 21))[0].performScrollTo().performClick()
+        assertTrue("a points choice clears the refusal", app.onAllNodesWithText(refusal).fetchSemanticsNodes().isEmpty())
+        refusedAgain()
+        app.onAllNodesWithText(text(R.string.rule_points_option, 21))[1].performScrollTo().performClick()
+        assertTrue("a deciding set choice clears the refusal", app.onAllNodesWithText(refusal).fetchSemanticsNodes().isEmpty())
+        refusedAgain()
+        app.onNodeWithText(text(R.string.rule_sets_option_fivb, 3)).performScrollTo().performClick()
+        assertTrue("a sets choice clears the refusal", app.onAllNodesWithText(refusal).fetchSemanticsNodes().isEmpty())
     }
 
     @Test fun aWinnerAnswerThatLandsWhileTheRuleIsOnItsWayLeavesTheRuleScreenAsItWas() {
@@ -558,6 +577,33 @@ class RallyListFlowTest {
         holdRules!!.countDown()
         waitFor(text(R.string.rule_name_custom))
         assertEquals(MatchRules(2, 25, 15), rules)
+    }
+
+    @Test fun aChoiceNotSavedYetOutlivesAWinnerAnswerThatMovesTheListOn() {
+        // Rally 2 waits for its winner. The user answers it on a slow network and goes on without waiting.
+        winners = listOf("HOME", null, "HOME")
+        val decision = java.util.concurrent.CountDownLatch(1)
+        holdDecision = decision
+        openTheRallyList()
+        tap(R.string.action_go_review)
+        waitFor(text(R.string.review_position, 2, 3))
+        app.onNodeWithText(HOME_TEAM).performClick()
+        back()
+        app.onNodeWithText(text(R.string.rule_card_change)).performScrollTo().performClick()
+        waitFor(text(R.string.rule_title))
+        app.onNodeWithText(text(R.string.rule_sets_option, 2)).performScrollTo().performClick()
+
+        // The answer lands and moves the list on. The screen waits for the list of now and reads it.
+        val vm = ViewModelProvider(app.activity)[AppViewModel::class.java]
+        decision.countDown()
+        idleUntil("the answer of the decision") { vm.analysis.value.job?.rallyListVersion == 8 }
+        idleUntil("the list of now") { vm.analysis.value.currentRallies != null }
+        waitFor(text(R.string.rule_sets_option, 2))
+
+        // The choice is still there to save, and nothing was sent.
+        app.onNodeWithText(text(R.string.rule_sets_option, 2)).performScrollTo().assertIsSelected()
+        app.onNodeWithText(text(R.string.action_save_rule)).assertIsEnabled()
+        assertEquals(0, requests.count { it == "PUT /matches/server-1/rules" })
     }
 
     @Test fun aNoGivenBeforeTheRuleChangedDoesNotSpeakForTheRecountedList() {

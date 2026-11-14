@@ -178,7 +178,7 @@
     "/v1/matches/{match_id}/rules": {
       "put": {
         "summary": "Put Match Rules",
-        "description": "Set the rule the server counts the sets of this match with.\n\nA rule that differs from the stored one moves the rally list of every analysis of the match\nthat has rallies one version on, in the same transaction. The user confirmed those lists\nwhile looking at set scores of the old rule, so each confirmation lapses, and a confirmation\nor a correction still on its way with the old version is refused as stale. Answers, cards and\ncorrections stay as they are. The rule the match already has changes nothing.",
+        "description": "Set the rule the server counts the sets of this match with.\n\nA rule that differs from the stored one moves the rally list of every analysis of the match\nthat has rallies one version on, in the same transaction. The user confirmed those lists\nwhile looking at set scores of the old rule, so each confirmation lapses, and a confirmation\nor a correction still on its way with the old version is refused as stale. Answers, cards and\ncorrections stay as they are.\n\nThe rule the match already has changes nothing, so a repeated request lands once. Any other\nrequest must name the rule the match has now (expectedRules). A request whose user saw another\nrule was sent before a later change, and it is refused as stale instead of undoing that change.",
         "operationId": "put_match_rules_v1_matches__match_id__rules_put",
         "parameters": [
           {
@@ -196,7 +196,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/MatchRulesInput"
+                "$ref": "#/components/schemas/MatchRulesChange"
               }
             }
           }
@@ -1411,6 +1411,49 @@
           "awayTeamName"
         ],
         "title": "MatchInput"
+      },
+      "MatchRulesChange": {
+        "properties": {
+          "setsToWin": {
+            "type": "integer",
+            "enum": [
+              2,
+              3
+            ],
+            "title": "Setstowin"
+          },
+          "setTarget": {
+            "type": "integer",
+            "enum": [
+              25,
+              21,
+              15
+            ],
+            "title": "Settarget"
+          },
+          "decidingSetTarget": {
+            "type": "integer",
+            "enum": [
+              25,
+              21,
+              15
+            ],
+            "title": "Decidingsettarget"
+          },
+          "expectedRules": {
+            "$ref": "#/components/schemas/MatchRulesInput"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "setsToWin",
+          "setTarget",
+          "decidingSetTarget",
+          "expectedRules"
+        ],
+        "title": "MatchRulesChange",
+        "description": "A rule change. It also names the rule its user saw, so that a request the phone gave up on can\nnot undo a change the user made after it."
       },
       "MatchRulesInput": {
         "properties": {

@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.IntrinsicSize
@@ -47,12 +48,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -90,6 +94,50 @@ fun VsCard(
         Surface(modifier.fillMaxWidth(), shape = shape, color = MaterialTheme.colorScheme.surface, border = border, content = body)
     } else {
         Surface(onClick = onClick, enabled = enabled, modifier = modifier.fillMaxWidth(), shape = shape, color = MaterialTheme.colorScheme.surface, border = border, content = body)
+    }
+}
+
+/**
+ * A line that appears while the user waits, such as an answer of the server or a refusal: a screen
+ * reader reads it out when it appears, with no need to move the focus to it.
+ */
+fun Modifier.announced(): Modifier = semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite }
+
+/**
+ * A card that shows a choice and the action that changes it: an icon, the choice, and the action
+ * in the primary colour. Large text on a narrow phone puts the action under the choice. Beside it,
+ * the action would leave the choice so little room that a line breaks inside a word or a number.
+ */
+@Composable
+fun ChoiceCard(
+    icon: Int,
+    action: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    VsCard(onClick = onClick, enabled = enabled, padding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)) {
+        BoxWithConstraints {
+            val stacked = maxWidth < 220.dp * LocalDensity.current.fontScale
+            val label: @Composable () -> Unit = {
+                Text(
+                    action, style = MaterialTheme.typography.labelMedium,
+                    color = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = if (stacked) Modifier.padding(top = 6.dp) else Modifier,
+                )
+            }
+            Row(
+                verticalAlignment = if (stacked) Alignment.Top else Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Icon(painterResource(icon), contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Column(Modifier.weight(1f)) {
+                    content()
+                    if (stacked) label()
+                }
+                if (!stacked) label()
+            }
+        }
     }
 }
 

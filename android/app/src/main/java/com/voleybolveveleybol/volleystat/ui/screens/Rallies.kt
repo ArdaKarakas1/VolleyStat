@@ -63,6 +63,7 @@ import com.voleybolveveleybol.volleystat.ui.components.Notice
 import com.voleybolveveleybol.volleystat.ui.components.PrimaryButton
 import com.voleybolveveleybol.volleystat.ui.components.SecondaryButton
 import com.voleybolveveleybol.volleystat.ui.components.Tone
+import com.voleybolveveleybol.volleystat.ui.components.announced
 import com.voleybolveveleybol.volleystat.ui.components.dashedOutline
 import com.voleybolveveleybol.volleystat.ui.formatClock
 import com.voleybolveveleybol.volleystat.ui.formatDuration
@@ -118,7 +119,7 @@ fun correctionProblemText(analysis: AnalysisUi): String? = when (analysis.correc
 @Composable
 fun CorrectionProblemNotice(analysis: AnalysisUi) {
     // After STALE the app has already read the list again, so nothing is wrong any more: the user repeats the step.
-    correctionProblemText(analysis)?.let { Notice(it, if (analysis.correctionProblem == CorrectionProblem.STALE) Tone.CAUTION else Tone.NEGATIVE) }
+    correctionProblemText(analysis)?.let { Notice(it, if (analysis.correctionProblem == CorrectionProblem.STALE) Tone.CAUTION else Tone.NEGATIVE, Modifier.announced()) }
 }
 
 /** The words for a match that has no job to work on. */
@@ -145,8 +146,13 @@ fun JobProblemNotice(problem: JobLoad, onRetry: () -> Unit) {
 /** Says that a correction is on its way. The screen that sent it keeps the user until the answer is there. */
 @Composable
 fun CorrectionProgress(analysis: AnalysisUi, @StringRes text: Int) {
-    if (!analysis.correcting) return
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+    if (analysis.correcting) ProgressLine(text)
+}
+
+/** A spinner and what is on its way. A screen reader says it when it appears, as the hand that sent it waits. */
+@Composable
+fun ProgressLine(@StringRes text: Int) {
+    Row(Modifier.announced(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
         Text(stringResource(text), style = MaterialTheme.typography.bodyMedium)
     }

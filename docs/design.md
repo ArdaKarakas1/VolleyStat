@@ -69,6 +69,9 @@ Bu kalıplar görsel etkiden önce gelir.
 - **Ralli listesindeki skor da alt sınırdır.** Liste her rallinin yanında o andaki set skorunu gösterir. Kullanıcı listeyi onaylayana kadar ekran bu skorların alt sınır olduğunu ve eksik bir rallinin set sınırını kaydırdığını yazar. Deneme analizinin listesinde ekran alt sınırdan söz etmez: Sunucu o aralıkları uydurmuştur ve skorlar gerçek maç hakkında bilgi vermez.
 - **Bir pencere yalnız var olan yanıtı sayar.** Birleştirme penceresi önceki rallinin kararından yalnız o karar varsa söz eder. Sunucu kalan rallinin "Bu bir ralli değil" yanıtını silecekse pencere bunu da yazar. Düzenleyicideki not sayı türü ve oyuncu yanıtlarından koşullu söz eder: "verdiysen".
 - **Sayıyı kim saydıysa cümlenin öznesi odur.** Kullanıcı maçın kuralını seçer ve sunucu skoru bu kurala göre sayar. Ekran bu yüzden "Sunucu listedeki rallileri şu skorla saydı" ve "Sunucu seti 21 sayıda, 3. seti 15 sayıda ve iki farkla bitirir" der. Ekran "Uygulama saydı" demez. Ekran kuralı sunucunun yanıtından okur ve telefon set sınırı hesaplamaz.
+- **Ekran kaydedilmemiş seçimi koşul cümlesiyle söyler.** Sunucu yeni kuralla ancak Kaydet düğmesinden sonra sayar. Kural ekranı bu yüzden seçimi "Kaydedersen sunucu seti 21 sayıda, 3. seti 15 sayıda ve iki farkla bitirir" diye yazar. Maçın kuralı ise düz cümleyle durur.
+- **Ret metni suçu doğru yere koyar.** Sunucu uygulamanın sunduğu her kuralı kabul eder. Kural ekranının ret metni bu yüzden kuralı suçlamaz ve kullanıcıya sunucuyu denetlemesini söyler. Kural ekranı açıkken sunucudaki kural değiştiyse ekran bunu söyler ve kullanıcının seçimini korur.
+- **Ekran sunucunun yapmadığı işi de söyler.** Sunucu maçı bitirmez. Kural ekranı ve rapor bunu yazar: "Sunucu maçı bitirmez ve bir takım maçı aldıktan sonra oynanan setleri de sayar."
 - **Yanıtı bekleyen ekran açık kalır.** Düzeltme gönderen ekran sunucunun yanıtı gelene kadar geri tuşunu kapatır ve düzeltmenin yolda olduğunu yazar: Düzenleyici "Uygulama düzeltmeyi sunucuya gönderiyor", ralli listesi "Uygulama onayı sunucuya gönderiyor", maç kuralı ekranı "Uygulama kuralı sunucuya gönderiyor" der. Kullanıcı sunucunun reddini ya da bağlantı hatasını böylece ekrandan çıkmadan önce görür.
 - **Bir dokunuşun sonucu dokunulan düğmenin yanında durur.** Ralli düzenleyici "gönderiyor" satırını ve sunucunun reddini işaret düğmelerinin hemen üstünde gösterir. Ekranın kayan bölümünde duran bir ret küçük telefonda görünmez ve kullanıcı dokunuşun boşa gittiğini sanar. Ret, kullanıcı görüntüyü yeniden hareket ettirince kalkar.
 - **Kural değişince onay düşer ve ekran bunu önceden söyler.** Kullanıcı listeyi eski kuralın set skorlarıyla onayladı. Kural ekranı bunu Kaydet düğmesine basılmadan önce yazar. Ekran kullanıcının kararlarının ve düzeltmelerinin kaldığını da yazar.
@@ -84,6 +87,9 @@ Her ekran dört durumu çizer: yükleniyor, boş, hata ve dolu. Hata mesajı ney
 ## Erişilebilirlik ve ekran boyutları
 
 - Dokunma alanları en az 48 dp yüksekliğindedir.
+- Ekran okuyucu, kullanıcı yanıtı beklerken beliren satırı ve sunucunun reddini kendiliğinden okur. Kullanıcı odağı o satıra taşımak zorunda kalmaz.
+- Kural ekranında iki soru aynı yanıtı sunar ("21 sayı"). Ekran okuyucu her satırı sorusuyla birlikte okur.
+- Dar ekranda ve büyük yazıda tarih kartı ve kural kartı "değiştir" yazısını alt satıra taşır. Kartın bilgisi böylece bir sözcüğün ya da sayının ortasından bölünmez.
 - Renk hiçbir bilgiyi tek başına taşımaz. Seçili yanıt çerçeve, zemin ve "Senin kararın" yazısıyla işaretlenir.
 - Ekran görüntüsü testleri her ana ekranı 411 dp ve 320 dp genişlikte, açık ve koyu temada ve 1,5 kat yazı boyutunda üretir.
 - Dar ekranda ve büyük yazıda oyuncu tablosu adı sayıların üstüne taşır. Doğrulama ekranı iki takımı yan yana koyar, böylece yanıtlar klibin yanında kalır.

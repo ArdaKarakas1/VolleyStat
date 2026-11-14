@@ -678,8 +678,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun changeMatchRules(rules: MatchRules, onDone: () -> Unit) {
         val matchId = _analysis.value.matchId ?: return
         val serverMatchId = _state.value.matches.firstOrNull { it.localId == matchId }?.session?.serverMatchId ?: return
+        // The rule the user saw is the one the list on screen was counted with.
+        val seen = _analysis.value.rallies?.rules ?: return
         correct(onDone, found = { list -> emptyList<String>().takeIf { list.rules == rules } }, readsCards = false) { api, _, _ ->
-            api.putMatchRules(serverMatchId, rules)
+            api.putMatchRules(serverMatchId, rules, seen)
             Correction(emptyList(), emptyList(), job = null)
         }
     }
@@ -722,15 +724,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val reloaded = withContext(Dispatchers.IO) { runCatching { api().rallies(jobId, wait) }.getOrNull() }
             val error = sent.exceptionOrNull()
             val refusal = (error as? ApiException)?.code
-            val onList = if (sent.isFailure && (refusal == null || refusal == "RALLY_LIST_STALE")) reloaded?.let(found) else null
+            // The list, or the rule it was counted with, moved on since the screen read it.
+            val stale = refusal == "RALLY_LIST_STALE" || refusal == "MATCH_RULES_STALE"
+            val onList = if (sent.isFailure && (refusal == null || stale)) reloaded?.let(found) else null
             val applied = sent.isSuccess || onList != null
             val problem = when {
                 applied -> null
                 refusal == null -> CorrectionProblem.UNREACHABLE
                 // The list moved on and the list of now did not arrive: there is nothing to redo the correction on.
-                refusal == "RALLY_LIST_STALE" && reloaded == null -> CorrectionProblem.UNREACHABLE
+                stale && reloaded == null -> CorrectionProblem.UNREACHABLE
+                stale -> CorrectionProblem.STALE
                 else -> when (refusal) {
-                    "RALLY_LIST_STALE" -> CorrectionProblem.STALE
                     "RALLY_OVERLAP" -> CorrectionProblem.OVERLAP
                     "INVALID_INTERVAL", "SPLIT_POINT_OUTSIDE" -> CorrectionProblem.OUTSIDE
                     "LIST_NOT_READY" -> CorrectionProblem.NOT_READY

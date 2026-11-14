@@ -1039,12 +1039,10 @@ class AppViewModelTest {
         assertEquals(listOf(2, 21, 15), rulesOf(bodies.first().getJSONObject("rules")))
     }
 
-    @Test fun everyNewDraftStartsWithTheFivbRule() {
+    @Test fun theDraftAfterAStartedMatchHasTheFivbRuleAgain() {
+        // Only a started match empties the draft. A setup the user leaves stays, and Home offers it (MatchRulesTest).
         val vm = viewModel(draftWithRule(MatchRules(2, 21, 15)))
         vm.startUpload()
-        assertEquals(MatchRules.FIVB, vm.state.value.draft.rules)
-        vm.editDraft { it.copy(rules = MatchRules(3, 21, 21)) }
-        vm.discardDraft()
         assertEquals(MatchRules.FIVB, vm.state.value.draft.rules)
     }
 
@@ -1108,8 +1106,10 @@ class AppViewModelTest {
         assertEquals("the screen closes once", 1, done)
         // The rule touches no card, so the cards are not read again: the user waits for the list only.
         assertEquals(listOf("PUT /matches/server-A/rules", "GET /analyses/J/rallies", "GET /videos/video-A/analyses/latest"), requests.toList())
-        assertEquals(setOf("setsToWin", "setTarget", "decidingSetTarget"), bodies.single().keys().asSequence().toSet())
+        assertEquals(setOf("setsToWin", "setTarget", "decidingSetTarget", "expectedRules"), bodies.single().keys().asSequence().toSet())
         assertEquals(listOf(2, 21, 15), rulesOf(bodies.single()))
+        // The request names the rule the user saw: the one the list on screen was counted with.
+        assertEquals(listOf(3, 25, 15), rulesOf(bodies.single().getJSONObject("expectedRules")))
         val shown = vm.analysis.value
         assertEquals(MatchRules(2, 21, 15), shown.rallies!!.rules)
         assertEquals(4, shown.rallies!!.version)
@@ -1145,6 +1145,32 @@ class AppViewModelTest {
         await("the refusal") { vm.analysis.value.correctionProblem != null }
         assertEquals(CorrectionProblem.REFUSED, vm.analysis.value.correctionProblem)
         assertEquals(MatchRules.FIVB, vm.analysis.value.rallies!!.rules)
+    }
+
+    @Test fun aRuleChangeMadeOnARuleTheMatchNoLongerHasIsStaleAndTheListShowsTheRuleOfNow() {
+        var rules = MatchRules.FIVB
+        var version = 3
+        val vm = withRallyList { rallies(version, rally("r1", 1, 2_000, 9_000), rules = rules) }
+        // A change the app gave up on reached the server after all. The list on screen still names FIVB.
+        rules = MatchRules(2, 25, 25)
+        version = 4
+        on("PUT /matches/server-A/rules") { refuse(409, "MATCH_RULES_STALE") }
+        vm.changeMatchRules(MatchRules(2, 21, 15)) { fail("the server refused the change") }
+        await("the refusal") { vm.analysis.value.correctionProblem != null }
+        assertEquals(CorrectionProblem.STALE, vm.analysis.value.correctionProblem)
+        assertEquals("the app read the list again and shows the rule the server has", MatchRules(2, 25, 25), vm.analysis.value.rallies!!.rules)
+        assertFalse(vm.analysis.value.correcting)
+        assertEquals("the app never sends the rule a second time by itself", 1, requests.count { it == "PUT /matches/server-A/rules" })
+    }
+
+    @Test fun aStaleRuleChangeWhoseListDoesNotArriveIsUnreachable() {
+        val vm = withRallyList { rallies(3, rally("r1", 1, 2_000, 9_000)) }
+        on("PUT /matches/server-A/rules") { refuse(409, "MATCH_RULES_STALE") }
+        on("GET /analyses/J/rallies") { lost() }
+        vm.changeMatchRules(MatchRules(2, 21, 15)) { fail("the server refused the change") }
+        await("the outcome") { vm.analysis.value.correctionProblem != null }
+        // Without the list of now there is no rule to choose against, so the screen asks for the connection.
+        assertEquals(CorrectionProblem.UNREACHABLE, vm.analysis.value.correctionProblem)
     }
 
     @Test fun anOlderServerWithoutTheRuleRouteRefusesTheChange() {

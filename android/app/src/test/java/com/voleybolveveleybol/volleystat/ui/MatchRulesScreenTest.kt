@@ -4,31 +4,42 @@ import android.content.Context
 import androidx.activity.OnBackPressedDispatcher
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import com.voleybolveveleybol.volleystat.CorrectionProblem
 import com.voleybolveveleybol.volleystat.R
 import com.voleybolveveleybol.volleystat.model.MatchRules
+import com.voleybolveveleybol.volleystat.ui.screens.MatchRulesCard
 import com.voleybolveveleybol.volleystat.ui.screens.MatchRulesScreen
 import com.voleybolveveleybol.volleystat.ui.theme.VolleyStatTheme
 import org.junit.Assert.assertEquals
@@ -81,6 +92,7 @@ class MatchRulesScreenTest {
     private fun row(label: String, index: Int = 0) = compose.onAllNodesWithText(label)[index]
     /** The body scrolls on a small screen, so a row is brought into view before the finger reaches it. */
     private fun tap(label: String, index: Int = 0) = row(label, index).performScrollTo().performClick()
+    private val announced = SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite)
 
     @Test fun theFivbRuleIsPreselectedAndSavingNeedsAChange() {
         val saved = mutableListOf<MatchRules>()
@@ -106,40 +118,65 @@ class MatchRulesScreenTest {
         assertEquals(listOf(MatchRules(2, 21, 15)), saved)
     }
 
-    @Test fun theDecidingSetQuestionAndTheSentenceFollowTheNumberOfSetsToWin() {
+    @Test fun theDecidingSetQuestionAndTheSentenceFollowTheChoice() {
         show { MatchRulesScreen(MatchRules.FIVB, onSave = {}, onBack = {}) }
         compose.onNodeWithText(text(R.string.rule_deciding_question, 5)).performScrollTo().assertIsDisplayed()
+        // The rule the match has is a fact.
         compose.onNodeWithText(text(R.string.rule_counting, 25, 5, 15)).assertIsDisplayed()
 
         tap(twoSets)
         compose.onNodeWithText(text(R.string.rule_deciding_question, 3)).performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText(text(R.string.rule_counting, 25, 3, 15)).assertIsDisplayed()
+        // The server counts with a choice only after Save, so the screen says it as a condition and never as a fact.
+        compose.onNodeWithText(text(R.string.rule_counting_if_saved, 25, 3, 15)).assertIsDisplayed()
+        assertFalse(shown(text(R.string.rule_counting, 25, 3, 15)))
         assertFalse(shown(text(R.string.rule_deciding_question, 5)))
 
         // With both targets the same, the sentence names one target for every set.
         tap(text(R.string.rule_points_option, 21), 0)
         tap(text(R.string.rule_points_option, 21), 1)
+        compose.onNodeWithText(text(R.string.rule_counting_same_if_saved, 21)).assertIsDisplayed()
+
+        // Back at the rule the match has, the sentence is a fact again.
+        tap(threeSets)
+        tap(text(R.string.rule_points_option_fivb, 25))
+        tap(text(R.string.rule_points_option_fivb, 15))
+        compose.onNodeWithText(text(R.string.rule_counting, 25, 5, 15)).assertIsDisplayed()
+    }
+
+    @Test fun aRuleWithOneTargetForEverySetIsSaidInOneSentence() {
+        show { MatchRulesScreen(MatchRules(2, 21, 21), onSave = {}, onBack = {}, onList = true) }
         compose.onNodeWithText(text(R.string.rule_counting_same, 21)).assertIsDisplayed()
     }
 
-    @Test fun everyChoiceIsARadioRowOfAtLeast48dpThatSaysWhetherItIsSelected() {
+    @Test fun everyChoiceIsARadioRowOfAtLeast48dpThatNamesItsQuestionAndSaysWhetherItIsSelected() {
         show { MatchRulesScreen(MatchRules.FIVB, onSave = {}, onBack = {}) }
         val radio = SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton)
+        // The rows the screen draws: one for each answer of the three questions.
+        compose.onAllNodes(radio).assertCountEquals(8)
+        val sets = text(R.string.rule_sets_question)
+        val points = text(R.string.rule_points_question)
+        val deciding = text(R.string.rule_deciding_question, 5)
         val rows = listOf(
-            twoSets to 0, threeSets to 0,
-            text(R.string.rule_points_option_fivb, 25) to 0, text(R.string.rule_points_option, 21) to 0, text(R.string.rule_points_option, 15) to 0,
-            text(R.string.rule_points_option, 25) to 0, text(R.string.rule_points_option, 21) to 1, text(R.string.rule_points_option_fivb, 15) to 0,
+            Triple(twoSets, 0, sets), Triple(threeSets, 0, sets),
+            Triple(text(R.string.rule_points_option_fivb, 25), 0, points), Triple(text(R.string.rule_points_option, 21), 0, points),
+            Triple(text(R.string.rule_points_option, 15), 0, points),
+            Triple(text(R.string.rule_points_option, 25), 0, deciding), Triple(text(R.string.rule_points_option, 21), 1, deciding),
+            Triple(text(R.string.rule_points_option_fivb, 15), 0, deciding),
         )
-        rows.forEach { (label, index) ->
+        rows.forEach { (label, index, question) ->
             row(label, index).assert(radio).assertHeightIsAtLeast(48.dp)
+                .assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.Selected))
+                // Two questions offer "21 sayı", so a screen reader hears the question with the answer.
+                .assert(hasContentDescription("$question $label"))
         }
-        assertEquals("one row of each answer", 8, rows.size)
     }
 
     @Test fun onTheNewMatchTheScreenSaysTheRuleCanChangeLaterAndWarnsAboutNothing() {
         show { MatchRulesScreen(MatchRules.FIVB, onSave = {}, onBack = {}) }
         compose.onNodeWithText(text(R.string.rule_intro)).assertIsDisplayed()
         assertTrue(shown(text(R.string.rule_later)))
+        // The server keeps counting after a team has won, and the screen says so where the user picks the sets.
+        assertTrue(shown(text(R.string.rule_no_match_end)))
         assertFalse(shown(text(R.string.rule_keeps_answers)))
         assertFalse(shown(text(R.string.rule_drops_confirmation)))
     }
@@ -160,7 +197,9 @@ class MatchRulesScreenTest {
         val leaves = leavesBy {
             MatchRulesScreen(MatchRules.FIVB, onSave = {}, onBack = {}, onList = true, sending = sending, initial = MatchRules(2, 21, 15))
         }
-        compose.onNodeWithText(text(R.string.rule_sending)).assertIsDisplayed()
+        // A screen reader says the line when it appears.
+        compose.onNodeWithText(text(R.string.rule_sending)).assertIsDisplayed().assert(announced)
+        assertFalse("the rule on its way is the one thing the screen says", shown(text(R.string.rule_counting_if_saved, 21, 3, 15)))
         compose.onNodeWithContentDescription(text(R.string.action_back)).assertIsNotEnabled()
         compose.onNodeWithText(save).assertIsNotEnabled()
         row(threeSets).assertIsNotEnabled()
@@ -170,6 +209,7 @@ class MatchRulesScreenTest {
         sending = false
         compose.waitForIdle()
         assertFalse(shown(text(R.string.rule_sending)))
+        compose.onNodeWithText(text(R.string.rule_counting_if_saved, 21, 3, 15)).assertIsDisplayed()
         compose.onNodeWithText(save).assertIsEnabled()
         pressBack()
         assertEquals(1, leaves())
@@ -183,10 +223,45 @@ class MatchRulesScreenTest {
                 onSelectionChanged = { problem = null }, initial = MatchRules(2, 21, 15),
             )
         }
-        compose.onNodeWithText(text(R.string.rule_refused)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.rule_refused)).assertIsDisplayed().assert(announced)
         assertFalse(shown(text(R.string.correction_unreachable)))
-        tap(threeSets)
-        assertFalse("the next choice clears the refusal", shown(text(R.string.rule_refused)))
+        assertFalse("the refusal stands where the sentence about the choice stood", shown(text(R.string.rule_counting_if_saved, 21, 3, 15)))
+        // A choice in any of the three questions is a new attempt, and the refusal goes with it.
+        listOf(threeSets to 0, text(R.string.rule_points_option_fivb, 25) to 0, text(R.string.rule_points_option, 25) to 0).forEach { (label, index) ->
+            problem = CorrectionProblem.REFUSED
+            compose.waitForIdle()
+            tap(label, index)
+            assertFalse("the choice $label clears the refusal", shown(text(R.string.rule_refused)))
+        }
+    }
+
+    @Test fun aRuleThatChangedOnTheServerMeanwhileSaysSoAndLeavesTheChoiceToSave() {
+        // The list of now came back with the rule of now. The user's choice is still on screen.
+        show { MatchRulesScreen(MatchRules(2, 25, 25), onSave = {}, onBack = {}, onList = true, problem = CorrectionProblem.STALE, initial = MatchRules(2, 21, 15)) }
+        compose.onNodeWithText(text(R.string.rule_stale)).assertIsDisplayed().assert(announced)
+        assertFalse(shown(text(R.string.rule_refused)))
+        compose.onNodeWithText(save).assertIsEnabled()
+    }
+
+    @Test fun onANarrowPhoneWithLargeTextTheCardPutsItsActionUnderTheRule() {
+        // A 320 dp phone at 1.5x text: 288 dp between the screen margins.
+        var scale by mutableStateOf(1.5f)
+        var width by mutableStateOf(288.dp)
+        show {
+            CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, scale)) {
+                Box(Modifier.width(width)) { MatchRulesCard(MatchRules(2, 21, 15), onClick = {}) }
+            }
+        }
+        fun bounds(label: String) = compose.onNodeWithText(label, useUnmergedTree = true).getUnclippedBoundsInRoot()
+        val detail = text(R.string.rule_detail, 2, 21, 3, 15)
+        val change = text(R.string.rule_card_change)
+        assertTrue("the action stands under the rule", bounds(change).top >= bounds(detail).bottom)
+
+        // A 411 dp phone at normal text has room for both on one line.
+        scale = 1f
+        width = 379.dp
+        compose.waitForIdle()
+        assertTrue("with room, the action stands beside the rule", bounds(change).left >= bounds(detail).right)
     }
 
     @Test fun aLostConnectionIsNamedAsOne() {

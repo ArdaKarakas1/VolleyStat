@@ -63,7 +63,7 @@ Bileşenler (`ui/components/`): `VsCard`, `HeroCard`, `ListRow`, `PrimaryButton`
 ## 4. Mimari
 
 ```
-android/core        Saf Kotlin: kurallar, rapor modeli (Android bağımlılığı yok)
+android/core        Saf Kotlin kuralları. Uygulama bugün kullanmaz, set skorunu sunucu sayar (ADR-0115)
 android/app
   data/             ApiClient, UploadEngine, LocalStore, VideoInspector, AnalysisRepository
   model/            Uygulama modelleri

@@ -8,11 +8,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
@@ -23,18 +20,21 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.voleybolveveleybol.volleystat.CorrectionProblem
 import com.voleybolveveleybol.volleystat.R
 import com.voleybolveveleybol.volleystat.model.MatchRules
+import com.voleybolveveleybol.volleystat.ui.components.ChoiceCard
 import com.voleybolveveleybol.volleystat.ui.components.Notice
 import com.voleybolveveleybol.volleystat.ui.components.PrimaryButton
 import com.voleybolveveleybol.volleystat.ui.components.SectionTitle
 import com.voleybolveveleybol.volleystat.ui.components.Tone
 import com.voleybolveveleybol.volleystat.ui.components.VsCard
+import com.voleybolveveleybol.volleystat.ui.components.announced
 import com.voleybolveveleybol.volleystat.ui.theme.Dimens
 
 /** "FIVB kuralı" for the FIVB rule, otherwise the rule is the user's own choice. */
@@ -54,22 +54,19 @@ fun ruleCounting(rules: MatchRules): String =
     if (rules.setTarget == rules.decidingSetTarget) stringResource(R.string.rule_counting_same, rules.setTarget)
     else stringResource(R.string.rule_counting, rules.setTarget, rules.decidingSetNumber, rules.decidingSetTarget)
 
+/** The same sentence for a choice the user has not saved: the server counts with it only after Save. */
+@Composable
+fun ruleCountingIfSaved(rules: MatchRules): String =
+    if (rules.setTarget == rules.decidingSetTarget) stringResource(R.string.rule_counting_same_if_saved, rules.setTarget)
+    else stringResource(R.string.rule_counting_if_saved, rules.setTarget, rules.decidingSetNumber, rules.decidingSetTarget)
+
 /** The rule of a match on 03 and on the rally list. A tap opens screen 13. */
 @Composable
 fun MatchRulesCard(rules: MatchRules, onClick: () -> Unit, enabled: Boolean = true) {
-    VsCard(onClick = onClick, enabled = enabled, padding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Icon(painterResource(R.drawable.ic_sports_volleyball), contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-            Column(Modifier.weight(1f)) {
-                Text(stringResource(R.string.rule_card_label), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(ruleName(rules), style = MaterialTheme.typography.titleSmall)
-                Text(ruleDetail(rules), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Text(
-                stringResource(R.string.rule_card_change), style = MaterialTheme.typography.labelMedium,
-                color = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+    ChoiceCard(R.drawable.ic_sports_volleyball, stringResource(R.string.rule_card_change), onClick, enabled) {
+        Text(stringResource(R.string.rule_card_label), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(ruleName(rules), style = MaterialTheme.typography.titleSmall)
+        Text(ruleDetail(rules), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -88,8 +85,12 @@ fun MatchRulesScreen(
     listConfirmed: Boolean = false,
     sending: Boolean = false,
     problem: CorrectionProblem? = null,
-    onSelectionChanged: () -> Unit = {},
-    /** Where the selection starts. Only a screenshot of a changed selection sets it apart from [current]. */
+    /** Every choice the user makes, as the whole rule it makes. */
+    onSelectionChanged: (MatchRules) -> Unit = {},
+    /**
+     * Where the selection starts. The rally list route passes the user's last choice: the screen
+     * leaves the composition while the list is read again, and the choice must outlive that.
+     */
     initial: MatchRules = current,
 ) {
     var setsToWin by rememberSaveable { mutableIntStateOf(initial.setsToWin) }
@@ -101,15 +102,24 @@ fun MatchRulesScreen(
     FlowScaffold(
         title = stringResource(R.string.rule_title), onBack = onBack, backEnabled = !sending,
         actions = {
-            Text(ruleCounting(selection), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (sending) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                    Text(stringResource(R.string.rule_sending), style = MaterialTheme.typography.bodyMedium)
-                }
-            }
-            if (problem != null) {
-                Notice(stringResource(if (problem == CorrectionProblem.UNREACHABLE) R.string.correction_unreachable else R.string.rule_refused), Tone.NEGATIVE)
+            when {
+                // While the rule is on its way, that is the one thing the screen has to say.
+                sending -> ProgressLine(R.string.rule_sending)
+                problem != null -> Notice(
+                    stringResource(
+                        when (problem) {
+                            CorrectionProblem.UNREACHABLE -> R.string.correction_unreachable
+                            CorrectionProblem.STALE -> R.string.rule_stale
+                            // The server accepts every rule the app offers, so the words never blame the rule.
+                            else -> R.string.rule_refused
+                        },
+                    ),
+                    // After STALE the app has read the list again: the user only saves once more.
+                    if (problem == CorrectionProblem.STALE) Tone.CAUTION else Tone.NEGATIVE,
+                    Modifier.announced(),
+                )
+                // Until Save the server counts with the rule it has, so a choice not saved yet is said as a condition.
+                else -> Notice(if (selection == current) ruleCounting(selection) else ruleCountingIfSaved(selection), Tone.NEUTRAL)
             }
             PrimaryButton(stringResource(R.string.action_save_rule), { onSave(selection) }, enabled = selection != current && !sending)
         },
@@ -122,17 +132,19 @@ fun MatchRulesScreen(
                 sets to stringResource(if (sets == MatchRules.FIVB.setsToWin) R.string.rule_sets_option_fivb else R.string.rule_sets_option, sets)
             },
             selected = setsToWin, enabled = !sending,
-        ) { setsToWin = it; onSelectionChanged() }
+            // The rule says when a team has won the match. The server still counts the sets played after that.
+            note = stringResource(R.string.rule_no_match_end),
+        ) { setsToWin = it; onSelectionChanged(MatchRules(it, setTarget, decidingSetTarget)) }
         RuleGroup(
             stringResource(R.string.rule_points_question),
             MatchRules.TARGETS.map { points -> points to pointsLabel(points, fivb = points == MatchRules.FIVB.setTarget) },
             selected = setTarget, enabled = !sending,
-        ) { setTarget = it; onSelectionChanged() }
+        ) { setTarget = it; onSelectionChanged(MatchRules(setsToWin, it, decidingSetTarget)) }
         RuleGroup(
             stringResource(R.string.rule_deciding_question, selection.decidingSetNumber),
             MatchRules.TARGETS.map { points -> points to pointsLabel(points, fivb = points == MatchRules.FIVB.decidingSetTarget) },
             selected = decidingSetTarget, enabled = !sending,
-        ) { decidingSetTarget = it; onSelectionChanged() }
+        ) { decidingSetTarget = it; onSelectionChanged(MatchRules(setsToWin, setTarget, it)) }
         Text(
             stringResource(if (onList) R.string.rule_keeps_answers else R.string.rule_later),
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -146,7 +158,14 @@ private fun pointsLabel(points: Int, fivb: Boolean): String =
 
 /** One question of the rule: a heading over a card of radio rows, each row the size of a finger. */
 @Composable
-private fun RuleGroup(question: String, options: List<Pair<Int, String>>, selected: Int, enabled: Boolean, onSelect: (Int) -> Unit) {
+private fun RuleGroup(
+    question: String,
+    options: List<Pair<Int, String>>,
+    selected: Int,
+    enabled: Boolean,
+    note: String? = null,
+    onSelect: (Int) -> Unit,
+) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         SectionTitle(question)
         VsCard(padding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)) {
@@ -154,7 +173,9 @@ private fun RuleGroup(question: String, options: List<Pair<Int, String>>, select
                 options.forEach { (value, label) ->
                     Row(
                         Modifier.fillMaxWidth().heightIn(min = Dimens.touchTarget)
-                            .selectable(selected = value == selected, enabled = enabled, role = Role.RadioButton, onClick = { onSelect(value) }),
+                            .selectable(selected = value == selected, enabled = enabled, role = Role.RadioButton, onClick = { onSelect(value) })
+                            // Two groups offer "21 sayı". A screen reader names the question with it, so the user knows which one.
+                            .semantics { contentDescription = "$question $label" },
                         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         RadioButton(selected = value == selected, onClick = null, enabled = enabled)
@@ -163,5 +184,6 @@ private fun RuleGroup(question: String, options: List<Pair<Int, String>>, select
                 }
             }
         }
+        note?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
     }
 }

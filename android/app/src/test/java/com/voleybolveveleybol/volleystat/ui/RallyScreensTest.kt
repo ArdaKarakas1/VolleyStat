@@ -9,7 +9,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -76,6 +80,8 @@ class RallyScreensTest {
     private val context get() = ApplicationProvider.getApplicationContext<Context>()
     private fun text(id: Int, vararg arguments: Any) = context.getString(id, *arguments)
     private fun shown(text: String) = compose.onAllNodesWithText(text, substring = true).fetchSemanticsNodes().isNotEmpty()
+    /** A line a screen reader says when it appears. */
+    private val announced = SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite)
     private fun show(content: @Composable () -> Unit) = compose.setContent { VolleyStatTheme(dark = false) { content() } }
 
     private val video = LocalVideo("/data/kayit.mp4", VideoSource.CAMERA, "kayit.mp4", 1_000, "video/mp4", 60_000, 1920, 1080, null)
@@ -274,13 +280,14 @@ class RallyScreensTest {
 
     @Test fun aRefusedConfirmationNamesItsCauseOnTheList() {
         list(state(decided, problem = CorrectionProblem.STALE))
-        compose.onNodeWithText(text(R.string.correction_stale)).assertIsDisplayed()
+        // A screen reader says the refusal when it appears.
+        compose.onNodeWithText(text(R.string.correction_stale)).assertIsDisplayed().assert(announced)
     }
 
     @Test fun theListStaysOpenUntilTheAnswerOfTheConfirmationIsThere() {
         var correcting by mutableStateOf(true)
         val leaves = leavesBy { RalliesScreen(match, state(decided, correcting = correcting), onOpenRally = {}, onOpenGap = {}, onConfirm = {}, onOpenReview = {}, onRetry = {}, onBack = {}) }
-        compose.onNodeWithText(text(R.string.rallies_confirm_sending)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.rallies_confirm_sending)).assertIsDisplayed().assert(announced)
         compose.onNodeWithContentDescription(text(R.string.action_back)).assertIsNotEnabled()
         pressBack()
         assertEquals("a refusal of the confirmation would be shown to nobody", 0, leaves())
@@ -643,7 +650,7 @@ class RallyScreensTest {
         val leaves = leavesBy { RallyEditorScreen(rallyTarget(four, "r2")!!, state(four, correcting = true), control.video, { _, _ -> }, {}, {}, { _, _ -> }, onBack = {}) }
         // The user sees that something is on its way, and can not walk away from how it ends: a refusal
         // would otherwise be shown to nobody.
-        compose.onNodeWithText(text(R.string.correction_sending)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.correction_sending)).assertIsDisplayed().assert(announced)
         compose.onNodeWithContentDescription(text(R.string.action_back)).assertIsNotEnabled()
         pressBack()
         assertEquals(0, leaves())

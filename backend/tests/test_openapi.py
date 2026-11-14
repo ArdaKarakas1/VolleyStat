@@ -56,3 +56,11 @@ def test_the_contract_lists_the_rule_values_the_server_accepts(storage):
     assert {name: field["enum"] for name, field in schema["properties"].items()} == {
         "setsToWin": [2, 3], "setTarget": [25, 21, 15], "decidingSetTarget": [25, 21, 15]}
     assert schema["additionalProperties"] is False
+
+
+def test_a_rule_change_names_the_rule_its_user_saw(storage):
+    schemas = create_app(storage, analyzer="none").openapi()["components"]["schemas"]
+    change = schemas["MatchRulesChange"]
+    assert set(change["required"]) == {"setsToWin", "setTarget", "decidingSetTarget", "expectedRules"}
+    assert change["properties"]["expectedRules"] == {"$ref": "#/components/schemas/MatchRulesInput"}
+    assert change["additionalProperties"] is False

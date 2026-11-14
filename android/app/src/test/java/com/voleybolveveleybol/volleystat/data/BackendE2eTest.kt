@@ -269,7 +269,11 @@ class BackendE2eTest {
         }
     }
 
-    @Test fun theMatchRuleTravelsWithTheMatchAndAChangeIsCountedOnTheRealServer() {
+    /**
+     * The demo job of the CI clip has five rallies, and no set reaches even 15 points, so this test
+     * sees the rule named and the list moved on, not sets counted with it. The server tests count them.
+     */
+    @Test fun theMatchRuleTravelsWithTheMatchAndTheRealServerNamesEveryChange() {
         assumeTrue(url != null && clip != null && clip.isFile)
         val api = ApiClient(url!!)
         val chosen = MatchRules(2, 21, 15)
@@ -277,28 +281,34 @@ class BackendE2eTest {
         val matchId = session.serverMatchId!!
         try {
             val job = demoJob(api, check!!.videoId)
-            // The rule went with the request that created the match, and the server counts with it.
+            // The rule went with the request that created the match, and the list and the report name it.
             assertEquals(chosen, api.rallies(job.id).rules)
             assertEquals(chosen, api.report(matchId)!!.rules)
 
             val before = api.rallies(job.id).version
-            api.putMatchRules(matchId, MatchRules.FIVB)
+            api.putMatchRules(matchId, MatchRules.FIVB, seen = chosen)
             val after = api.rallies(job.id)
             assertEquals(MatchRules.FIVB, after.rules)
             assertEquals("a new rule moves the list on", before + 1, after.version)
             assertEquals(MatchRules.FIVB, api.report(matchId)!!.rules)
-            // The same rule again changes nothing, so a repeat after a lost answer is harmless.
-            api.putMatchRules(matchId, MatchRules.FIVB)
+            // The same rule again changes nothing, so a repeat after a lost answer is harmless,
+            // even though the repeat names the rule the user saw before the first attempt.
+            api.putMatchRules(matchId, MatchRules.FIVB, seen = chosen)
             assertEquals(after.version, api.rallies(job.id).version)
 
             // Every rule the app offers is one the server accepts, and the list names it back.
+            var seen = MatchRules.FIVB
             for (sets in MatchRules.SETS_TO_WIN) for (target in MatchRules.TARGETS) for (deciding in MatchRules.TARGETS) {
                 val rules = MatchRules(sets, target, deciding)
-                api.putMatchRules(matchId, rules)
+                api.putMatchRules(matchId, rules, seen)
                 assertEquals(rules, api.rallies(job.id).rules)
+                seen = rules
             }
-            refused("VALIDATION_ERROR") { api.putMatchRules(matchId, MatchRules(4, 25, 15)) }
-            refused("MATCH_NOT_FOUND") { api.putMatchRules("no-such-match", MatchRules.FIVB) }
+            // A request that names a rule the match no longer has came before a later change and must not undo it.
+            refused("MATCH_RULES_STALE") { api.putMatchRules(matchId, MatchRules.FIVB, seen = chosen) }
+            assertEquals(seen, api.rallies(job.id).rules)
+            refused("VALIDATION_ERROR") { api.putMatchRules(matchId, MatchRules(4, 25, 15), seen) }
+            refused("MATCH_NOT_FOUND") { api.putMatchRules("no-such-match", MatchRules.FIVB, MatchRules.FIVB) }
         } finally {
             api.deleteMatch(matchId)
         }

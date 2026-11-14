@@ -61,6 +61,13 @@ class MatchRulesInput(BaseModel):
         return report.MatchRules(self.setsToWin, self.setTarget, self.decidingSetTarget)
 
 
+class MatchRulesChange(MatchRulesInput):
+    """A rule change. It also names the rule its user saw, so that a request the phone gave up on can
+    not undo a change the user made after it."""
+
+    expectedRules: MatchRulesInput
+
+
 class MatchInput(BaseModel):
     # An unknown key is refused: a rule written beside "rules" or under another name would otherwise be
     # dropped in silence, and the idempotent PUT would then keep the FIVB rule for good.
@@ -271,21 +278,28 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
             return match_payload(match)
 
     @app.put("/v1/matches/{match_id}/rules")
-    def put_match_rules(match_id: str, payload: MatchRulesInput):
+    def put_match_rules(match_id: str, payload: MatchRulesChange):
         """Set the rule the server counts the sets of this match with.
 
         A rule that differs from the stored one moves the rally list of every analysis of the match
         that has rallies one version on, in the same transaction. The user confirmed those lists
         while looking at set scores of the old rule, so each confirmation lapses, and a confirmation
         or a correction still on its way with the old version is refused as stale. Answers, cards and
-        corrections stay as they are. The rule the match already has changes nothing.
+        corrections stay as they are.
+
+        The rule the match already has changes nothing, so a repeated request lands once. Any other
+        request must name the rule the match has now (expectedRules). A request whose user saw another
+        rule was sent before a later change, and it is refused as stale instead of undoing that change.
         """
         with connect(write=True) as db:
             match = db.execute("SELECT * FROM matches WHERE id=?", (match_id,)).fetchone()
             if not match:
                 fail("MATCH_NOT_FOUND", "Match does not exist", 404)
-            wanted = payload.rules()
-            if report.MatchRules.of(match) != wanted:
+            stored, wanted = report.MatchRules.of(match), payload.rules()
+            if stored != wanted:
+                if stored != payload.expectedRules.rules():
+                    fail("MATCH_RULES_STALE", "The rule of the match changed since it was read", 409,
+                         currentRules=stored.payload())
                 db.execute("UPDATE matches SET sets_to_win=?, set_target=?, deciding_set_target=? WHERE id=?",
                            (wanted.sets_to_win, wanted.set_target, wanted.deciding_set_target, match_id))
                 db.execute(
