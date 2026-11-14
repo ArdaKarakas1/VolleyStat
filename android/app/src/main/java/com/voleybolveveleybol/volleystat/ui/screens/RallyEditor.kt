@@ -5,6 +5,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -23,7 +24,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -40,6 +40,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -54,6 +55,7 @@ import com.voleybolveveleybol.volleystat.ui.components.Notice
 import com.voleybolveveleybol.volleystat.ui.components.PrimaryButton
 import com.voleybolveveleybol.volleystat.ui.components.SecondaryButton
 import com.voleybolveveleybol.volleystat.ui.components.Tone
+import com.voleybolveveleybol.volleystat.ui.formatClock
 import com.voleybolveveleybol.volleystat.ui.formatClockTenths
 import com.voleybolveveleybol.volleystat.ui.theme.Dimens
 import com.voleybolveveleybol.volleystat.ui.theme.LocalVsColors
@@ -111,6 +113,8 @@ fun RallyEditorScreen(
     onMerge: () -> Unit,
     onAdd: (startMs: Long, endMs: Long) -> Unit,
     onBack: () -> Unit,
+    /** Opens the winner question of this rally. Null when the editor was opened from that question. */
+    onChooseWinner: (() -> Unit)? = null,
 ) {
     val control = video.control
     val window = target.windowStartMs..target.windowEndMs
@@ -150,12 +154,6 @@ fun RallyEditorScreen(
                         enabled = usable && position > rally.startMs && position < rally.endMs, modifier = Modifier.weight(1f).fillMaxHeight(),
                     )
                 }
-                if ((target as EditTarget.OfRally).hasPrevious) {
-                    // Merging needs no position, so it works without a picture too.
-                    TextButton(onClick = { merging = true }, enabled = !analysis.correcting, modifier = Modifier.fillMaxWidth().heightIn(min = Dimens.touchTarget)) {
-                        Text(stringResource(R.string.action_merge_previous), style = MaterialTheme.typography.labelLarge)
-                    }
-                }
             } else {
                 // The two marks keep their places. The one the user needs next is the filled button.
                 val start = stringResource(R.string.action_rally_started)
@@ -183,85 +181,102 @@ fun RallyEditorScreen(
                 video.picture()
             }
         }
-        Text(
-            if (rally != null) stringResource(R.string.editor_rally_now, rally.sequence, formatClockTenths(rally.startMs), formatClockTenths(rally.endMs))
-            else stringResource(R.string.editor_gap_now, formatClockTenths(window.first), formatClockTenths(window.last)),
-            style = MaterialTheme.typography.titleSmall,
-        )
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(stringResource(R.string.editor_position, formatClockTenths(position)), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-            FilterChip(selected = fast, onClick = { fast = !fast; control.speed(fast) }, label = { Text(stringResource(R.string.editor_fast)) })
-        }
-
-        val seekLabel = stringResource(R.string.editor_seek)
-        val spokenPosition = formatClockTenths(position)
-        val trackColor = MaterialTheme.colorScheme.surfaceVariant
-        val bandColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
-        // The bar is the window. The band on it is the rally as the list holds it, or the rally that is being marked.
-        val band = when {
-            rally != null -> rally.startMs to rally.endMs
-            markedStart != null -> markedStart to maxOf(position, markedStart)
-            else -> null
-        }
-        Slider(
-            value = (position - window.first).toFloat(),
-            onValueChange = { value ->
-                val at = window.first + value.toLong()
-                if (scrub == null) control.pause()
-                scrub = at
-                control.seekTo(at, exact = false)
-            },
-            onValueChangeFinished = {
-                scrub?.let { control.seekTo(it) }
-                scrub = null
-            },
-            valueRange = 0f..(window.last - window.first).toFloat(),
-            enabled = !control.failed,
-            modifier = Modifier.fillMaxWidth().semantics { contentDescription = seekLabel; stateDescription = spokenPosition },
-            track = {
-                Canvas(Modifier.fillMaxWidth().height(10.dp)) {
-                    val round = CornerRadius(size.height / 2)
-                    drawRoundRect(trackColor, cornerRadius = round)
-                    if (band != null) {
-                        val scale = size.width / (window.last - window.first)
-                        val left = (band.first - window.first) * scale
-                        drawRoundRect(bandColor, topLeft = Offset(left, 0f), size = Size(((band.second - band.first) * scale).coerceAtLeast(2.dp.toPx()), size.height), cornerRadius = round)
-                    }
+        // One block with small gaps: on a small phone the bar and the steps have to stay on screen with the picture.
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        if (rally != null) stringResource(R.string.editor_rally_now, rally.sequence, formatClockTenths(rally.startMs), formatClockTenths(rally.endMs))
+                        else stringResource(R.string.editor_gap_now, formatClockTenths(window.first), formatClockTenths(window.last)),
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    Text(stringResource(R.string.editor_position, formatClockTenths(position)), style = MaterialTheme.typography.bodyMedium)
                 }
-            },
-        )
+                FilterChip(selected = fast, onClick = { fast = !fast; control.speed(fast) }, label = { Text(stringResource(R.string.editor_fast)) })
+            }
 
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            StepButton(stringResource(R.string.editor_back_1), enabled = !control.failed && position > window.first) { stand(position - 1_000) }
-            StepButton(stringResource(R.string.editor_back_02), enabled = !control.failed && position > window.first) { stand(position - 200) }
-            val scheme = MaterialTheme.colorScheme
-            Surface(
-                onClick = {
-                    if (control.playing) {
-                        control.pause()
-                    } else {
-                        // At the end of the window there is nothing left to play, so playback starts over.
-                        if (position >= window.last) control.seekTo(rally?.startMs ?: window.first)
-                        control.play()
+            val seekLabel = stringResource(R.string.editor_seek)
+            val spokenPosition = formatClockTenths(position)
+            val trackColor = MaterialTheme.colorScheme.outlineVariant
+            val bandColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
+            // The bar is the window. The band on it is the rally as the list holds it, or the rally that is being marked.
+            val band = when {
+                rally != null -> rally.startMs to rally.endMs
+                markedStart != null -> markedStart to maxOf(position, markedStart)
+                else -> null
+            }
+            Slider(
+                value = (position - window.first).toFloat(),
+                onValueChange = { value ->
+                    val at = window.first + value.toLong()
+                    if (scrub == null) control.pause()
+                    scrub = at
+                    control.seekTo(at, exact = false)
+                },
+                onValueChangeFinished = {
+                    scrub?.let { control.seekTo(it) }
+                    scrub = null
+                },
+                valueRange = 0f..(window.last - window.first).toFloat(),
+                enabled = !control.failed,
+                modifier = Modifier.fillMaxWidth().semantics { contentDescription = seekLabel; stateDescription = spokenPosition },
+                track = {
+                    Canvas(Modifier.fillMaxWidth().height(10.dp)) {
+                        val round = CornerRadius(size.height / 2)
+                        drawRoundRect(trackColor, cornerRadius = round)
+                        if (band != null) {
+                            val scale = size.width / (window.last - window.first)
+                            val left = (band.first - window.first) * scale
+                            drawRoundRect(bandColor, topLeft = Offset(left, 0f), size = Size(((band.second - band.first) * scale).coerceAtLeast(2.dp.toPx()), size.height), cornerRadius = round)
+                        }
                     }
                 },
-                enabled = !control.failed, shape = MaterialTheme.shapes.small, color = scheme.primary, contentColor = scheme.onPrimary,
-                modifier = Modifier.weight(1f).height(Dimens.touchTarget),
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        painterResource(if (control.playing) R.drawable.ic_pause else R.drawable.ic_play_arrow),
-                        contentDescription = stringResource(if (control.playing) R.string.editor_pause else R.string.editor_play),
-                    )
-                }
+            )
+
+            // Where the bar starts and ends. A screen reader gets the position from the bar itself.
+            Row(Modifier.fillMaxWidth().clearAndSetSemantics {}, horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(formatClock(window.first), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(formatClock(window.last), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            StepButton(stringResource(R.string.editor_forward_02), enabled = !control.failed && position < window.last) { stand(position + 200) }
-            StepButton(stringResource(R.string.editor_forward_1), enabled = !control.failed && position < window.last) { stand(position + 1_000) }
+
+            Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                StepButton(stringResource(R.string.editor_back_1), enabled = !control.failed && position > window.first) { stand(position - 1_000) }
+                StepButton(stringResource(R.string.editor_back_02), enabled = !control.failed && position > window.first) { stand(position - 200) }
+                val scheme = MaterialTheme.colorScheme
+                Surface(
+                    onClick = {
+                        if (control.playing) {
+                            control.pause()
+                        } else {
+                            // At the end of the window there is nothing left to play, so playback starts over.
+                            if (position >= window.last) control.seekTo(rally?.startMs ?: window.first)
+                            control.play()
+                        }
+                    },
+                    enabled = !control.failed, shape = MaterialTheme.shapes.small, color = scheme.primary, contentColor = scheme.onPrimary,
+                    modifier = Modifier.weight(1f).fillMaxHeight().heightIn(min = Dimens.touchTarget),
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            painterResource(if (control.playing) R.drawable.ic_pause else R.drawable.ic_play_arrow),
+                            contentDescription = stringResource(if (control.playing) R.string.editor_pause else R.string.editor_play),
+                        )
+                    }
+                }
+                StepButton(stringResource(R.string.editor_forward_02), enabled = !control.failed && position < window.last) { stand(position + 200) }
+                StepButton(stringResource(R.string.editor_forward_1), enabled = !control.failed && position < window.last) { stand(position + 1_000) }
+            }
         }
 
         CorrectionProblemNotice(analysis)
         if (rally != null) {
             Text(stringResource(R.string.editor_end_note), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if ((target as EditTarget.OfRally).hasPrevious) {
+                // Merging names no moment of the video, so it works without a picture too.
+                SecondaryButton(stringResource(R.string.action_merge_previous), onClick = { merging = true }, enabled = !analysis.correcting)
+            }
+            // The answers of a rally are changed on its question, "not a rally" included. From the list this is the way there.
+            if (onChooseWinner != null) SecondaryButton(stringResource(R.string.action_choose_winner), onChooseWinner, enabled = !analysis.correcting)
         } else {
             if (markedStart != null) Text(stringResource(R.string.editor_marked_start, formatClockTenths(markedStart)), style = MaterialTheme.typography.titleSmall)
             Text(stringResource(R.string.editor_gap_help), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -286,8 +301,11 @@ private fun RowScope.StepButton(label: String, enabled: Boolean, onClick: () -> 
         onClick = onClick, enabled = enabled, shape = MaterialTheme.shapes.small, color = scheme.surface,
         contentColor = if (enabled) scheme.primary else scheme.onSurface.copy(alpha = 0.38f),
         border = BorderStroke(1.dp, if (enabled) scheme.outline else LocalVsColors.current.divider),
-        modifier = Modifier.weight(1f).height(Dimens.touchTarget),
+        modifier = Modifier.weight(1f).fillMaxHeight().heightIn(min = Dimens.touchTarget),
     ) {
-        Box(contentAlignment = Alignment.Center) { Text(label, style = MaterialTheme.typography.labelMedium, maxLines = 1, softWrap = false) }
+        // At a large text size the unit moves to a second line instead of being cut off.
+        Box(Modifier.padding(horizontal = 4.dp), contentAlignment = Alignment.Center) {
+            Text(label, style = MaterialTheme.typography.labelMedium, textAlign = TextAlign.Center, maxLines = 2)
+        }
     }
 }

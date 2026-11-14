@@ -139,3 +139,34 @@ Kararlar:
 - Uygulama silinemeyen maç için nedeni ayırır: Sunucu yanıt vermedi, sunucu videoyu hâlâ denetliyor ya da sunucu isteği reddetti.
 
 Açık kalan sınır: Sunucu silinen video dosyasının disk bloklarının üzerine yazmaz. Sunucuda süreye bağlı otomatik silme de yok. Bu iki konu üretim altyapısı kararını bekler.
+
+## ADR-0114: Kullanıcı ralli listesini düzeltir ve onaylar
+
+**Tarih:** 14 Kasım 2026 · **Durum:** Kabul edildi
+
+Ürün kuralı "Kullanıcı elle yalnız belirsiz olayı doğrular" diyordu. Bu kural rapora bir tavan koyuyordu: Analizörün kaçırdığı rallinin kartı olmadığı için kullanıcı o sayıyı hiçbir yolla ekleyemiyordu ve rapordaki her sayı alt sınır kalıyordu. Arda 14 Kasım 2026'da bu kurala tek bir istisna tanıdı: Kullanıcı kaçan ralliyi ekler, birleşmiş ralliyi böler, iki parçayı birleştirir ve bir rallinin başını ya da sonunu taşır. Amaç raporun kesin skor verebilmesidir.
+
+Kararlar:
+
+- Sunucu dört düzeltme işlemi sunar: ekleme, taşıma, bölme ve öncekiyle birleştirme. Sunucu silme ucu sunmaz. Kullanıcı ralli olmayan bir aralığı o rallinin sorusunda "Ralli değil" yanıtıyla sayımdan çıkarır.
+- Ralli listesi bir sürüm numarası taşır. Her düzeltme ve her kazanan kararı sürümü artırır. Her düzeltme isteği kullanıcının baktığı sürümü yazar ve sunucu eski sürüme gelen isteği reddeder. Düzeltmeler bu yüzden yineleme anahtarı taşımaz: Sunucu yanıtı kaybolan bir düzeltmeyi ikinci kez uygulamaz. Uygulama yanıt gelmeyince listeyi yeniden okur ve sürümün ilerleyip ilerlemediğine bakar.
+- Bir kazanan kararı listeyi ilerletir. Uygulama o karardan önce okuduğu listeyi göstermez ve o liste üzerinde düzeltme göndermez. Ekran önce listeyi yeniden okur.
+- Bir karar rallinin sonuna aittir, çünkü kullanıcı kazananı klibin sonunda gördüğüne göre seçer. Baş taşınınca yanıtlar kalır. Son taşınınca sunucu kazanan sorusunu yeniden açar. Bölmede sonraki parça rallinin kimliğini ve yanıtlarını korur. Birleştirmede sonraki ralli kalır ve sunucu önceki rallinin yanıtlarını denetim kaydına `REMOVED` olarak yazar.
+- Aynı işin rallileri zamanda çakışmaz. "Ralli değil" yanıtı alan ralli de yerini korur, çünkü tek bir yanıt onu sayıma geri getirir.
+- Kullanıcı listeyi tek bir soruyla onaylar: "Bu skorlar maçta oynanan skorlarla aynı mı?" Yalnız "Evet, Aynı" yanıtı onaylar. Sunucu listenin eksiksiz olduğunu doğrulayamaz ve onayı kullanıcının beyanı olarak kaydeder. Onay liste sürümüne bağlıdır ve sonraki her düzeltme ya da kazanan kararı onayı düşürür.
+- Onay ekranındaki set skorları liste yanıtının içinden gelir (`sets`). Kullanıcının gördüğü skor böylece onayladığı sürümün skorudur. Telefon skor hesaplamaz.
+- Rapor kullanıcı listeyi onaylayana kadar her sayıyı alt sınır olarak verir. Bu kural analizörün türüne bakmaz, çünkü ölçümü kayıtlı bir model de ralli kaçırır.
+- Sunucu deneme analizörünün listesini onaylamaz. O aralıklar uydurmadır ve kesin bir skor üretemez.
+- Düzenleyici her zaman güncel listeden hesaplanan bir pencerede çalışır: Rallinin çevresindeki boş süre (her yana en çok 30 saniye) ya da iki ralli arasındaki boşluk. Kullanıcı bu pencerede başka bir ralliyle çakışan bir konuma ulaşamaz. Sunucu çakışmayı yine de kendisi denetler.
+- Bir düzeltme sunucuya ulaşıp uygulanınca düzenleyici kapanır ve kullanıcı geldiği ekrana döner. Doğrulama ekranı düzeltilen rallinin sorusunda durur.
+- Düzenleyici videoyu sessiz oynatır. Uygulama ses kaydetmez ve galeriden gelen videodaki konuşmalar kişisel veridir.
+- Sunucu düzeltmeleri eğitim verisi olarak kullanmaz. Düzeltme kayıtları (`rally_corrections`) yalnız denetim içindir.
+
+Ekip şunları bilerek yapmadı: geri alma ucu, onayı geri çeken uç, en kısa ralli süresi, boşlukları sıralama ya da öne çıkarma, kullanıcının elle skor yazması, kullanıcının set sonunu işaretlemesi ve düzeltme süresinin ölçümü.
+
+Açık kalan sınırlar:
+
+- Set kuralı sabittir: Set 25 sayıda, beşinci set 15 sayıda ve iki farkla biter. Üç setlik maçın 15 sayılık karar setinde set skoru doğru çıkar, kazanılan set sayısı yanlış çıkar. 21 sayılık sette set sınırı da kayar ve set skorları yanlış çıkar. Kullanıcı o maçta skor denetimine "Evet" diyemez ve rapor alt sınır olarak kalır. Çözüm adayı kullanıcının her setin son rallisini işaretlemesidir. Bu yeni bir elle giriştir ve Arda'nın kararını bekler.
+- Kimse düzeltmenin gerçek bir maçta ne kadar sürdüğünü ölçmedi. Kaba tahmin şudur: 175 kart yaklaşık 10 dakika ister ve kaçan her ralli yaklaşık 90 saniye ister. Bu tahminle 15 dakikalık hedef ancak maç başına en çok üç kaçan ralliyle tutar. Analizörün kaç ralli kaçırdığını B1 deneyi ölçecek.
+- Kimse düzenleyiciyi gerçek telefonda denemedi. JVM testlerinde oynatıcının yerinde bir vekil durur. Gerçek oynatıcıyı yalnız CI emülatöründeki cihaz testi dener.
+- Testler liste onayını ekrandan yalnız betikli bir sunucuya karşı dener, çünkü gerçek sunucu deneme analizörünün listesini onaylamaz. Sunucunun onay kurallarını sunucu testleri dener.

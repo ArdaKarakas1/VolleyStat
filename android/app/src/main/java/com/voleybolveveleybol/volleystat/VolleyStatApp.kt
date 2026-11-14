@@ -240,6 +240,9 @@ fun VolleyStatApp(
                 val startMs = remember { rally?.startMs ?: target.windowStartMs }
                 val window by rememberUpdatedState(target)
                 val done = { leave(route) }
+                // Opened from a review card, the question is the screen below. Opened from the list, it takes the editor's place.
+                val below = remember { nav.previousBackStackEntry?.destination?.route }
+                val fromReview = below == Routes.REVIEW || below == Routes.REVIEW_AT
                 RallyEditorScreen(
                     target, shown, editorVideo(url, startMs) { window.windowEndMs },
                     onMove = { start, end -> if (rally != null) viewModel.moveRally(rally.id, start, end, done) },
@@ -247,6 +250,9 @@ fun VolleyStatApp(
                     onMerge = { if (rally != null) viewModel.mergeWithPrevious(rally.id, done) },
                     onAdd = { start, end -> viewModel.addRally(start, end, done) },
                     onBack = { nav.popBackStack() },
+                    onChooseWinner = if (rally == null || fromReview) null else ({
+                        nav.navigate(Routes.reviewAt(match.localId, rally.id)) { popUpTo(route) { inclusive = true }; launchSingleTop = true }
+                    }),
                 )
             }
         }

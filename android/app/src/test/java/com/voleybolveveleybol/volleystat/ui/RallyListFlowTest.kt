@@ -231,6 +231,45 @@ class RallyListFlowTest {
         assertTrue(app.onAllNodesWithText(text(R.string.report_may_miss)).fetchSemanticsNodes().isEmpty())
     }
 
+    @Test fun theAnswerOfARallyIsReachedFromTheListThroughItsEditor() {
+        openTheRallyList()
+
+        // Rally 2 went to the away side. The user wants to look at that answer again.
+        app.onNodeWithText("00:15 · 9 sn").performClick()
+        waitFor(text(R.string.action_choose_winner))
+        tap(R.string.action_choose_winner)
+        waitFor(text(R.string.review_position, 2, 3))
+        // The card is answered and shows its answer. Opened from there, the editor offers no way back to the question it came from.
+        app.onNodeWithText(text(R.string.review_your_answer)).assertIsDisplayed()
+        tap(R.string.review_fix_rally)
+        waitFor(text(R.string.action_end_here))
+        assertTrue(app.onAllNodesWithText(text(R.string.action_choose_winner)).fetchSemanticsNodes().isEmpty())
+
+        // The question took the place of the first editor: two steps back lead to the list, not to an editor.
+        back()
+        waitFor(text(R.string.review_position, 2, 3))
+        back()
+        waitFor(text(R.string.rallies_count, 3))
+    }
+
+    @Test fun theReportOpenedFromAReviewAboveTheListIsTheOneReportThereIs() {
+        // Rally 2 has no answer yet. The way there leads over the report and the list.
+        winners = listOf("HOME", null, "HOME")
+        openTheRallyList()
+        tap(R.string.action_go_review)
+        waitFor(text(R.string.review_position, 2, 3))
+        app.onNodeWithText(HOME_TEAM).performClick()
+        waitFor(text(R.string.review_empty_title))
+        val readsBefore = requests.count { it == "GET /matches/server-1/report" }
+        tap(R.string.action_open_report)
+
+        // The report was below all along. The app goes back to it and reads it again, and one step back leaves the match.
+        waitFor(text(R.string.report_review_video))
+        assertEquals(readsBefore + 1, requests.count { it == "GET /matches/server-1/report" })
+        back()
+        app.onNodeWithText(text(R.string.home_new_match_body)).assertIsDisplayed()
+    }
+
     @Test fun aRallyThatWaitsIsOpenedFromTheListAndTheEditorWorksOnTheListAsItIsNow() {
         // Rally 2 was answered "not sure", rally 3 has no answer yet.
         winners = listOf("HOME", null, null)

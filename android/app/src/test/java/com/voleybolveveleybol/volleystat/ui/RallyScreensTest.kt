@@ -13,6 +13,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
@@ -226,12 +227,12 @@ class RallyScreensTest {
         var merges = 0
     }
 
-    private fun editor(target: EditTarget, control: FakeControl, analysis: AnalysisUi = state(four)): Marks {
+    private fun editor(target: EditTarget, control: FakeControl, analysis: AnalysisUi = state(four), onChooseWinner: (() -> Unit)? = null): Marks {
         val marks = Marks()
         show {
             RallyEditorScreen(
                 target, analysis, control.video, onMove = { start, end -> marks.moves += start to end }, onSplit = { marks.splits += it },
-                onMerge = { marks.merges++ }, onAdd = { start, end -> marks.adds += start to end }, onBack = {},
+                onMerge = { marks.merges++ }, onAdd = { start, end -> marks.adds += start to end }, onBack = {}, onChooseWinner = onChooseWinner,
             )
         }
         return marks
@@ -346,6 +347,23 @@ class RallyScreensTest {
         assertFalse(shown(text(R.string.merge_title)))
     }
 
+    @Test fun openedFromTheListTheEditorLeadsToTheQuestionOfItsRally() {
+        var opened = 0
+        editor(rallyTarget(four, "r2")!!, FakeControl(15_000), onChooseWinner = { opened++ })
+        button(R.string.action_choose_winner).performClick()
+        assertEquals(1, opened)
+    }
+
+    @Test fun openedFromTheQuestionTheEditorOffersNoWayBackToIt() {
+        editor(rallyTarget(four, "r2")!!, FakeControl(15_000))
+        assertFalse(shown(text(R.string.action_choose_winner)))
+    }
+
+    @Test fun aPauseHasNoWinnerToChoose() {
+        editor(gapTarget(four, 9_000)!!, FakeControl(9_000), onChooseWinner = {})
+        assertFalse(shown(text(R.string.action_choose_winner)))
+    }
+
     @Test fun theFirstRallyHasNoneBeforeItToMergeWith() {
         editor(rallyTarget(four, "r1")!!, FakeControl(2_000))
         assertFalse(shown(text(R.string.action_merge_previous)))
@@ -388,6 +406,10 @@ class RallyScreensTest {
         control.standAt(11_000)
         button(R.string.action_rally_started).performClick()
         compose.onNodeWithText(text(R.string.editor_marked_start, "00:11,0")).assertIsDisplayed()
+        assertTrue("marking the start again does not stop the video either", control.playing)
+        // The marked start lives inside the screen, so the screenshot run can not set it up; this run keeps its picture.
+        control.standAt(12_600)
+        compose.onRoot().captureRoboImage("build/outputs/roborazzi/12_ralli_ekle_baslangic_isaretli.png")
 
         control.standAt(13_400)
         button(R.string.action_rally_ended).performClick()

@@ -63,6 +63,9 @@ Bu kalıplar görsel etkiden önce gelir.
 - **Oran, sayımıyla birlikte durur.** Uygulama bir yüzde ya da oran gösterirse payı ve paydayı aynı ekrana yazar. Kullanıcı oranı ekrandaki sayılardan yeniden hesaplayabilir. Bugünkü rapor oran göstermez, yalnız sayım gösterir (`30 / 40`).
 - **Örnek etiketi öğenin üstündedir.** Uygulamanın DEMO veriyle çizdiği sayı kartı etiketi kendi başlığında taşır. Rapor ekranında "Takım İstatistikleri" ve "Veri Güvenilirliği" kartlarının başlığı DEMO yazar ve ekranın tepesindeki bant ayrıca durur. Kullanıcı tek bir kartın ekran görüntüsünü alsa da görüntü DEMO yazar. Ekip yeni bir sayı kartını, paylaşım görselini ve tanıtım görüntüsünü aynı kuralla çizer.
 - **Sayı türünün tek tanımı vardır.** Doğrulama kartı ve rapor aynı "Sayı Türleri" penceresini açar. Kullanıcının kararı ve rapordaki sayı aynı tanıma dayanır.
+- **Liste onayı kullanıcının beyanıdır.** Uygulama ralli listesini kendisi eksiksiz ilan etmez. Kullanıcı listenin set skorlarını maçta oynanan skorlarla karşılaştırır ve yalnız "Evet, Aynı" yanıtı listeyi onaylar. "Hayır" ve "Bilmiyorum" yanıtları hiçbir sayıyı kesinleştirmez. Onay ekranı onaylanan liste sürümünün skorunu gösterir.
+- **Kullanıcının yaptığı ralli işaret taşır.** Liste satırı "Sen ekledin" yazar. Rapor kullanıcının oluşturduğu rallileri sayar ve aralıkların kaynağında kullanıcının düzeltmelerini adıyla yazar.
+- **Uygulama görünmeyen kareye işaret koydurmaz.** Video oynamıyorsa ralli düzenleyici konum isteyen bütün düğmeleri kapatır. Her işaret ekrandaki karenin anıdır.
 - **Silme, sunucu sildikten sonra görünür.** Uygulama maçı listeden yalnız sunucu maçın bütün kayıtlarını sildiğini bildirince kaldırır. Sunucu silmediyse ekran nedenini yazar: Sunucu yanıt vermedi, sunucu videoyu hâlâ denetliyor ya da sunucu isteği reddetti. Profil sekmesindeki gizlilik satırları sunucunun gerçek davranışını yazar: neyin gittiğini, kimin görebildiğini, sunucunun ne kadar sakladığını ve silmenin neyi sildiğini.
 
 ## Durumlar
@@ -75,6 +78,7 @@ Her ekran dört durumu çizer: yükleniyor, boş, hata ve dolu. Hata mesajı ney
 - Renk hiçbir bilgiyi tek başına taşımaz. Seçili yanıt çerçeve, zemin ve "Senin kararın" yazısıyla işaretlenir.
 - Ekran görüntüsü testleri her ana ekranı 411 dp ve 320 dp genişlikte, açık ve koyu temada ve 1,5 kat yazı boyutunda üretir.
 - Dar ekranda ve büyük yazıda oyuncu tablosu adı sayıların üstüne taşır. Doğrulama ekranı iki takımı yan yana koyar, böylece yanıtlar klibin yanında kalır.
+- Ralli düzenleyici 320 dp telefonda videoyu, konum çubuğunu, adım düğmelerini ve işaret düğmelerini kaydırmadan gösterir.
 - Kayıt ekranı yatay tutuş için tasarlanmıştır. Dikey tutuşta ekran kullanıcıdan telefonu çevirmesini ister.
 
 ## Uygulama simgesi

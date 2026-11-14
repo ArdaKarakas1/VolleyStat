@@ -167,6 +167,62 @@ class ScreenStatesTest {
         assertEquals(0, compose.onAllNodesWithText(text(R.string.status_demo)).fetchSemanticsNodes().size)
     }
 
+    @Test fun theReportSaysWhatWouldTakeThePlusSignsAwayAndForADemoThatNothingWill() {
+        var mock by mutableStateOf(false)
+        show { ReportScreen(match, ReportLoad.READY, report("PARTIAL").copy(mock = mock), {}, {}, {}, {}, {}) }
+        compose.onNodeWithText(text(R.string.report_may_miss)).assertIsDisplayed()
+        assertEquals(false, shown(text(R.string.report_may_miss_demo)))
+        // Invented intervals can not be confirmed, so a demo report must not promise that confirming helps.
+        mock = true
+        compose.waitForIdle()
+        compose.onNodeWithText(text(R.string.report_may_miss_demo)).assertIsDisplayed()
+        assertEquals(false, shown(text(R.string.report_may_miss)))
+    }
+
+    @Test fun aConfirmedListIsNamedOnTheReportAndTheWarningAboutMissingRalliesIsGone() {
+        show { ReportScreen(match, ReportLoad.READY, report("MEASURED").copy(listConfirmed = true), {}, {}, {}, {}, {}) }
+        compose.onNodeWithText(text(R.string.report_list_confirmed)).assertIsDisplayed()
+        assertEquals(false, shown(text(R.string.report_may_miss)))
+    }
+
+    @Test fun theReportNamesTheUsersCorrectionsAsASourceOfItsIntervalsOnlyWhenThereAreSome() {
+        var corrections by mutableStateOf(0)
+        show { ReportScreen(match, ReportLoad.READY, report("PARTIAL").copy(corrections = corrections, ralliesUserCreated = corrections), {}, {}, {}, {}, {}) }
+        compose.onNodeWithText(text(R.string.report_source, "motion-baseline", "BASELINE")).performScrollTo().assertIsDisplayed()
+        corrections = 2
+        compose.waitForIdle()
+        compose.onNodeWithText(text(R.string.report_source_corrected, "motion-baseline", "BASELINE")).performScrollTo().assertIsDisplayed()
+        assertEquals(false, shown(text(R.string.report_source, "motion-baseline", "BASELINE")))
+        compose.onNodeWithText(text(R.string.report_rallies_user)).performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun theReportLeadsToTheRallyList() {
+        var opened = 0
+        show { ReportScreen(match, ReportLoad.READY, report("PARTIAL"), {}, {}, {}, {}, {}, onOpenRallies = { opened++ }) }
+        compose.onNodeWithText(text(R.string.rallies_title)).performScrollTo().performClick()
+        assertEquals(1, opened)
+    }
+
+    @Test fun everyReviewCardLeadsToTheEditorOfItsRallyAndTheEndOfTheReviewLeadsToTheList() {
+        val fixed = mutableListOf<String>()
+        var lists = 0
+        var cursor by mutableStateOf(0)
+        val deck = ReviewDeck(listOf(card(1, "HOME"), card(2, "AWAY")), 2, 2)
+        show {
+            ReviewScreen(
+                match, AnalysisUi("m1", JobLoad.READY, job(AnalysisSummary.COMPLETE), deck, cursor = cursor), emptyList(), {}, {}, {}, {}, {},
+                onFixRally = { fixed += it.rallyId }, onOpenRallies = { lists++ },
+            ) { ClipPlaceholder() }
+        }
+        compose.onNodeWithText(text(R.string.review_fix_rally)).performClick()
+        assertEquals("the rally of the card on screen", listOf("r1"), fixed)
+        // Past the last card every rally has an answer, and the list is where a missed rally is added.
+        cursor = 2
+        compose.waitForIdle()
+        compose.onNodeWithText(text(R.string.rallies_title)).performClick()
+        assertEquals(1, lists)
+    }
+
     @Test fun theReportOpensTheSameDefinitionsForTheNumbersItCounts() {
         show { ReportScreen(match, ReportLoad.READY, report("PARTIAL"), {}, {}, {}, {}, {}) }
         compose.onNodeWithText(text(R.string.definitions_title)).performScrollTo().performClick()

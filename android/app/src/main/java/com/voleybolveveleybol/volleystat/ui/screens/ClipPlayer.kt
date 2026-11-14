@@ -1,5 +1,6 @@
 package com.voleybolveveleybol.volleystat.ui.screens
 
+import androidx.annotation.OptIn
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -30,6 +31,7 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.ui.PlayerView
@@ -98,6 +100,8 @@ private class PlayerControl(val player: ExoPlayer) : VideoControl {
         private set
     override var failed by mutableStateOf(false)
 
+    // Seek parameters are a part of Media3 that may change between releases. The library version is pinned.
+    @OptIn(UnstableApi::class)
     override fun seekTo(positionMs: Long, exact: Boolean) {
         // A key frame can be shown at once. The exact frame has to be decoded from the key frame before it.
         player.setSeekParameters(if (exact) SeekParameters.EXACT else SeekParameters.CLOSEST_SYNC)

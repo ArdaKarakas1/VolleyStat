@@ -3,6 +3,7 @@ package com.voleybolveveleybol.volleystat
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.compose.ui.test.ComposeTimeoutException
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsDisplayed
@@ -16,6 +17,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -24,6 +26,7 @@ import com.voleybolveveleybol.volleystat.data.ApiClient
 import com.voleybolveveleybol.volleystat.data.LocalStore
 import com.voleybolveveleybol.volleystat.model.AnalysisSummary
 import com.voleybolveveleybol.volleystat.model.VideoCheck
+import com.voleybolveveleybol.volleystat.model.rallyTarget
 import com.voleybolveveleybol.volleystat.ui.formatClock
 import org.junit.Assert.assertEquals
 import org.junit.Assert.fail
@@ -40,7 +43,8 @@ private const val AWAY_TEAM = "Cihaz Misafir"
 /**
  * The whole journey on a device, against a backend on the development computer that runs the
  * demo analyzer: create a match, record a few seconds with the camera, upload, wait for the
- * server's file check and the demo job, watch the clip, answer every rally and read the report.
+ * server's file check and the demo job, watch the clip, move the end of a rally in the range
+ * editor, answer every rally and read the report.
  *
  * Skipped when the device has no camera or the backend does not answer. The demo analyzer
  * invents its rally intervals, so this proves the plumbing and nothing about analysis quality.
@@ -89,6 +93,14 @@ class DeviceFlowE2eTest {
 
     private fun waitForText(value: String, timeoutMs: Long = 30_000) =
         waitFor("Text '$value'", timeoutMs) { app.onAllNodesWithText(value).fetchSemanticsNodes().isNotEmpty() }
+
+    /** The position the range editor shows, read back from its "Konum" line. Null when no editor is on screen. */
+    private fun shownPositionMs(): Long? {
+        val label = text(R.string.editor_position, "")
+        val shown = app.onAllNodes(isRoot()).fetchSemanticsNodes().flatMap(::textsOf).firstOrNull { it.startsWith(label) } ?: return null
+        val (clock, tenths) = shown.removePrefix(label).split(",")
+        return clock.split(":").fold(0L) { seconds, part -> seconds * 60 + part.toLong() } * 1000 + tenths.toLong() * 100
+    }
 
     private fun addAndPickTeam(name: String) {
         app.onAllNodesWithText(text(R.string.match_team_pick)).onFirst().performClick()
@@ -140,6 +152,24 @@ class DeviceFlowE2eTest {
         } catch (stillPlaying: ComposeTimeoutException) {
             // No error within eight seconds of looping playback.
         }
+
+        // The range editor, on the same player as the user gets. The video runs on its own from the start
+        // of the rally, the bar moves the picture, and the mark is the moment the screen shows.
+        val list = api.rallies(job.id)
+        val rally = list.rallies.first()
+        val window = rallyTarget(list, rally.id)!!
+        app.onNodeWithText(text(R.string.review_fix_rally)).performClick()
+        waitForText(text(R.string.editor_title_rally))
+        waitFor("Playback in the range editor", 30_000) { shownPositionMs()?.let { it > rally.startMs } == true }
+        assertEquals("The player could not play the video from the server. ${evidence()}", 0, app.onAllNodesWithText(text(R.string.editor_video_failed)).fetchSemanticsNodes().size)
+        val mark = (rally.startMs + rally.endMs) / 2 + 300
+        app.onNodeWithContentDescription(text(R.string.editor_seek)).performSemanticsAction(SemanticsActions.SetProgress) { it((mark - window.windowStartMs).toFloat()) }
+        waitFor("The picture to stand at the mark") { shownPositionMs() == mark / 100 * 100 }
+        app.onNodeWithText(text(R.string.action_end_here)).performClick()
+        // One applied correction closes the editor. The rally asks for its winner on the new clip.
+        waitForText(text(R.string.review_position, 1, job.rallies))
+        assertEquals("The end of the rally is not the moment the editor showed. ${evidence()}", mark, api.rallies(job.id).rallies.first().endMs)
+
         for (position in 1..job.rallies) {
             waitForText(text(R.string.review_position, position, job.rallies))
             app.onNodeWithText(HOME_TEAM).performClick()

@@ -332,7 +332,7 @@
     <string name="rallies_title">Ralli Listesi</string>
     <string name="rallies_loading">Uygulama ralli listesini alıyor</string>
     <string name="rallies_load_failed">Uygulama ralli listesini sunucudan alamadı.</string>
-    <string name="rallies_help">Bir ralliyi düzeltmek için o ralliye dokun. Kaçan bir ralliyi eklemek için iki ralli arasındaki boşluğa dokun. Hakem bir ralliyi tekrarlattıysa o ralli için \"Ralli değil\" seç.</string>
+    <string name="rallies_help">Bir ralliyi düzeltmek için o ralliye dokun. Kaçan bir ralliyi eklemek için iki ralli arasındaki boşluğa dokun.</string>
     <string name="rallies_count">Listede %1$d ralli var.</string>
     <string name="rallies_set_header">%1$d. set</string>
     <string name="rallies_no_set">Skoru sayılmayan ralliler</string>
@@ -347,11 +347,11 @@
     <string name="rallies_confirmed">Sen bu listenin videodaki bütün rallileri içerdiğini onayladın. Listeyi ya da bir kazananı değiştirirsen onay düşer.</string>
     <string name="rallies_demo">Uygulama deneme analizinin listesini onaylatmaz. Sunucu bu aralıkları uydurdu.</string>
     <string name="rallies_not_ready">Skoru denetlemek için önce her rallinin kazananını seç. %1$d ralli kararını bekliyor.</string>
-    <string name="rallies_no_hint">Skor tutmuyorsa listede eksik ya da fazla bir ralli vardır. Skorun bozulduğu ilk sete bak. Uzun bir boşluk kaçan bir ralliyi, uzun bir ralli birleşmiş iki ralliyi gösterebilir.</string>
+    <string name="rallies_no_hint">Skor tutmuyorsa listede eksik ya da fazla bir ralli vardır. Skorun bozulduğu ilk sete bak. Uzun bir boşluk kaçan bir ralliyi, uzun bir ralli birleşmiş iki ralliyi gösterebilir. Hakem bir ralliyi tekrarlattıysa o ralliye dokun, \"Kazananı Seç\" düğmesine bas ve \"Ralli değil\" yanıtını ver.</string>
     <string name="action_check_score">Skoru Denetle</string>
     <string name="action_go_review">Doğrulamaya Git</string>
     <string name="score_check_title">Set skorları doğru mu?</string>
-    <string name="score_check_intro">Uygulama videodaki rallileri şu skorla saydı:</string>
+    <string name="score_check_intro">Uygulama listedeki rallileri şu skorla saydı:</string>
     <string name="score_check_set">%1$d. set: %2$d - %3$d</string>
     <string name="score_check_set_open">%1$d. set: %2$d - %3$d (kurala göre bitmedi)</string>
     <string name="score_check_rule">Uygulama seti 25 sayıda, beşinci seti 15 sayıda ve iki farkla bitirir. Maçı başka bir kuralla oynadıysan bu skorlar tutmaz.</string>
@@ -376,6 +376,7 @@
     <string name="action_start_here">Başlangıç Burada</string>
     <string name="action_split_here">Burada Böl</string>
     <string name="action_merge_previous">Önceki Ralliyle Birleştir</string>
+    <string name="action_choose_winner">Kazananı Seç</string>
     <string name="action_rally_started">Ralli Burada Başladı</string>
     <string name="action_rally_ended">Ralli Burada Bitti</string>
     <string name="editor_marked_start">Başlangıç: %1$s</string>
@@ -468,7 +469,7 @@
     <string name="feature_video">Video kaydetme ve seçme</string>
     <string name="feature_upload">Yükleme ve kaldığı yerden sürdürme</string>
     <string name="feature_check">Sunucuda dosya kontrolü</string>
-    <string name="feature_review">Ralli doğrulama ve rapor</string>
+    <string name="feature_review">Ralli doğrulama, ralli düzeltme ve rapor</string>
     <string name="feature_analysis">Otomatik analiz modeli</string>
     <string name="profile_privacy">Gizlilik</string>
     <string name="privacy_server">Uygulama videoyu, takım adlarını ve maç bilgilerini yalnızca geliştirme bilgisayarındaki yerel sunucuya gönderir.</string>
@@ -476,7 +477,7 @@
     <string name="privacy_training">Uygulama videoyu model eğitimi için göndermez.</string>
     <string name="privacy_accounts">Sunucuda hesap sistemi yok. Sunucunun çalıştığı bilgisayarı kullanan herkes yüklediğin videoları görebilir. Oyuncuların izin vermediği videoları ve telifli yayınları yükleme.</string>
     <string name="privacy_retention">Sunucu videoyu ve maç bilgilerini sen maçı silene kadar saklar.</string>
-    <string name="privacy_delete">Sen maçı silince sunucu o maçın videosunu, analiz sonuçlarını, verdiğin kararları ve maç bilgilerini siler. Telefonundaki video dosyası kalır.</string>
+    <string name="privacy_delete">Sen maçı silince sunucu o maçın videosunu, analiz sonuçlarını, verdiğin kararları, yaptığın düzeltmeleri ve maç bilgilerini siler. Telefonundaki video dosyası kalır.</string>
     <string name="privacy_faces">Uygulama ve sunucu yüz tanımaz. Rapor bir sayıyı oyuncuya yalnızca sen forma numarasını seçince yazar.</string>
     <string name="profile_server">Sunucu bağlantısı</string>
     <string name="server_emulator">Emülatör</string>
