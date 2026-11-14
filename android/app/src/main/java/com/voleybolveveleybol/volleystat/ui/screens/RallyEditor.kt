@@ -50,12 +50,13 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import com.voleybolveveleybol.volleystat.AnalysisUi
 import com.voleybolveveleybol.volleystat.R
 import com.voleybolveveleybol.volleystat.RalliesLoad
 import com.voleybolveveleybol.volleystat.model.EditTarget
 import com.voleybolveveleybol.volleystat.model.Rally
-import com.voleybolveveleybol.volleystat.ui.components.DemoBanner
+import com.voleybolveveleybol.volleystat.ui.components.DemoTag
 import com.voleybolveveleybol.volleystat.ui.components.Notice
 import com.voleybolveveleybol.volleystat.ui.components.PrimaryButton
 import com.voleybolveveleybol.volleystat.ui.components.SecondaryButton
@@ -64,6 +65,9 @@ import com.voleybolveveleybol.volleystat.ui.formatClock
 import com.voleybolveveleybol.volleystat.ui.formatClockTenths
 import com.voleybolveveleybol.volleystat.ui.theme.Dimens
 import com.voleybolveveleybol.volleystat.ui.theme.LocalVsColors
+
+/** How long the editor waits for a picture before it shows that it is waiting. A step or a drag is served faster. */
+private const val SLOW_PICTURE_MS = 600L
 
 /** What the range editor needs from a video player. Screen tests steer the editor with a stand-in. */
 @Stable
@@ -99,15 +103,19 @@ class EditorVideo(val control: VideoControl, val picture: @Composable () -> Unit
 
 /** The editor before it has a rally list to work on. */
 @Composable
-fun RallyEditorWaiting(title: String, load: RalliesLoad, onRetry: () -> Unit, onBack: () -> Unit) {
+fun RallyEditorWaiting(title: String, analysis: AnalysisUi, onRetry: () -> Unit, onBack: () -> Unit) {
+    val jobProblem = analysis.jobProblem
+    val load = analysis.ralliesLoad
     FlowScaffold(title = title, onBack = onBack) {
-        when (load) {
-            RalliesLoad.UNREACHABLE -> {
+        when {
+            // Without a job no list will come. The screen says why.
+            jobProblem != null -> JobProblemNotice(jobProblem, onRetry)
+            load == RalliesLoad.UNREACHABLE -> {
                 Notice(stringResource(R.string.rallies_load_failed), Tone.NEGATIVE)
                 SecondaryButton(stringResource(R.string.action_retry), onRetry)
             }
             // Asking again does not change what an older server answers, so there is no retry here.
-            RalliesLoad.OUTDATED -> Notice(stringResource(R.string.rallies_outdated_server), Tone.NEGATIVE)
+            load == RalliesLoad.OUTDATED -> Notice(stringResource(R.string.rallies_outdated_server), Tone.NEGATIVE)
             else -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                 Text(stringResource(R.string.rallies_loading), style = MaterialTheme.typography.bodyMedium)
@@ -136,6 +144,8 @@ fun RallyEditorScreen(
     onBack: () -> Unit,
     /** Opens the winner question of this rally. Null when the editor was opened from that question. */
     onChooseWinner: (() -> Unit)? = null,
+    /** The user has moved the picture again after a refusal: they have read it and are on the way to the next try. */
+    onProblemSeen: () -> Unit = {},
 ) {
     val control = video.control
     val window = target.windowStartMs..target.windowEndMs
@@ -163,6 +173,7 @@ fun RallyEditorScreen(
     fun startsInPause(at: Long) = at < window.last && at != markedStart
 
     fun stand(atMs: Long) {
+        onProblemSeen()
         control.pause()
         control.seekTo(atMs.coerceIn(window))
     }
@@ -182,6 +193,15 @@ fun RallyEditorScreen(
     // The screen that sent a correction stays until the answer is there. On any other screen nobody would
     // learn that the server refused it, or that it never arrived.
     BackHandler(enabled = analysis.correcting) {}
+    // A picture that is slow to arrive gets a sign, so the user sees why the marks wait.
+    var slowPicture by remember { mutableStateOf(false) }
+    LaunchedEffect(control, control.ready, control.failed) {
+        slowPicture = false
+        if (!control.ready && !control.failed) {
+            delay(SLOW_PICTURE_MS)
+            slowPicture = true
+        }
+    }
 
     FlowScaffold(
         title = stringResource(if (rally != null) R.string.editor_title_rally else R.string.editor_title_gap), onBack = onBack,
@@ -225,7 +245,6 @@ fun RallyEditorScreen(
             }
         },
     ) {
-        if (analysis.job?.mock == true) DemoBanner(compact = true)
         Box(
             Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(MaterialTheme.shapes.large).background(MaterialTheme.colorScheme.scrim),
             contentAlignment = Alignment.Center,
@@ -238,12 +257,19 @@ fun RallyEditorScreen(
                 }
             } else {
                 video.picture()
+                if (slowPicture) {
+                    val loading = stringResource(R.string.editor_video_loading)
+                    CircularProgressIndicator(Modifier.size(32.dp).semantics { contentDescription = loading }, color = Color.White, strokeWidth = 3.dp)
+                }
             }
         }
         // One block with small gaps: on a small phone the bar and the steps have to stay on screen with the picture.
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Column(Modifier.weight(1f)) {
+                    // The intervals of a demo analysis are invented, and the label stands right on the line that shows
+                    // them. A whole banner would push the step buttons off a small screen.
+                    if (analysis.job?.mock == true) DemoTag()
                     Text(
                         if (rally != null) stringResource(R.string.editor_rally_now, rally.sequence, formatClockTenths(rally.startMs), formatClockTenths(rally.endMs))
                         else stringResource(R.string.editor_gap_now, formatClockTenths(window.first), formatClockTenths(window.last)),
@@ -268,7 +294,10 @@ fun RallyEditorScreen(
                 value = (position - window.first).toFloat(),
                 onValueChange = { value ->
                     val at = window.first + value.toLong()
-                    if (scrub == null) control.pause()
+                    if (scrub == null) {
+                        onProblemSeen()
+                        control.pause()
+                    }
                     scrub = at
                     control.seekTo(at, exact = false)
                 },
@@ -310,6 +339,7 @@ fun RallyEditorScreen(
                         } else {
                             // At the end of the window, or of the video, there is nothing left to play, so playback starts over.
                             if (position >= window.last || control.ended) control.seekTo(rally?.startMs ?: window.first)
+                            onProblemSeen()
                             control.play()
                         }
                     },

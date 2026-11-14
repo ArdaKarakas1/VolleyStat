@@ -170,9 +170,8 @@ fun VolleyStatApp(
             viewModel.clearCorrectionProblem()
             if (analysis.matchId != match.localId || analysis.job == null) viewModel.watchAnalysis(match.localId, startIfMissing = false)
         }
-        // Without a job there is no list to wait for, and the screen says so instead of loading forever.
-        val noJob = own.job == null && own.jobLoad != JobLoad.LOADING && own.jobLoad != JobLoad.READY
-        return own.copy(rallies = own.currentRallies, ralliesLoad = if (noJob) RalliesLoad.UNREACHABLE else own.ralliesLoad)
+        // Without a job there is no list to wait for. The screens read the reason from the job itself (jobProblem).
+        return own.copy(rallies = own.currentRallies)
     }
 
     @Composable
@@ -191,13 +190,15 @@ fun VolleyStatApp(
         // editor or the rally list, stays on the card it shows, which a correction may have chosen.
         // After the system ended the app, the screen comes back as opened and without its cards: the
         // user may have answered the rally it was opened for long ago, so it goes to the first open card.
+        // The screen counts as opened once it has shown its cards. Until then every load, a retry after a
+        // failed one included, still asks for the card it was opened for.
         var opened by rememberSaveable { mutableStateOf(false) }
         LaunchedEffect(shown.job?.id) {
             if (shown.job != null) {
                 if (opened) viewModel.loadReview(keepCursor = true) else viewModel.loadReview(atRally = atRally)
-                opened = true
             }
         }
+        LaunchedEffect(shown.deck != null) { if (shown.deck != null) opened = true }
         // The scorer belongs to the side that won the rally, as answered on that rally's winner card.
         val winner = shown.deck?.cards?.firstOrNull { it.rallyId == shown.card?.rallyId && it.questionType == ReviewCard.RALLY_WINNER }?.answer
         val url = remember(videoId, state.settings.serverTarget) { viewModel.api().videoContentUrl(videoId) }
@@ -213,7 +214,7 @@ fun VolleyStatApp(
             },
             onBack = { nav.popBackStack() },
             clip = { card -> ClipPlayer(url, card.clipStartMs, card.clipEndMs) },
-            onRetry = { viewModel.retryReview(match.localId) },
+            onRetry = { viewModel.retryReview(match.localId, atRally.takeIf { !opened }) },
             onFixRally = { card -> go(Routes.rally(match.localId, card.rallyId)) },
             // The list may already be below, when this review was opened from it. Going back to it keeps the
             // way back short: review and list would otherwise pile up, two screens for every round.
@@ -240,7 +241,7 @@ fun VolleyStatApp(
         val list = shown.rallies
         val target = list?.let(resolve)
         when {
-            list == null -> RallyEditorWaiting(stringResource(title), shown.ralliesLoad, onRetry = { viewModel.retryRallies(match.localId) }, onBack = { nav.popBackStack() })
+            list == null -> RallyEditorWaiting(stringResource(title), shown, onRetry = { viewModel.retryRallies(match.localId) }, onBack = { nav.popBackStack() })
             // The rally or the pause is no longer on the list, so there is nothing left to edit here.
             target == null -> LaunchedEffect(Unit) { done() }
             else -> {
@@ -260,6 +261,7 @@ fun VolleyStatApp(
                     onChooseWinner = if (rally == null || fromReview) null else ({
                         nav.navigate(Routes.reviewAt(match.localId, rally.id)) { popUpTo(route) { inclusive = true }; launchSingleTop = true }
                     }),
+                    onProblemSeen = viewModel::clearCorrectionProblem,
                 )
             }
         }

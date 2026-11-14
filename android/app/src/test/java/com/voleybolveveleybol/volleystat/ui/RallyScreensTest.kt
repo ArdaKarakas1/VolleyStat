@@ -18,6 +18,7 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -235,6 +236,28 @@ class RallyScreensTest {
         assertFalse(shown(text(R.string.rallies_loading)))
         compose.onNodeWithText(text(R.string.action_retry)).performClick()
         assertEquals(1, taps.retries)
+    }
+
+    @Test fun withoutAJobTheListNamesTheReasonAndOffersARetryOnlyWhereOneCanHelp() {
+        var load by mutableStateOf(JobLoad.VIDEO_MISSING)
+        var retries = 0
+        show { RalliesScreen(match, AnalysisUi("m1", load), onOpenRally = {}, onOpenGap = {}, onConfirm = {}, onOpenReview = {}, onRetry = { retries++ }, onBack = {}) }
+        compose.onNodeWithText(text(R.string.analysis_video_missing_body)).assertIsDisplayed()
+        // Asking again would get the same answer, so there is nothing to tap, and the app did reach the server.
+        assertFalse(shown(text(R.string.action_retry)))
+        assertFalse(shown(text(R.string.rallies_load_failed)))
+        assertFalse("no list is on its way", shown(text(R.string.rallies_loading)))
+
+        load = JobLoad.NO_JOB
+        compose.waitForIdle()
+        compose.onNodeWithText(text(R.string.review_no_job)).assertIsDisplayed()
+        assertFalse(shown(text(R.string.action_retry)))
+
+        load = JobLoad.UNREACHABLE
+        compose.waitForIdle()
+        compose.onNodeWithText(text(R.string.analysis_unreachable)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.action_retry)).performClick()
+        assertEquals(1, retries)
     }
 
     @Test fun aListThatIsStillOnItsWaySaysSo() {
@@ -502,6 +525,54 @@ class RallyScreensTest {
         assertEquals(listOf(15_000L to 20_400L), marks.moves)
     }
 
+    @Test fun aPictureThatTakesLongToArriveGetsASignAndAShortWaitGetsNone() {
+        val control = FakeControl(20_400).apply { ready = false }
+        editor(rallyTarget(four, "r2")!!, control)
+        val sign = text(R.string.editor_video_loading)
+        // Every step and every drag makes the player fetch a frame. A sign for that would flash all the time.
+        assertTrue(compose.onAllNodesWithContentDescription(sign).fetchSemanticsNodes().isEmpty())
+
+        // After a moment without a picture the user is told why the marks wait.
+        compose.mainClock.advanceTimeBy(1_000)
+        compose.onNodeWithContentDescription(sign).assertIsDisplayed()
+
+        control.ready = true
+        compose.waitForIdle()
+        assertTrue(compose.onAllNodesWithContentDescription(sign).fetchSemanticsNodes().isEmpty())
+    }
+
+    @Test fun aRefusalMakesWayWhenTheUserMovesThePictureAgain() {
+        var seen = 0
+        val control = FakeControl(20_000)
+        show {
+            RallyEditorScreen(
+                rallyTarget(four, "r2")!!, state(four, problem = CorrectionProblem.OVERLAP, overlaps = 3), control.video,
+                { _, _ -> }, {}, {}, { _, _ -> }, onBack = {}, onProblemSeen = { seen++ },
+            )
+        }
+        compose.onNodeWithText(text(R.string.correction_overlap, 3)).assertIsDisplayed()
+        assertEquals("reading it is not yet moving on", 0, seen)
+        // Each way of moving the picture is the start of the next try: a step, a drag of the bar, playing on.
+        button(R.string.editor_forward_1).performClick()
+        assertEquals(1, seen)
+        compose.onNodeWithContentDescription(text(R.string.editor_seek)).performSemanticsAction(SemanticsActions.SetProgress) { it(5_000f) }
+        compose.waitForIdle()
+        assertEquals(2, seen)
+        compose.onNodeWithContentDescription(text(R.string.editor_play)).performClick()
+        assertEquals(3, seen)
+    }
+
+    @Test fun theEditorOfADemoAnalysisCarriesTheLabelOnTheIntervalItShows() {
+        var mock by mutableStateOf(true)
+        show { RallyEditorScreen(rallyTarget(four, "r2")!!, state(four, mock = mock), FakeControl(15_000).video, { _, _ -> }, {}, {}, { _, _ -> }, {}) }
+        compose.onNodeWithText(text(R.string.status_demo)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.editor_rally_now, 2, "00:15,0", "00:24,0")).assertIsDisplayed()
+        // An interval a real analyzer proposed carries no such label.
+        mock = false
+        compose.waitForIdle()
+        assertFalse(shown(text(R.string.status_demo)))
+    }
+
     @Test fun aPauseIsNotMarkedBeforeItsPictureIsOnScreenEither() {
         val control = FakeControl(10_000).apply { ready = false }
         editor(gapTarget(four, 9_000)!!, control)
@@ -680,9 +751,16 @@ class RallyScreensTest {
         button(R.string.action_rally_started).assertIsNotEnabled()
     }
 
+    @Test fun withoutAJobTheEditorNamesTheReasonToo() {
+        show { RallyEditorWaiting(text(R.string.editor_title_rally), AnalysisUi("m1", JobLoad.VIDEO_MISSING), onRetry = {}, onBack = {}) }
+        compose.onNodeWithText(text(R.string.analysis_video_missing_body)).assertIsDisplayed()
+        assertFalse(shown(text(R.string.action_retry)))
+        assertFalse(shown(text(R.string.rallies_loading)))
+    }
+
     @Test fun theEditorWaitsForTheListAndSaysWhenItDidNotCome() {
         var retries = 0
-        show { RallyEditorWaiting(text(R.string.editor_title_rally), RalliesLoad.UNREACHABLE, onRetry = { retries++ }, onBack = {}) }
+        show { RallyEditorWaiting(text(R.string.editor_title_rally), state(null, load = RalliesLoad.UNREACHABLE), onRetry = { retries++ }, onBack = {}) }
         compose.onNodeWithText(text(R.string.rallies_load_failed)).assertIsDisplayed()
         compose.onNodeWithText(text(R.string.action_retry)).performClick()
         assertEquals(1, retries)

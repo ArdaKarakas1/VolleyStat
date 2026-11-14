@@ -149,6 +149,9 @@ data class AnalysisUi(
      */
     val currentRallies: RallyList? get() = rallies?.takeIf { it.version >= (job?.rallyListVersion ?: 0) }
 
+    /** Why the match has no job to work on, once the app knows that none is on its way. Null while a job is there or expected. */
+    val jobProblem: JobLoad? get() = jobLoad.takeIf { job == null && it != JobLoad.LOADING && it != JobLoad.READY }
+
     /**
      * This state with [job] in it. Cards, a rally list and a correction on its way belong to one
      * job: when the match gets another job, none of them describes it, and a list version of the
@@ -187,10 +190,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     /** Tests point the view model at a stand-in server with this. It is null everywhere else. */
     internal var baseUrlOverride: String? = null
 
+    /** Tests shorten the wait of a correction with this, so that a server that stays silent costs them no minute. */
+    internal var correctionTimeoutMs: Int? = null
+
     private fun baseUrl(target: ServerTarget) =
         baseUrlOverride ?: if (target == ServerTarget.EMULATOR) BuildConfig.API_URL_EMULATOR else BuildConfig.API_URL_USB
 
-    fun api() = ApiClient(baseUrl(_state.value.settings.serverTarget))
+    fun api() = ApiClient(baseUrl(_state.value.settings.serverTarget), correctionTimeoutMs ?: ApiClient.CORRECTION_TIMEOUT_MS)
 
     /** Base address for streaming a video from the server (review clips). */
     fun serverBaseUrl(): String = baseUrl(_state.value.settings.serverTarget)
@@ -534,13 +540,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Asks again for what the review screen is missing: the job first, then its cards. */
-    fun retryReview(matchId: String) {
+    fun retryReview(matchId: String, atRally: String? = null) {
         val ui = _analysis.value
         if (ui.matchId != matchId || ui.job == null) {
             watchAnalysis(matchId, startIfMissing = false)
         } else {
             _analysis.update { it.copy(reviewProblem = null) }
-            loadReview(keepCursor = ui.deck != null)
+            loadReview(keepCursor = ui.deck != null, atRally = atRally)
         }
     }
 
@@ -689,7 +695,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     Result.failure(error)
                 }
             }
-            val reloaded = withContext(Dispatchers.IO) { runCatching { api().rallies(jobId, ApiClient.CORRECTION_TIMEOUT_MS) }.getOrNull() }
+            // The screen that sent the correction keeps the user until the last of these reads is over, so each of them waits the short wait.
+            val wait = api().correctionTimeoutMs
+            val reloaded = withContext(Dispatchers.IO) { runCatching { api().rallies(jobId, wait) }.getOrNull() }
             val error = sent.exceptionOrNull()
             val refusal = (error as? ApiException)?.code
             val onList = if (sent.isFailure && (refusal == null || refusal == "RALLY_LIST_STALE")) reloaded?.let(found) else null
@@ -711,7 +719,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val blocker = (error as? ApiException)?.takeIf { problem == CorrectionProblem.OVERLAP }?.details?.optString("rallyId")
             val affected = sent.getOrNull()?.affected?.map { it.id } ?: onList.orEmpty()
             val job = sent.getOrNull()?.job
-            val deck = if (applied) withContext(Dispatchers.IO) { runCatching { api().reviewCards(jobId, if (ui.detail) "ALL" else "SCORE") }.getOrNull() } else null
+            val deck = if (applied) withContext(Dispatchers.IO) { runCatching { api().reviewCards(jobId, if (ui.detail) "ALL" else "SCORE", wait) }.getOrNull() } else null
             var shown = false
             _analysis.update { current ->
                 if (current.matchId != matchId || current.job?.id != jobId) return@update current

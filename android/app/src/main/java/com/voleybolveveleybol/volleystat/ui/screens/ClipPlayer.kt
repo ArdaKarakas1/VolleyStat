@@ -165,8 +165,6 @@ internal class PlayerControl(val player: Player) : VideoControl {
  * The video of the range editor, without sound, playing from [startMs]. It is prepared once for
  * the whole file, so moving through it asks the server only for the bytes of the new position.
  */
-// The loading sign of the player view is a part of Media3 that may change between releases. The library version is pinned.
-@OptIn(UnstableApi::class)
 @Composable
 fun rememberEditorVideo(url: String, startMs: Long): EditorVideo {
     val context = LocalContext.current
@@ -190,9 +188,7 @@ fun rememberEditorVideo(url: String, startMs: Long): EditorVideo {
     return remember(control) {
         EditorVideo(control) {
             AndroidView(
-                // While a playing video waits for its data, the view shows its own loading sign over the picture.
-                // A standing picture gets none: the sign would flash at every step.
-                factory = { PlayerView(it).apply { useController = false; setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING); player = control.player } },
+                factory = { PlayerView(it).apply { useController = false; player = control.player } },
                 modifier = Modifier.fillMaxSize().semantics { contentDescription = description },
             )
         }

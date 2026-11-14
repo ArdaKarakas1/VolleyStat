@@ -931,6 +931,49 @@ class AppViewModelTest {
         assertEquals(1, requests.count { it == "POST /rallies/n1/move" })
     }
 
+    /** A server that takes the request and never answers it. */
+    private val silent = { MockResponse().setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.NO_RESPONSE) }
+
+    @Test fun aCorrectionKeepsTheScreenOnlyForItsShortWaitWhenTheCardsDoNotArrive() {
+        var version = 3
+        val vm = withRallyList { if (version == 3) rallies(3, rally("r1", 1, 2_000, 9_000)) else rallies(4, rally("r1", 1, 2_000, 10_000)) }
+        vm.correctionTimeoutMs = 400
+        on("POST /rallies/r1/move") {
+            version = 4
+            ok(corrected(job("J", "video-A", "NEEDS_REVIEW").put("rallyListVersion", 4), rally("r1", 1, 2_000, 10_000)))
+        }
+        on("GET /analyses/J/review-cards") { silent() }
+
+        var done = false
+        vm.moveRally("r1", 2_000, 10_000) { done = true }
+        // The screen that sent the correction holds the user until this is over. The cards are the last thing it reads.
+        await("the correction") { done }
+        assertFalse(vm.analysis.value.correcting)
+        assertEquals(4, vm.analysis.value.rallies!!.version)
+    }
+
+    @Test fun aCorrectionWhoseAnswerDoesNotComeGivesUpAfterItsShortWait() {
+        val vm = withRallyList { rallies(3, rally("r1", 1, 2_000, 9_000)) }
+        vm.correctionTimeoutMs = 400
+        on("POST /rallies/r1/move") { silent() }
+        vm.moveRally("r1", 2_000, 10_000) { fail("the list does not show the move") }
+        await("the outcome") { vm.analysis.value.correctionProblem != null }
+        assertFalse(vm.analysis.value.correcting)
+        assertEquals(CorrectionProblem.UNREACHABLE, vm.analysis.value.correctionProblem)
+    }
+
+    @Test fun aCorrectionWhoseListDoesNotComeGivesUpAfterItsShortWait() {
+        val vm = withRallyList { rallies(3, rally("r1", 1, 2_000, 9_000)) }
+        vm.correctionTimeoutMs = 400
+        on("POST /rallies/r1/move") { ok(corrected(job("J", "video-A", "NEEDS_REVIEW").put("rallyListVersion", 4), rally("r1", 1, 2_000, 10_000))) }
+        on("GET /analyses/J/rallies") { silent() }
+        var done = false
+        vm.moveRally("r1", 2_000, 10_000) { done = true }
+        await("the outcome") { done }
+        assertFalse(vm.analysis.value.correcting)
+        assertEquals(RalliesLoad.UNREACHABLE, vm.analysis.value.ralliesLoad)
+    }
+
     @Test fun anAnswerThatIsNotAListOfThisVersionIsToldApartFromNoAnswer() {
         var answer: () -> MockResponse = { ok(JSONObject().put("rallies", JSONArray())) }
         on("GET /videos/video-A/analyses/latest") { ok(job("J", "video-A", "NEEDS_REVIEW")) }

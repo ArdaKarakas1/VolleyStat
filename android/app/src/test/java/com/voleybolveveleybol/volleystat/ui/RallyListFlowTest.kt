@@ -76,6 +76,8 @@ class RallyListFlowTest {
     @Volatile private var thirdEndMs = 56_000L
     /** While this is set, the server holds back its answer to a winner decision, as a slow network would. */
     @Volatile private var holdDecision: java.util.concurrent.CountDownLatch? = null
+    /** The next read of the cards fails, as it does when the connection drops for a moment. */
+    @Volatile private var failNextCardRead = false
     /** While this is set, the server holds back its answer to a moved end, and then refuses the move. */
     @Volatile private var holdAndRefuseMove: java.util.concurrent.CountDownLatch? = null
 
@@ -153,7 +155,7 @@ class RallyListFlowTest {
                         "GET /matches/server-1/report" -> ok(report())
                         "GET /videos/video-1/analyses/latest" -> ok(job())
                         "GET /analyses/j1/rallies" -> ok(rallies())
-                        "GET /analyses/j1/review-cards" -> ok(cards())
+                        "GET /analyses/j1/review-cards" -> if (failNextCardRead) MockResponse().setResponseCode(500).also { failNextCardRead = false } else ok(cards())
                         "POST /analyses/j1/rally-list/confirm" -> {
                             confirmed = true
                             ok(JSONObject().put("job", job()).put("reportRevision", 9))
@@ -381,9 +383,28 @@ class RallyListFlowTest {
         waitFor(text(R.string.correction_overlap, 2))
         app.onNodeWithText(text(R.string.action_end_here)).assertIsDisplayed()
 
+        // The user moves the picture for the next try. The refusal has been read and makes way.
+        tap(R.string.editor_back_1)
+        app.waitUntil(5_000) { app.onAllNodesWithText(text(R.string.correction_overlap, 2)).fetchSemanticsNodes().isEmpty() }
+
         // With the answer on screen the way back is open again.
         back()
         waitFor(text(R.string.rallies_count, 3))
+    }
+
+    @Test fun aReviewOpenedForOneRallyOpensOnItAlsoAfterItsFirstLoadFailed() {
+        openTheRallyList()
+        app.onNodeWithText("00:15 · 9 sn").performClick()
+        waitFor(text(R.string.action_choose_winner))
+
+        // The cards do not arrive at the first try.
+        failNextCardRead = true
+        tap(R.string.action_choose_winner)
+        waitFor(text(R.string.review_load_failed))
+        tap(R.string.action_retry)
+
+        // Every rally has its answer. Without the rally this screen was opened for, it would open past the last card.
+        waitFor(text(R.string.review_position, 2, 3))
     }
 
     @Test fun afterTheSystemEndedTheAppTheReviewOpensOnTheFirstOpenQuestionAndNotOnTheRallyItWasOpenedFor() {

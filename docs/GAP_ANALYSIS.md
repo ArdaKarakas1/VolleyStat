@@ -115,10 +115,10 @@ Sayılar son yerel koşudan gelir. CI aynı testleri her PR'da çalıştırır.
 |---|---|
 | Arka uç `pytest` | 460 test geçti (yerelde Python 3.13, CI'da Python 3.12) |
 | `ml` `pytest` | 239 test geçti (yerel ve CI) |
-| Android JVM testleri (`:core:test`, `:app:testDebugUnitTest`) | 187 test geçti, hiçbiri atlanmadı (yerel): `:core` 5, `:app` 182. Testler 65 ekran görüntüsü üretti. |
-| Uygulama gerçek sunucuya karşı (JVM) | 9 test geçti (yerel): `BackendE2eTest` 6, `AppFlowE2eTest` 1, `AppUploadFlowE2eTest` 1, `RallyFixE2eTest` 1. Bu dokuz test yukarıdaki 187 testin içindedir. İkisi ralli düzeltmeyi dener: biri API istemcisinden, öbürü ekranlardan. |
+| Android JVM testleri (`:core:test`, `:app:testDebugUnitTest`) | 196 test geçti, hiçbiri atlanmadı (yerel): `:core` 5, `:app` 191. Testler 66 ekran görüntüsü üretti. |
+| Uygulama gerçek sunucuya karşı (JVM) | 9 test geçti (yerel): `BackendE2eTest` 6, `AppFlowE2eTest` 1, `AppUploadFlowE2eTest` 1, `RallyFixE2eTest` 1. Bu dokuz test yukarıdaki 196 testin içindedir. İkisi ralli düzeltmeyi dener: biri API istemcisinden, öbürü ekranlardan. |
 | Lint | 0 hata |
-| Mutasyon sınaması (sürüm 0.5.0) | Oturum ralli düzeltmenin uygulamadaki 140 kuralını ve sunucudaki 9 kuralını tek tek bozdu. Testler son kodda bozmaların hepsini yakalar. Beş bozma ilk koşusunda yakalanmadı ve test boşluklarını gösterdi. Oturum o boşlukları kapattı. |
+| Mutasyon sınaması (sürüm 0.5.0) | Oturum ralli düzeltmenin uygulamadaki 161 kuralını ve sunucudaki 9 kuralını tek tek bozdu. Testler son kodda bozmaların hepsini yakalar. Beş bozma ilk koşusunda yakalanmadı ve dört test boşluğunu gösterdi. Oturum o boşlukları kapattı. |
 | Emülatörde cihaz testleri (CI, API 34) | 2 test: kamera kaydı ve baştan sona akış (yeni maç, kayıt, yükleme, dosya kontrolü, deneme analizi, sunucudan klip, ralli düzenleyicide gerçek oynatıcıyla bitiş taşıma, karar, rapor). İlk iki koşu kırmızıydı ve uygulamada gerçek bir gezinme hatasını gösterdi. Düzenleyici adımı sürüm 0.5.0 ile geldi. |
 | Gerçek telefonda deneme | **Yok.** |
 | Model doğruluğu | **Yok.** Kimse ölçmedi. |
@@ -136,7 +136,7 @@ Ayrı inceleyiciler üç parçayı ve yapay zekâ planını okudu. Ayrı bir do�
 | Yapay zekâ planı | 11 | 11 bulgu belgeye işlendi. |
 | Android uygulaması (sürüm 0.4.0) | 21 | Doğrulayıcı 19 bulguyu doğruladı ve 2 bulguyu reddetti. Doğrulanan 19 bulgu sürüm 0.4.1 ile düzeldi. Reddedilen bulgulardan biri metin kuralıydı ve o metinler de düzeldi. Öbürü uygulanmadı: "Oyuncusu belli olmayan sayı" alt sınır değildir, çünkü kullanıcı oyuncu seçtikçe bu sayı azalır. |
 | Maç silme, gizlilik satırları ve sayı türü tanımları (sürüm 0.4.2) | 19 | Doğrulayıcılar 11 bulguyu doğruladı, 5 bulguyu kısmen doğruladı ve 3 bulguyu reddetti. Tekrarlar ayıklanınca dokuz ayrı kusur kaldı ve dokuzu da düzeldi. Oturum her düzeltmeyi geri alıp ilgili testin kırıldığını gördü. Reddedilen 3 bulgu sözcük tercihiydi. |
-| Ralli düzeltme (sürüm 0.5.0) | 36 | Dört inceleyici 31 bulgu yazdı. Doğrulayıcılar 16 bulguyu doğruladı, 11 bulguyu kısmen doğruladı ve 4 bulguyu reddetti. Eksiklik denetçisi 5 bulgu daha ekledi. Oturum 32 bulguyu düzeltti. İkinci bir tur bu düzeltmeleri koda karşı yeniden denedi: 21 düzeltme tam, 11 düzeltme yarım çıktı ve tur 22 yeni nokta buldu. Oturum yarım kalan düzeltmeleri tamamladı ve yeni noktaları kapattı. Açık kalan iki konu bu bölümün sonundadır. |
+| Ralli düzeltme (sürüm 0.5.0), üç tur | 36 + 22 + 17 | Dört inceleyici 31 bulgu yazdı. Doğrulayıcılar 16 bulguyu doğruladı, 11 bulguyu kısmen doğruladı ve 4 bulguyu reddetti. Eksiklik denetçisi 5 bulgu daha ekledi. Oturum 32 bulguyu düzeltti. İkinci bir tur bu düzeltmeleri koda karşı yeniden denedi: 21 düzeltme tam, 11 düzeltme yarım çıktı ve tur 22 yeni nokta buldu. Oturum yarım kalan düzeltmeleri tamamladı ve yeni noktaları kapattı. Üçüncü tur ikinci turun düzeltmelerini okudu ve 17 nokta yazdı. Doğrulayıcılar 2 noktayı reddetti ve oturum kalan 15 noktayı kapattı. Açık kalan iki konu bu bölümün sonundadır. |
 
 Android incelemesinin bulduğu en ağır hatalar şunlardı:
 
@@ -173,15 +173,25 @@ Ralli düzeltme incelemesinin (sürüm 0.5.0) bulduğu en ağır kusurlar şunla
 - Kullanıcı düzeltme yoldayken düzenleyiciden çıkarsa sunucunun reddini hiçbir ekran göstermiyordu. Düzenleyici ve ralli listesi artık yanıt gelene kadar açık kalır.
 - Küçük telefonda sunucunun reddi ekranın görünmeyen bölümünde kalıyordu ve dokunuş boşa gitmiş gibi görünüyordu. Düzenleyici reddi artık işaret düğmelerinin hemen üstünde gösterir.
 - Oynayan görüntü rallinin sonunu geçerken kullanıcı "Burada Böl" düğmesine dokunursa uygulama sunucunun reddettiği bir konum gönderiyordu. Ekran artık düğmeyi açan kuralı dokunma anındaki konuma yeniden sorar.
-- Ekran ilk açıldığında ve "Yeniden Dene" düğmesinden sonra görüntü gelmeden işaret düğmeleri açıktı. Düzenleyici artık işaret düğmelerini oynatıcı o konumun görüntüsünü ekrana getirdiğinde açar.
+- Ekran ilk açıldığında ve "Yeniden Dene" düğmesinden sonra görüntü gelmeden işaret düğmeleri açıktı. Düzenleyici artık işaret düğmelerini oynatıcı o konumda "hazır" dediğinde açar.
 - Sunucu videoyu artık tanımayınca uygulama eski listeyi ekranda tutuyordu ve düzeltme düğmeleri hiçbir şey yapmıyordu.
 - Deneme analizinin listesi, kullanıcının hiç veremeyeceği bir onaydan sonra kesin skor vaat ediyordu.
 - Rapor onaydan sonra bütün takım sayılarının artı işaretinin kalkacağını söylüyordu. Sayı türü satırları, kullanıcı her sayının türünü seçene kadar artı işaretini korur.
 - Belgeler set kuralını uygulamaya mal ediyordu. Kuralı sunucu uygular.
 
-Mutasyon sınaması bu turda iki test boşluğu daha gösterdi: Hiçbir test geri tuşunun gerçekten tutulduğunu ve düzenleyicinin yalnız bir kez kapandığını ölçmüyordu. Oturum iki boşluğu kapattı. Ekran görüntüsü testleri de test sırasına bağlıydı: Bir düzenleyici testinin hemen ardından koşan ve dönen bir yükleme işareti içeren ekran görüntüsü hiç bitmiyordu. Ekran görüntüsü testleri artık animasyonları kapatır.
+Mutasyon sınaması bu turda üç bozmayla iki test boşluğu daha gösterdi: Hiçbir test geri tuşunun gerçekten tutulduğunu ve düzenleyicinin yalnız bir kez kapandığını ölçmüyordu. Oturum iki boşluğu kapattı. Ekran görüntüsü testleri de test sırasına bağlıydı: Bir düzenleyici testinin hemen ardından koşan ve dönen bir yükleme işareti içeren ekran görüntüsü hiç bitmiyordu. Ekran görüntüsü testleri artık animasyonları kapatır.
 
-Bu incelemeden iki konu açık kaldı. Hiçbir test gerçek oynatıcının bir hatadan sonra videoyu yeniden açtığını ve uygulama arka plana geçince durduğunu denemez. JVM testleri oynatıcıyı tutan sınıfı durumunu testin elle kurduğu bir oynatıcıyla dener ve bu iki davranış gerçek telefon denemesini bekler. Hiçbir test de uygulamanın bir düzeltme için beklediği 15 saniyeyi denemez.
+Üçüncü turun bulduğu kusurlar şunlardı:
+
+- Sunucu bir düzeltmeyi uyguladıktan sonra uygulama kartları 60 saniyeye kadar bekliyordu ve ekran o sürede kullanıcıyı tutuyordu. Bir düzeltmenin üç isteği de artık kısa süre bekler.
+- Sunucu videoyu artık tutmuyorsa ralli listesi "uygulama listeyi alamadı" diyordu ve hiçbir işe yaramayan bir "Yeniden Dene" düğmesi gösteriyordu. Liste ve düzenleyici artık sunucunun verdiği nedeni yazar.
+- Kullanıcının bir ralli için açtığı doğrulama, ilk yükleme başarısız olunca o ralliyi unutuyordu.
+- Küçük telefonda deneme analizinin DEMO şeridi adım düğmelerini ekranın dışına itiyordu. Düzenleyici DEMO etiketini artık aralığı gösteren satırın üstünde taşır.
+- Oynatıcı geç hazır olduğunda işaret düğmeleri hiçbir açıklama olmadan soluk kalıyordu. Düzenleyici artık resmin üstünde bir bekleme işareti gösterir.
+- Uzun bir ret metni küçük telefonda çubuğu ve adım düğmelerini ekranın dışına itiyordu ve kullanıcı düzeltmeyi yinelerken orada kalıyordu. Ret artık kullanıcı görüntüyü hareket ettirince kalkar.
+- Belgeler deneme raporunun alt sınırdan söz etmediğini yazıyordu. Deneme raporu artı işaretlerini korur.
+
+Bu incelemeden iki konu açık kaldı. Hiçbir test gerçek oynatıcının bir hatadan sonra videoyu yeniden açtığını ve uygulama arka plana geçince durduğunu denemez. JVM testleri oynatıcıyı tutan sınıfı durumunu testin elle kurduğu bir oynatıcıyla dener ve bu iki davranış gerçek telefon denemesini bekler. Testler düzeltmenin bekleme süresini kısaltarak dener ve kimse 15 saniyenin gerçek bir ağda yeterli olduğunu ölçmedi.
 
 ## 7. Sıradaki dilimler
 

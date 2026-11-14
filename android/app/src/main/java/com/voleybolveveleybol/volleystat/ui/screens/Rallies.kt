@@ -47,6 +47,7 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.voleybolveveleybol.volleystat.AnalysisUi
+import com.voleybolveveleybol.volleystat.JobLoad
 import com.voleybolveveleybol.volleystat.CorrectionProblem
 import com.voleybolveveleybol.volleystat.R
 import com.voleybolveveleybol.volleystat.RalliesLoad
@@ -119,6 +120,27 @@ fun CorrectionProblemNotice(analysis: AnalysisUi) {
     correctionProblemText(analysis)?.let { Notice(it, if (analysis.correctionProblem == CorrectionProblem.STALE) Tone.CAUTION else Tone.NEGATIVE) }
 }
 
+/** The words for a match that has no job to work on. */
+@StringRes
+fun jobProblemText(problem: JobLoad): Int = when (problem) {
+    JobLoad.UNREACHABLE -> R.string.analysis_unreachable
+    JobLoad.NO_ANALYZER -> R.string.analysis_none_title
+    JobLoad.VIDEO_MISSING -> R.string.analysis_video_missing_body
+    else -> R.string.review_no_job
+}
+
+/**
+ * Says why there is no rally list to show. Asking again is offered only where it can change the
+ * answer: after a lost connection. A server that no longer holds the video would say so again.
+ */
+@Composable
+fun JobProblemNotice(problem: JobLoad, onRetry: () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Notice(stringResource(jobProblemText(problem)), if (problem == JobLoad.UNREACHABLE) Tone.NEGATIVE else Tone.CAUTION)
+        if (problem == JobLoad.UNREACHABLE) SecondaryButton(stringResource(R.string.action_retry), onRetry)
+    }
+}
+
 /** Says that a correction is on its way. The screen that sent it keeps the user until the answer is there. */
 @Composable
 fun CorrectionProgress(analysis: AnalysisUi, @StringRes text: Int) {
@@ -173,7 +195,10 @@ fun RalliesScreen(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             if (analysis.job?.mock == true) item(key = "demo") { DemoBanner(compact = true) }
-            if (analysis.ralliesLoad == RalliesLoad.UNREACHABLE) {
+            val jobProblem = analysis.jobProblem
+            if (jobProblem != null) {
+                item(key = "no-job") { JobProblemNotice(jobProblem, onRetry) }
+            } else if (analysis.ralliesLoad == RalliesLoad.UNREACHABLE) {
                 // A list that is still on screen below this is the one from before the failed read.
                 item(key = "unreachable") {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -187,7 +212,7 @@ fun RalliesScreen(
                 item(key = "outdated") { Notice(stringResource(R.string.rallies_outdated_server), Tone.NEGATIVE) }
             }
             if (list == null) {
-                if (analysis.ralliesLoad != RalliesLoad.UNREACHABLE && analysis.ralliesLoad != RalliesLoad.OUTDATED) {
+                if (jobProblem == null && analysis.ralliesLoad != RalliesLoad.UNREACHABLE && analysis.ralliesLoad != RalliesLoad.OUTDATED) {
                     item(key = "loading") {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)

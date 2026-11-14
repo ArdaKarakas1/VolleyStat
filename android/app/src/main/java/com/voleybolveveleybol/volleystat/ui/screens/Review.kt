@@ -129,7 +129,7 @@ fun ReviewScreen(
     val deck = analysis.deck
     val card = analysis.card
     // Without a job there are no cards to wait for. The screen says why instead of spinning.
-    val jobProblem = analysis.jobLoad.takeIf { analysis.job == null && it != JobLoad.LOADING && it != JobLoad.READY }
+    val jobProblem = analysis.jobProblem
     val loadFailed = analysis.reviewProblem == ReviewProblem.LOAD_FAILED
     // Cards the user skipped stay open. Past the last card the screen must not say that everything is decided.
     val firstOpen = deck?.cards?.indexOfFirst { it.open } ?: -1
@@ -160,15 +160,7 @@ fun ReviewScreen(
     ) {
         if (analysis.job?.mock == true) DemoBanner(compact = true)
         when {
-            deck == null && jobProblem != null -> Notice(
-                stringResource(when (jobProblem) {
-                    JobLoad.UNREACHABLE -> R.string.analysis_unreachable
-                    JobLoad.NO_ANALYZER -> R.string.analysis_none_title
-                    JobLoad.VIDEO_MISSING -> R.string.analysis_video_missing_body
-                    else -> R.string.review_no_job
-                }),
-                if (jobProblem == JobLoad.UNREACHABLE) Tone.NEGATIVE else Tone.CAUTION,
-            )
+            deck == null && jobProblem != null -> Notice(stringResource(jobProblemText(jobProblem)), if (jobProblem == JobLoad.UNREACHABLE) Tone.NEGATIVE else Tone.CAUTION)
             deck == null && loadFailed -> Notice(stringResource(R.string.review_load_failed), Tone.NEGATIVE)
             deck == null -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)

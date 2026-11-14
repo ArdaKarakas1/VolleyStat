@@ -270,6 +270,8 @@ class ScreenshotTest {
         shot("12_ralli_ekle", content = screen(pause, 151_200))
         shot("12_ralli_duzelt_gonderiliyor", content = screen(second, 92_400, listState(waitingList).copy(correcting = true)))
         shotOn("kucuk_12_ralli_duzelt", "+w320dp-h568dp-port", content = screen(second, 92_400))
+        // The demo analyzer is the only one a server has today, so this is the editor every user sees first.
+        shotOn("kucuk_12_ralli_duzelt_demo", "+w320dp-h568dp-port", content = screen(second, 92_400, listState(waitingList, mock = true)))
         shotOn("kucuk_12_ralli_duzelt_cakisma", "+w320dp-h568dp-port", content = screen(second, 92_400, listState(waitingList).copy(correctionProblem = CorrectionProblem.OVERLAP, overlapsRally = 3)))
         shotOn("kucuk_12_ralli_duzelt_gonderiliyor", "+w320dp-h568dp-port", content = screen(second, 92_400, listState(waitingList).copy(correcting = true)))
         shotOn("kucuk_12_ralli_ekle", "+w320dp-h568dp-port", content = screen(pause, 151_200))

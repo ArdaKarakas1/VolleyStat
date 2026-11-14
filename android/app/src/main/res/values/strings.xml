@@ -387,6 +387,7 @@
     <string name="editor_gap_help">Önce rallinin başladığı ana git ve başlangıcı işaretle. Sonra rallinin bittiği ana git ve bitişi işaretle. Hakem, takımlar ralliyi oynamadan sayı verdiyse düdük anına kısa bir aralık ekle.</string>
     <string name="editor_end_note">Bitişi değiştirirsen sunucu bu rallinin kazanan sorusunu yeniden açar, çünkü klip değişir. Bu ralli için sayı türü ya da oyuncu yanıtı verdiysen sunucu onları da siler.</string>
     <string name="editor_video_failed">Uygulama videoyu oynatamadı.</string>
+    <string name="editor_video_loading">Uygulama videoyu alıyor</string>
     <string name="correction_sending">Uygulama düzeltmeyi sunucuya gönderiyor</string>
     <string name="editor_video_description">Maç videosu</string>
     <string name="merge_title">Bu iki ralliyi birleştirmek istiyor musun?</string>

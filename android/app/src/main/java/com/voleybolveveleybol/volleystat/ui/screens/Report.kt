@@ -46,6 +46,7 @@ import com.voleybolveveleybol.volleystat.model.MatchReport
 import com.voleybolveveleybol.volleystat.model.Player
 import com.voleybolveveleybol.volleystat.model.StatValue
 import com.voleybolveveleybol.volleystat.ui.components.DemoBanner
+import com.voleybolveveleybol.volleystat.ui.components.DemoTag
 import com.voleybolveveleybol.volleystat.ui.components.FactRow
 import com.voleybolveveleybol.volleystat.ui.components.ListRow
 import com.voleybolveveleybol.volleystat.ui.components.NotYetCard
@@ -60,7 +61,6 @@ import com.voleybolveveleybol.volleystat.ui.components.Tone
 import com.voleybolveveleybol.volleystat.ui.components.VsCard
 import com.voleybolveveleybol.volleystat.ui.components.dashedOutline
 import com.voleybolveveleybol.volleystat.ui.theme.Dimens
-import com.voleybolveveleybol.volleystat.ui.theme.LocalVsColors
 
 /**
  * A reported number in one of its three honest forms: measured, a lower bound (marked with a
@@ -150,13 +150,7 @@ private fun SectionHeader(text: String, demo: Boolean = false) {
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text(text, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.weight(1f).semantics { heading() })
-        if (demo) {
-            val extra = LocalVsColors.current
-            Text(
-                stringResource(R.string.status_demo), style = MaterialTheme.typography.labelMedium, color = extra.onCautionContainer,
-                modifier = Modifier.background(extra.cautionContainer, MaterialTheme.shapes.small).padding(horizontal = 8.dp, vertical = 2.dp),
-            )
-        }
+        if (demo) DemoTag()
     }
 }
 

@@ -38,13 +38,16 @@ data class UploadTicket(val uploadId: String, val nextOffset: Long, val chunkSiz
 data class UploadStatus(val nextOffset: Long, val status: String, val videoId: String?)
 
 /** Blocking client for the local development API. Call it off the main thread. */
-class ApiClient(private val baseUrl: String) {
+class ApiClient(
+    private val baseUrl: String,
+    /**
+     * How long the app waits for the answer to a correction, and for the list and the cards it
+     * reads right after one. The screen that sent the correction keeps the user until all three
+     * are there, so the wait is short: the server applies a correction in one small transaction.
+     */
+    val correctionTimeoutMs: Int = CORRECTION_TIMEOUT_MS,
+) {
     companion object {
-        /**
-         * How long the app waits for the answer to a correction, and for the list it reads right
-         * after one. The screen that sent the correction keeps the user until both are there, so
-         * the wait is short: the server applies a correction in one small transaction.
-         */
         const val CORRECTION_TIMEOUT_MS = 15_000
     }
 
@@ -114,8 +117,8 @@ class ApiClient(private val baseUrl: String) {
         null
     }
 
-    fun reviewCards(jobId: String, scope: String): ReviewDeck {
-        val json = request("GET", "/analyses/$jobId/review-cards?scope=$scope")
+    fun reviewCards(jobId: String, scope: String, timeoutMs: Int = 60_000): ReviewDeck {
+        val json = request("GET", "/analyses/$jobId/review-cards?scope=$scope", timeoutMs = timeoutMs)
         val position = json.getJSONObject("position")
         return ReviewDeck(json.getJSONArray("cards").objects().map(::parseCard), position.getInt("answered"), position.getInt("total"))
     }
@@ -153,12 +156,12 @@ class ApiClient(private val baseUrl: String) {
     /** Records the user's statement that the list holds every rally of the video. */
     fun confirmRallyList(jobId: String, listVersion: Int): AnalysisJob =
         parseJob(
-            request("POST", "/analyses/$jobId/rally-list/confirm", JSONObject().put("expectedListVersion", listVersion).toString().toByteArray(), timeoutMs = CORRECTION_TIMEOUT_MS)
+            request("POST", "/analyses/$jobId/rally-list/confirm", JSONObject().put("expectedListVersion", listVersion).toString().toByteArray(), timeoutMs = correctionTimeoutMs)
                 .getJSONObject("job")
         )
 
     private fun correction(path: String, body: JSONObject, listVersion: Int): Correction {
-        val json = request("POST", path, body.put("expectedListVersion", listVersion).toString().toByteArray(), timeoutMs = CORRECTION_TIMEOUT_MS)
+        val json = request("POST", path, body.put("expectedListVersion", listVersion).toString().toByteArray(), timeoutMs = correctionTimeoutMs)
         val removed = json.getJSONArray("removed")
         return Correction(json.getJSONArray("affected").objects().map(::parseRally), List(removed.length()) { removed.getString(it) }, parseJob(json.getJSONObject("job")))
     }

@@ -7,7 +7,7 @@
 - Kapsam amatör kapalı saha 6 × 6 maçıdır. Uygulama iki takımı da izler.
 - İlk analiz sunucuda, kayıtlı video üzerinde çalışır. Canlı analiz sonraki iştir.
 - Kullanıcı yalnız sistemin emin olamadığı kararları verir. Bugün eğitilmiş model yoktur, bu yüzden kullanıcı her rallinin kazananını kendisi seçer (önce inceleme akışı).
-- Bu kuralın tek istisnası ralli listesidir: Kullanıcı kaçan ralliyi ekler, birleşmiş ralliyi böler, iki parçayı birleştirir ve bir rallinin sınırını taşır. Kullanıcı sonra listeyi onaylar. Rapor ancak o zaman sayıları alt sınır işareti olmadan verir. Bu kesinlik kullanıcının beyanına dayanır ve sunucu onu doğrulayamaz (ADR-0114).
+- Bu kuralın tek istisnası ralli listesidir: Kullanıcı kaçan ralliyi ekler, birleşmiş ralliyi böler, iki parçayı birleştirir ve bir rallinin sınırını taşır. Kullanıcı sonra listeyi onaylar. Rapor ancak o zaman set skorunu ve takım sayılarını alt sınır işareti olmadan verir. Sayı türü alanları, kullanıcı her sayının türünü seçene kadar alt sınır kalır. Bu kesinlik kullanıcının beyanına dayanır ve sunucu onu doğrulayamaz (ADR-0114).
 
 ## Akış
 
