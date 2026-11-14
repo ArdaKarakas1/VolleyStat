@@ -176,7 +176,7 @@
     <string name="check_block_type">Sunucu bu video türünü kabul etmiyor. MP4 biçiminde bir video seç.</string>
     <string name="check_warn_portrait">Kamera videoyu dikey çekmiş. Sahanın tamamı kadraja girmeyebilir.</string>
     <string name="check_warn_resolution">Çözünürlük 720p altında. Top ve forma numaraları net görünmez.</string>
-    <string name="check_rights">Bu videoyu analiz için yükleme hakkım ve iznim var.</string>
+    <string name="check_rights">Bu videoyu yükleme hakkım var. Sahadaki oyuncular çekimi biliyor ve analiz için izin verdi.</string>
     <string name="check_training_note">Uygulama videoyu model eğitimi için göndermez.</string>
     <string name="check_provisional">Bu bilgiler yalnızca dosyanın özellikleridir. Analizin sonucunu göstermez.</string>
     <string name="check_no_server">Bu sürümde sunucu adresi tanımlı değil. Yükleme yalnızca geliştirme sürümünde çalışır.</string>
@@ -404,7 +404,7 @@
     <string name="privacy_server">Uygulama videoyu, takım adlarını ve maç bilgilerini yalnızca geliştirme bilgisayarındaki yerel sunucuya gönderir.</string>
     <string name="privacy_picker">Uygulama yalnızca senin seçtiğin videoyu okur ve depolama izni istemez.</string>
     <string name="privacy_training">Uygulama videoyu model eğitimi için göndermez.</string>
-    <string name="privacy_accounts">Sunucuda hesap sistemi yok. Sunucunun çalıştığı bilgisayarı kullanan herkes yüklediğin videoları görebilir. Gerçek oyuncuların videolarını ve telifli yayınları yükleme.</string>
+    <string name="privacy_accounts">Sunucuda hesap sistemi yok. Sunucunun çalıştığı bilgisayarı kullanan herkes yüklediğin videoları görebilir. Oyuncuların izin vermediği videoları ve telifli yayınları yükleme.</string>
     <string name="privacy_retention">Sunucu videoyu ve maç bilgilerini sen maçı silene kadar saklar.</string>
     <string name="privacy_delete">Sen maçı silince sunucu o maçın videosunu, analiz sonuçlarını, verdiğin kararları ve maç bilgilerini siler. Telefonundaki video dosyası kalır.</string>
     <string name="privacy_faces">Uygulama ve sunucu yüz tanımaz. Rapor bir sayıyı oyuncuya yalnızca sen forma numarasını seçince yazar.</string>
