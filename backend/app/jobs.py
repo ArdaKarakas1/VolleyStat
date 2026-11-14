@@ -154,6 +154,8 @@ def list_confirmed(job) -> bool:
 
 def job_payload(db, job) -> dict[str, Any]:
     rallies = db.execute("SELECT COUNT(*) FROM rallies WHERE job_id=?", (job["id"],)).fetchone()[0]
+    # The list changes with the user's corrections. What the analyzer proposed does not.
+    proposed = db.execute("SELECT COUNT(*) FROM rally_proposals WHERE job_id=?", (job["id"],)).fetchone()[0]
     # Only SCORE cards are counted: they alone decide between NEEDS_REVIEW and COMPLETE.
     total, still_open = db.execute(
         "SELECT COUNT(*), COALESCE(SUM(status='OPEN'), 0) FROM review_cards WHERE job_id=? AND question_type='RALLY_WINNER'",
@@ -170,7 +172,7 @@ def job_payload(db, job) -> dict[str, Any]:
         "state": job["state"], "stage": job["stage"], "progress": progress,
         "analyzer": analyzer_payload(job), "mock": is_mock(job),
         "failure": failure,
-        "counts": {"rallies": rallies, "reviewOpen": still_open, "reviewTotal": total},
+        "counts": {"rallies": rallies, "proposed": proposed, "reviewOpen": still_open, "reviewTotal": total},
         "rallyListVersion": job["rally_list_version"], "listConfirmed": list_confirmed(job),
         "createdAt": job["created_at"], "startedAt": job["started_at"], "finishedAt": job["finished_at"],
     }

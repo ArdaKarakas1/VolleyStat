@@ -67,7 +67,7 @@ Bir videonun aynı anda tek süren işi olur. `Idempotency-Key` başlığı iste
   "analyzer": {"id": "motion-baseline", "version": "0.2", "kind": "BASELINE"},
   "mock": false,
   "failure": null,
-  "counts": {"rallies": 0, "reviewOpen": 0, "reviewTotal": 0},
+  "counts": {"rallies": 0, "proposed": 0, "reviewOpen": 0, "reviewTotal": 0},
   "rallyListVersion": 0, "listConfirmed": false,
   "createdAt": "2026-11-12T21:40:00Z", "startedAt": "…", "finishedAt": null
 }
@@ -80,7 +80,8 @@ Bir videonun aynı anda tek süren işi olur. `Idempotency-Key` başlığı iste
 - `failure.code`: `ANALYZER_ERROR`, `VIDEO_UNREADABLE`, `NO_RALLIES_FOUND`, `JOB_TIMEOUT`.
 - İşçi tek süreçte arka plan iş parçacığıdır. Yarım kalan işi nabız (heartbeat) eskiyince yeniden kuyruğa alır.
 - İşçi kuyruktaki işi yalnızca `id`, `version` ve `kind` değerleri işle aynı olan analizörle çalıştırır. Sunucu başka bir analizörle yeniden başladıysa iş `ANALYZER_ERROR` koduyla düşer.
-- `rallyListVersion` ralli listesinin sürümüdür. Her ralli düzeltmesi ve her `RALLY_WINNER` kararı bu sayıyı bir artırır. `listConfirmed` kullanıcının listeyi bu sürümde eksiksiz ilan ettiğini söyler (bölüm 9).
+- `counts.rallies` listedeki ralli sayısıdır ve kullanıcının düzeltmeleriyle değişir. `counts.proposed` analizörün önerdiği ralli sayısıdır ve hiçbir düzeltme onu değiştirmez. İstemci "sunucu şu kadar ralli önerdi" diyeceği yerde `proposed` değerini kullanır.
+- `rallyListVersion` ralli listesinin sürümüdür. Her ralli düzeltmesi ve yanıtı değiştiren her `RALLY_WINNER` kararı bu sayıyı bir artırır. `listConfirmed` kullanıcının listeyi bu sürümde eksiksiz ilan ettiğini söyler (bölüm 9).
 - Aynı videonun yeni analiz işi kararsız ve düzeltmesiz başlar. Sunucu eski işin kararlarını ve düzeltmelerini yeni işe taşımaz.
 
 ## 4. Ralliler
@@ -145,9 +146,10 @@ Bir videonun aynı anda tek süren işi olur. `Idempotency-Key` başlığı iste
 - Aynı `idempotencyKey` aynı kart, aynı seçim ve aynı `expectedVersion` ile gelirse sunucu saklı yanıtı döner ve ikinci kayıt oluşturmaz. Aynı anahtar başka bir kart, seçim ya da `expectedVersion` ile gelirse sunucu `409 IDEMPOTENCY_KEY_REUSED` döner ve hiçbir şeyi değiştirmez. İstemci her karar için yeni bir anahtar üretir.
 - `422 INVALID_SELECTION`: Seçim kartın `options` listesinde yok.
 - Yanıtlanmış karta yeni karar verilebilir (düzeltme). Kazanan değişirse sunucu o rallinin `DETAIL` kartlarını ve yanıtlarını kaldırır.
-- `RALLY_WINNER` kartına verilen her karar ve o kartın her geri alınması `rallyListVersion` değerini bir artırır. Kullanıcının daha önce verdiği liste onayı böylece düşer (bölüm 9). `DETAIL` kararları bu sayıyı değiştirmez.
+- Kart zaten bu yanıtı taşıyorsa ve `expectedVersion` güncelse sunucu `200` döner, hiçbir şey yazmaz ve hiçbir sürümü artırmaz. `decisionId` `null` gelir. Kullanıcının seçili yanıta yeniden dokunması böylece liste onayını düşürmez.
+- `RALLY_WINNER` kartının yanıtını değiştiren her karar ve o kartın her geri alınması `rallyListVersion` değerini bir artırır. Kullanıcının daha önce verdiği liste onayı böylece düşer (bölüm 9). `DETAIL` kararları bu sayıyı değiştirmez.
 
-`POST /v1/review-cards/{cardId}/reopen` `{"expectedVersion": 2}` kartı `OPEN` durumuna alır (geri alma). Sunucu `200` ve `{"card": Card, "job": Job, "reportRevision": 5}` döner. Bu yanıt karar yanıtıyla aynı biçimdedir, yalnız `decisionId` taşımaz. `expectedVersion` eskiyse sunucu `409 REVIEW_STALE_VERSION` döner (`details.currentVersion`). Kart zaten `OPEN` ise ve `expectedVersion` güncelse sunucu `200` döner ve hiçbir şeyi değiştirmez. Sunucu her kararı ve geri almayı `review_decisions` tablosunda saklar: kart, önceki değer, yeni değer, zaman. Kayıt silinmez.
+`POST /v1/review-cards/{cardId}/reopen` `{"expectedVersion": 2}` kartı `OPEN` durumuna alır (geri alma). Sunucu `200` ve `{"card": Card, "job": Job, "reportRevision": 5}` döner. Bu yanıt karar yanıtıyla aynı biçimdedir, yalnız `decisionId` taşımaz. `expectedVersion` eskiyse sunucu `409 REVIEW_STALE_VERSION` döner (`details.currentVersion`). Kart zaten `OPEN` ise ve `expectedVersion` güncelse sunucu `200` döner ve hiçbir şeyi değiştirmez. Sunucu her kararı ve geri almayı `review_decisions` tablosunda saklar: kart, önceki değer, yeni değer, zaman. Sunucu bu kaydı silmez.
 
 ## 6. Kanıt videosu
 
@@ -226,10 +228,10 @@ Ortak kurallar:
 
 - İş `NEEDS_REVIEW` ya da `COMPLETE` durumunda olmalıdır. Sunucu başka bir durumda `409 JOB_NOT_REVIEWABLE` döner (`details.state`).
 - `expectedListVersion` kullanıcının baktığı listenin sürümüdür. Liste o günden beri değiştiyse sunucu `409 RALLY_LIST_STALE` döner (`details.currentListVersion`) ve hiçbir şeyi değiştirmez. İstemci listeyi yeniden okur.
-- Düzeltme isteği yineleme anahtarı taşımaz. Yanıtı kaybolan bir isteği yineleyen istemci `409 RALLY_LIST_STALE` alır, çünkü ilk istek sürümü artırmıştır. İstemci listeyi yeniden okur ve düzeltmenin uygulandığını listeden görür. Aynı düzeltme böylece iki kez uygulanmaz. Sürümün ilerlemiş olması tek başına bunu göstermez, çünkü bir `RALLY_WINNER` kararı da sürümü artırır. İstemci listede kendi değişikliğini arar: eklediği aralığı, taşıdığı sınırı, kestiği noktayı ya da birleştirdiği başlangıcı. Yanıtı kaybolan bir liste onayını `listConfirmed` alanı gösterir.
+- Düzeltme isteği yineleme anahtarı taşımaz. Yanıtı kaybolan bir isteği yineleyen istemci `409 RALLY_LIST_STALE` alır, çünkü ilk istek sürümü artırmıştır. İstemci listeyi yeniden okur ve düzeltmenin uygulandığını listeden görür. Sunucu aynı düzeltmeyi böylece iki kez uygulamaz. Sürümün ilerlemiş olması tek başına bunu göstermez, çünkü bir `RALLY_WINNER` kararı da sürümü artırır. İstemci listede kendi değişikliğini arar: eklediği aralığı, taşıdığı sınırı, kestiği noktayı ya da birleştirdiği başlangıcı. Yanıtı kaybolan bir liste onayını `listConfirmed` alanı gösterir.
 - Aralık `0 ≤ startMs < endMs ≤ videoDurationMs` koşulunu sağlamalıdır, yoksa sunucu `422 INVALID_INTERVAL` döner. Aralık başka bir ralliyle çakışırsa sunucu `409 RALLY_OVERLAP` döner (`details.rallyId`). Sunucu en kısa ralli süresi dayatmaz.
 - Sunucu her düzeltmeden sonra rallileri yeniden numaralar, `rallyListVersion` ve `revision` değerlerini bir artırır ve işin durumunu yeniden kurar: Açık `RALLY_WINNER` kartı varsa `NEEDS_REVIEW`, yoksa `COMPLETE`.
-- Sunucu her düzeltmeyi `rally_corrections` tablosuna yazar: işlem, rallilerin önceki ve sonraki hâli, zaman. Kayıt silinmez. Bir düzeltmenin kaldırdığı ya da yeniden açtığı her yanıt `review_decisions` tablosunda o düzeltmenin kimliğini taşır.
+- Sunucu her düzeltmeyi `rally_corrections` tablosuna yazar: işlem, rallilerin önceki ve sonraki hâli, zaman. Sunucu bu kaydı silmez. Bir düzeltmenin kaldırdığı ya da yeniden açtığı her yanıt `review_decisions` tablosunda o düzeltmenin kimliğini taşır.
 
 Karar bir rallinin sonuna aittir, çünkü kanıt klibi rallinin sonunu gösterir. Düzeltmelerin kararlara etkisi bu kuraldan çıkar:
 
@@ -237,7 +239,7 @@ Karar bir rallinin sonuna aittir, çünkü kanıt klibi rallinin sonunu gösteri
 |---|---|
 | Ekleme | Yeni ralli `origin: "USER"` ve açık bir `RALLY_WINNER` kartıyla gelir. Öbür rallilerin kararları değişmez. |
 | Taşıma, yalnız baş değişti | Bütün kartlar ve yanıtlar kalır. |
-| Taşıma, son değişti | Sunucu `RALLY_WINNER` kartını yeniden açar, `DETAIL` kartlarını kaldırır ve kartın sürümünü artırır. Kart açık olsa bile sürümü artar. Eski klibi gösteren bir ekranın kararı böylece `409 REVIEW_STALE_VERSION` alır. |
+| Taşıma, son değişti | Sunucu `RALLY_WINNER` kartını yeniden açar, `DETAIL` kartlarını kaldırır ve kartın sürümünü artırır. Kart açık olsa bile sürümü artar. Eski klibi gösteren bir ekranın kararı böylece `409 REVIEW_STALE_VERSION` alır. Sunucu rallinin kazanan önerisini ve güven değerini de kaldırır (`proposedWinner: "UNKNOWN"`, `confidence: null`, kartta `suggestedValue: null`), çünkü hiçbir analizör yeni sonu görmedi. Analizörün ilk önerisi `rally_proposals` tablosunda kalır. |
 | Taşıma, hiçbir şey değişmedi | Sunucu `200` döner, hiçbir şey yazmaz ve hiçbir sürümü artırmaz. `correctionId` `null` gelir. |
 | Bölme | Sonraki parça rallinin kimliğini, önerisini, kartlarını ve yanıtlarını korur, çünkü sonu değişmedi. Önceki parça yeni bir `USER` rallidir ve açık bir kartla gelir. `atMs` rallinin içinde değilse sunucu `422 SPLIT_POINT_OUTSIDE` döner. |
 | Birleştirme | Sonraki ralli kalır ve yanıtlarını korur. Başı önceki rallinin başına gider. Sunucu önceki ralliyi ve kartlarını kaldırır ve o rallinin yanıtlarını denetim kaydına `REMOVED` olarak yazar. Kalan ralli `REJECTED` ise sunucu onun `RALLY_WINNER` kartını yeniden açar, çünkü kullanıcı "ralli değil" dediği klibi bir rallinin sonu yaptı. İlk rallide sunucu `409 NO_PREVIOUS_RALLY` döner. |
@@ -247,7 +249,7 @@ Liste onayı:
 - Onay kullanıcının beyanıdır: "Bu liste videodaki bütün rallileri içeriyor." Sunucu bu beyanı doğrulayamaz ve yalnızca kaydeder.
 - Sunucu onayı ancak her rallinin kazananı belliyken kabul eder. Açık `RALLY_WINNER` kartı, `UNRESOLVED` ralli ya da hiç `VERIFIED` ralli yoksa sunucu `409 LIST_NOT_READY` döner (`details.open`, `details.unresolved`, `details.verified`).
 - Sunucu deneme analizörünün işinde onayı reddeder (`409 MOCK_LIST_NOT_CONFIRMABLE`). O işin aralıkları uydurmadır ve kesin bir skor üretemez.
-- Onay verildiği liste sürümüne bağlıdır. Sonraki her düzeltme ve her `RALLY_WINNER` kararı sürümü artırır ve onayı düşürür. Sunucu onayı geri alan ayrı bir uç sunmaz.
+- Onay, kullanıcının onu verdiği liste sürümüne bağlıdır. Sonraki her düzeltme ve yanıtı değiştiren her `RALLY_WINNER` kararı sürümü artırır ve onayı düşürür. Sunucu onayı geri alan ayrı bir uç sunmaz.
 - Aynı sürümde yinelenen onay `200` döner ve hiçbir şey yazmaz.
 - Onaydan sonra rapor `ralliesMayBeMissing: false` taşır ve bütün kazananlar belliyse sayılar `MEASURED` olur (bölüm 7).
 

@@ -3,6 +3,7 @@
 The rallies come from a scripted analyzer over a synthetic one-minute test pattern. The times,
 the decisions and the scores are made up by the tests and describe no real match.
 """
+import json
 import re
 import sqlite3
 
@@ -155,6 +156,17 @@ def test_the_rally_list_carries_the_set_scores_that_the_user_is_asked_to_check(m
     assert found["sets"] == report_of(client, job_id)["score"]["sets"]
 
 
+def test_the_job_tells_how_many_rallies_the_analyzer_proposed_apart_from_how_many_the_list_holds(match):
+    client, job_id, _ = match
+    assert job_of(client, job_id)["counts"] == {"rallies": 4, "proposed": 4, "reviewOpen": 4, "reviewTotal": 4}
+    assert add(client, job_id, 10_000, 13_000).status_code == 201
+    # The user made the fifth one. A screen that says what the server proposed must not count it.
+    assert job_of(client, job_id)["counts"] == {"rallies": 5, "proposed": 4, "reviewOpen": 5, "reviewTotal": 5}
+    assert merge_previous(client, job_id, 5).status_code == 200
+    assert merge_previous(client, job_id, 4).status_code == 200
+    assert job_of(client, job_id)["counts"] == {"rallies": 3, "proposed": 4, "reviewOpen": 3, "reviewTotal": 3}
+
+
 # --- add ------------------------------------------------------------------------------------
 
 
@@ -179,7 +191,7 @@ def test_a_missed_rally_is_added_in_time_order_with_an_open_winner_card(match):
     assert (card["clipStartMs"], card["clipEndMs"], card["suggestedValue"]) == (10_000, 15_000, None)
     job = answer_body["job"]
     assert (job["state"], job["counts"], job["rallyListVersion"]) == (
-        "NEEDS_REVIEW", {"rallies": 5, "reviewOpen": 5, "reviewTotal": 5}, 1)
+        "NEEDS_REVIEW", {"rallies": 5, "proposed": 4, "reviewOpen": 5, "reviewTotal": 5}, 1)
     record = corrections(storage)[-1]
     assert (record["id"], record["operation"], record["rally_id"], record["list_version_after"]) == (
         answer_body["correctionId"], "ADD", new["id"], 1)
@@ -514,6 +526,29 @@ def test_a_confirmation_lapses_when_a_winner_or_the_list_changes_but_not_on_a_de
     assert not confirmed()
 
 
+def test_a_decision_that_repeats_the_stored_answer_changes_nothing_and_keeps_the_confirmation(match):
+    client, job_id, storage = match
+    answer_all(client, job_id, ["HOME", "AWAY", "HOME", "AWAY"])
+    assert confirm(client, job_id).status_code == 200
+    card = card_of(client, job_id, 2)
+    before = (job_of(client, job_id), revision(storage, job_id), len(audit(storage)))
+
+    # The user opens the review again and taps the answer that is already there.
+    for key in (None, "same-answer-key"):
+        again = client.post(f"/v1/review-cards/{card['id']}/decisions",
+                            json={"selection": "AWAY", "expectedVersion": card["version"], "idempotencyKey": key})
+        assert again.status_code == 200, again.text
+        assert (again.json()["decisionId"], again.json()["card"]) == (None, card)
+    assert (job_of(client, job_id), revision(storage, job_id), len(audit(storage))) == before
+    assert job_of(client, job_id)["listConfirmed"] is True
+
+    # A stale request is still refused, and an answer that does change takes the confirmation away.
+    stale = client.post(f"/v1/review-cards/{card['id']}/decisions", json={"selection": "AWAY", "expectedVersion": card["version"] - 1})
+    assert (stale.status_code, code(stale)) == (409, "REVIEW_STALE_VERSION")
+    decide(client, card, "HOME")
+    assert job_of(client, job_id)["listConfirmed"] is False
+
+
 def test_the_list_of_a_demo_job_can_not_be_confirmed(storage, make_clip):
     analyzer = ScriptedAnalyzer(result=[RallyProposal(start, end, uncertainty_reasons=("MOCK_DATA",)) for start, end in SPANS],
                                 info=AnalyzerInfo("scripted-demo", "t1", MOCK))
@@ -574,6 +609,29 @@ def test_the_report_says_how_many_corrections_shaped_its_intervals(match):
     assert corrected() == 4, "a confirmation changes no interval"
 
 
+def test_a_moved_end_takes_the_suggestion_of_the_analyzer_off_the_card(storage, make_clip):
+    model = ScriptedAnalyzer(result=[RallyProposal(start, end, proposed_winner="HOME", confidence=0.9) for start, end in SPANS],
+                             info=AnalyzerInfo("scripted-model", "t1", MODEL))
+    with serve(storage, model) as client:
+        job_id = start_job(client, make_clip)
+        assert card_of(client, job_id, 2)["suggestedValue"] == "HOME"
+
+        # A moved start leaves the end the analyzer looked at, so its suggestion still belongs to the clip.
+        assert move(client, job_id, 2, 14_000, 24_000).status_code == 200
+        assert card_of(client, job_id, 2)["suggestedValue"] == "HOME"
+
+        # A moved end is an end no analyzer judged. Its suggestion and its confidence do not carry over.
+        assert move(client, job_id, 2, 14_000, 27_000).status_code == 200
+        moved = rally(client, job_id, 2)
+        assert (card_of(client, job_id, 2)["suggestedValue"], moved["proposedWinner"], moved["confidence"]) == (None, "UNKNOWN", None)
+        # A split and a merge keep the end of the rally they keep, and with it the suggestion.
+        assert split(client, job_id, 3, 35_000).status_code == 200
+        assert merge_previous(client, job_id, 4).status_code == 200
+        assert card_of(client, job_id, 3)["suggestedValue"] == "HOME"
+    # What the analyzer proposed stays on record as it was.
+    assert [(row["proposed_winner"], row["confidence"]) for row in rows(storage, "SELECT * FROM rally_proposals ORDER BY start_ms")] == [("HOME", 0.9)] * 4
+
+
 def test_a_measured_model_does_not_make_its_own_list_complete(storage, make_clip):
     model = ScriptedAnalyzer(result=[RallyProposal(start, end, proposed_winner="HOME", confidence=0.9) for start, end in SPANS],
                              info=AnalyzerInfo("scripted-model", "t1", MODEL))
@@ -617,6 +675,96 @@ def test_the_proposals_stay_as_the_analyzer_made_them_whatever_the_user_corrects
     assert proposed() == original
 
 
+def test_every_correction_records_the_rallies_as_they_were_and_as_it_left_them(match):
+    client, job_id, storage = match
+    answer(client, job_id, 2, "AWAY")
+
+    def record():
+        row = corrections(storage)[-1]
+        picture = lambda side: [(item["id"], item["startMs"], item["endMs"], item["status"], item["winner"]) for item in json.loads(row[side])]
+        return row["operation"], picture("before_json"), picture("after_json")
+
+    made = add(client, job_id, 10_000, 13_000).json()["affected"][0]["id"]
+    assert record() == ("ADD", [], [(made, 10_000, 13_000, "PROPOSED", None)])
+
+    # The answered rally is now the third one. Its end moves, so its answer goes.
+    answered = rally(client, job_id, 3)["id"]
+    assert move(client, job_id, 3, 15_000, 26_000).status_code == 200
+    assert record() == ("MOVE", [(answered, 15_000, 24_000, "VERIFIED", "AWAY")], [(answered, 15_000, 26_000, "PROPOSED", None)])
+
+    whole = rally(client, job_id, 4)["id"]
+    earlier = split(client, job_id, 4, 35_000).json()["affected"][0]["id"]
+    assert record() == ("SPLIT", [(whole, 30_000, 41_000, "PROPOSED", None)],
+                        [(earlier, 30_000, 35_000, "PROPOSED", None), (whole, 35_000, 41_000, "PROPOSED", None)])
+
+    assert merge_previous(client, job_id, 5).status_code == 200
+    assert record() == ("MERGE_PREVIOUS", [(earlier, 30_000, 35_000, "PROPOSED", None), (whole, 35_000, 41_000, "PROPOSED", None)],
+                        [(whole, 30_000, 41_000, "PROPOSED", None)])
+    # A snapshot also says where a rally came from: the analyzer's rally names its proposal, the user's rally names none.
+    first = json.loads(corrections(storage)[0]["after_json"])[0]
+    moved = json.loads(corrections(storage)[1]["after_json"])[0]
+    assert first["proposalId"] is None and moved["proposalId"] == rows(storage, "SELECT proposal_id FROM rallies WHERE id=?", answered)[0]["proposal_id"]
+
+
+def test_a_merge_leaves_an_unsure_answer_of_the_rally_it_keeps_alone(match):
+    client, job_id, storage = match
+    answer(client, job_id, 2, "UNSURE")
+    version_before = card_of(client, job_id, 2)["version"]
+    assert merge_previous(client, job_id, 2).status_code == 200
+    # "Not sure" was said about the end of this rally, and the end did not move. Only "not a rally" is taken back.
+    kept = card_of(client, job_id, 1)
+    assert (rally(client, job_id, 1)["status"], kept["answer"], kept["version"]) == ("UNRESOLVED", "UNSURE", version_before)
+
+
+def test_a_split_keeps_the_answer_on_the_later_part_whatever_it_was(match):
+    client, job_id, _ = match
+    answer(client, job_id, 2, "NOT_A_RALLY")
+    assert split(client, job_id, 2, 20_000).status_code == 200
+    earlier, later = rally(client, job_id, 2), rally(client, job_id, 3)
+    assert (earlier["status"], earlier["origin"], later["status"], later["origin"]) == ("PROPOSED", "USER", "REJECTED", "ANALYZER")
+    assert (card_of(client, job_id, 2)["status"], card_of(client, job_id, 3)["answer"]) == ("OPEN", "NOT_A_RALLY")
+
+
+@pytest.mark.parametrize("given", ["NOT_A_RALLY", "UNSURE"])
+def test_a_moved_end_asks_again_about_a_rally_the_user_did_not_count(match, given):
+    client, job_id, storage = match
+    answer(client, job_id, 2, given)
+    assert move(client, job_id, 2, 15_000, 26_000).status_code == 200
+    assert (rally(client, job_id, 2)["status"], card_of(client, job_id, 2)["status"]) == ("PROPOSED", "OPEN")
+    last = audit(storage)[-1]
+    assert (last["action"], last["previous_value"], last["new_value"], last["correction_id"]) == ("REOPEN", given, None, corrections(storage)[-1]["id"])
+
+
+def test_a_rally_moved_past_another_one_is_numbered_by_where_it_is_now(match):
+    client, job_id, _ = match
+    answer(client, job_id, 1, "HOME")
+    first = rally(client, job_id, 1)["id"]
+    # Into the pause between the second and the third rally. Only the start of its clip changes with the end, so the answer goes.
+    assert move(client, job_id, 1, 25_000, 29_000).status_code == 200
+    assert spans(client, job_id) == [(15_000, 24_000), (25_000, 29_000), (30_000, 41_000), (48_000, 56_000)]
+    assert (rally(client, job_id, 2)["id"], card_of(client, job_id, 2)["rallyId"], card_of(client, job_id, 2)["status"]) == (first, first, "OPEN")
+
+
+def test_a_correction_that_fails_half_way_leaves_nothing_behind(match, monkeypatch):
+    client, job_id, storage = match
+    answer(client, job_id, 1, "HOME")
+
+    def state():
+        return listing(client, job_id), cards(client, job_id), len(audit(storage)), len(corrections(storage)), revision(storage, job_id)
+
+    before = state()
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("the disk is full")
+
+    # A merge has removed the earlier rally and written its answer to the audit by the time it sets the new interval.
+    monkeypatch.setattr("app.corrections._set_interval", broken)
+    with pytest.raises(RuntimeError):
+        merge_previous(client, job_id, 2)
+    monkeypatch.undo()
+    assert state() == before
+
+
 def test_proposals_and_corrections_can_not_be_rewritten_and_leave_only_with_their_match(match):
     client, job_id, storage = match
     assert add(client, job_id, 10_000, 13_000).status_code == 201
@@ -632,24 +780,37 @@ def test_proposals_and_corrections_can_not_be_rewritten_and_leave_only_with_thei
         assert rows(storage, f"SELECT 1 FROM {table}") == [], table
 
 
-def test_storage_written_before_corrections_existed_gets_its_proposals_at_the_next_start(storage, make_clip):
+def test_storage_written_by_version_0_4_gets_its_new_columns_and_its_proposals_at_the_next_start(storage, make_clip):
     with serve(storage, ScriptedAnalyzer(result=proposals(SPANS))) as client:
         job_id = start_job(client, make_clip)
         decide(client, card_of(client, job_id, 1), "HOME")
-    # Put the storage back to what the previous version wrote: rallies without a record of their proposal.
+    # Put the storage back to what version 0.4 wrote: no list version, no confirmation, no record of
+    # the proposals and no table of corrections.
     with sqlite3.connect(storage / "volleystat.sqlite3") as db:
-        db.execute("DROP TRIGGER rally_proposals_keep_rows")
-        db.execute("DELETE FROM rally_proposals")
-        db.execute("UPDATE rallies SET proposal_id=NULL")
+        db.executescript(
+            "DROP TABLE rally_corrections; DROP TABLE rally_proposals;"
+            "ALTER TABLE rallies DROP COLUMN proposal_id;"
+            "ALTER TABLE review_decisions DROP COLUMN correction_id;"
+            "ALTER TABLE analysis_jobs DROP COLUMN rally_list_version;"
+            "ALTER TABLE analysis_jobs DROP COLUMN list_confirmed_version;"
+            "ALTER TABLE analysis_jobs DROP COLUMN list_confirmed_at;"
+        )
 
     with TestClient(create_app(storage, analyzer="none")) as client:
         found = listing(client, job_id)
         assert [(item["startMs"], item["endMs"], item["origin"]) for item in found["rallies"]] == [(start, end, "ANALYZER") for start, end in SPANS]
+        assert (found["rallyListVersion"], found["listConfirmed"], found["rallies"][0]["winner"]) == (0, False, "HOME")
         assert report_of(client, job_id)["rallies"]["proposed"] == 4
+        # The storage of the old version takes corrections like any other.
+        assert add(client, job_id, 10_000, 13_000).status_code == 201
     assert [(row["start_ms"], row["end_ms"]) for row in rows(storage, "SELECT * FROM rally_proposals ORDER BY start_ms")] == list(SPANS)
-    # The start-up after that one finds nothing left to do.
-    with TestClient(create_app(storage, analyzer="none")):
+
+    # The start-up after that one finds nothing left to do. A rally the user made is not turned into a proposal.
+    with TestClient(create_app(storage, analyzer="none")) as client:
         assert len(rows(storage, "SELECT 1 FROM rally_proposals")) == 4
+        assert [item["origin"] for item in listing(client, job_id)["rallies"]] == ["ANALYZER", "USER", "ANALYZER", "ANALYZER", "ANALYZER"]
+        counts = report_of(client, job_id)["rallies"]
+        assert (counts["proposed"], counts["userCreated"]) == (4, 1)
 
 
 def test_an_analyzer_whose_rallies_overlap_fails_its_job(storage, make_clip):

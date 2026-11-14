@@ -252,6 +252,12 @@ def router(connect) -> APIRouter:
             _check_version(card, payload.expectedVersion)
             if payload.selection not in QUESTIONS[card["question_type"]][1]:
                 fail("INVALID_SELECTION", "Selection is not one of the options of this card", 422)
+            if card["answer"] == payload.selection:
+                # Nothing to decide: the card already holds this answer. No version moves and nothing is
+                # recorded, so a tap on the answer that is already there does not undo a confirmed list.
+                job = find_job(db, card["job_id"])
+                return {"decisionId": None, "card": card_payload(card, is_mock(job)), "job": job_payload(db, job),
+                        "reportRevision": job["revision"]}
             return _change(db, card, payload.selection, "DECISION", payload.idempotencyKey)
 
     @api.post("/v1/review-cards/{card_id}/reopen")

@@ -60,7 +60,7 @@ def test_a_requested_analysis_is_queued_and_can_be_read(storage, make_clip):
             "id": job["id"], "videoId": video["id"], "matchId": video["matchId"],
             "state": "QUEUED", "stage": None, "progress": None,
             "analyzer": SCRIPTED, "mock": False, "failure": None,
-            "counts": {"rallies": 0, "reviewOpen": 0, "reviewTotal": 0},
+            "counts": {"rallies": 0, "proposed": 0, "reviewOpen": 0, "reviewTotal": 0},
             "rallyListVersion": 0, "listConfirmed": False,
             "createdAt": job["createdAt"], "startedAt": None, "finishedAt": None,
         }
@@ -77,7 +77,7 @@ def test_a_finished_run_waits_for_review(storage, make_clip):
     with serve(storage, analyzer) as client:
         job = run_one(client, make_clip)
         assert (job["state"], job["stage"], job["progress"], job["failure"]) == ("NEEDS_REVIEW", None, None, None)
-        assert job["counts"] == {"rallies": len(SPANS), "reviewOpen": len(SPANS), "reviewTotal": len(SPANS)}
+        assert job["counts"] == {"rallies": len(SPANS), "proposed": len(SPANS), "reviewOpen": len(SPANS), "reviewTotal": len(SPANS)}
         assert TIMESTAMP.fullmatch(job["startedAt"]) and TIMESTAMP.fullmatch(job["finishedAt"])
         assert analyzer.calls == 1
         assert run_pending(client) == 0 and analyzer.calls == 1
@@ -261,7 +261,7 @@ def test_stage_and_measured_progress_are_visible_while_processing(storage, make_
         assert (running["state"], running["stage"]) == ("PROCESSING", "DETECTING_RALLIES")
         assert running["progress"] == {"done": 1200, "total": 5400, "unit": "FRAMES"}
         assert TIMESTAMP.fullmatch(running["startedAt"]) and running["finishedAt"] is None
-        assert running["counts"] == {"rallies": 0, "reviewOpen": 0, "reviewTotal": 0}
+        assert running["counts"] == {"rallies": 0, "proposed": 0, "reviewOpen": 0, "reviewTotal": 0}
         analyzer.release.set()
         done = wait_for_state(client, job["id"], "NEEDS_REVIEW")
         # The run is over: no stage is running and there is no progress left to show.
@@ -363,7 +363,7 @@ def test_an_analyzer_without_rallies_fails_the_job(storage, make_clip):
         job = run_one(client, make_clip)
         assert job["state"] == "FAILED"
         assert job["failure"] == {"code": "NO_RALLIES_FOUND", "message": "The analyzer found no rally in this video"}
-        assert job["counts"] == {"rallies": 0, "reviewOpen": 0, "reviewTotal": 0}
+        assert job["counts"] == {"rallies": 0, "proposed": 0, "reviewOpen": 0, "reviewTotal": 0}
         assert TIMESTAMP.fullmatch(job["finishedAt"])
         assert client.get(f"/v1/analyses/{job['id']}/rallies").json()["rallies"] == []
         # A failed run does not block the next request.
@@ -440,7 +440,7 @@ def test_output_that_breaks_the_analyzer_contract_fails_the_job_and_stores_nothi
     with serve(storage, ScriptedAnalyzer(result=result)) as client:
         job = run_one(client, make_clip)
         assert job["state"] == "FAILED" and job["failure"]["code"] == "ANALYZER_ERROR"
-        assert job["counts"] == {"rallies": 0, "reviewOpen": 0, "reviewTotal": 0}
+        assert job["counts"] == {"rallies": 0, "proposed": 0, "reviewOpen": 0, "reviewTotal": 0}
         assert stored_rows(storage) == {"rallies": 0, "review_cards": 0}
 
 

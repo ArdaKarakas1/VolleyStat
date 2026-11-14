@@ -190,6 +190,9 @@ def router(connect) -> APIRouter:
             _set_interval(db, rally, payload.startMs, payload.endMs, duration_ms)
             if payload.endMs != rally["end_ms"]:
                 _ask_winner_again(db, rally_id, correction_id)
+                # No analyzer looked at the new end, so its suggestion and its confidence do not carry over to
+                # the new clip. What it proposed stays in rally_proposals.
+                db.execute("UPDATE rallies SET proposed_winner='UNKNOWN', confidence=NULL WHERE id=?", (rally_id,))
             _renumber(db, job["id"])
             closing = _record(db, job, correction_id, MOVE, before, _snapshot(db, rally_id), rally_id=rally_id)
             return _changed(db, job, correction_id, (rally_id,), (), closing)

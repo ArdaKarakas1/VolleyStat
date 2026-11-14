@@ -112,7 +112,7 @@ def test_match_upload_demo_analysis_review_and_report(storage, make_clip, monkey
         assert (job["mock"], job["analyzer"], job["failure"]) == (True, DEMO, None)
         # The demo analyzer measures nothing, so it reports no stage and no progress.
         assert (job["stage"], job["progress"]) == (None, None)
-        assert job["counts"] == {"rallies": 3, "reviewOpen": 3, "reviewTotal": 3}
+        assert job["counts"] == {"rallies": 3, "proposed": 3, "reviewOpen": 3, "reviewTotal": 3}
 
         rallies = client.get(f"/v1/analyses/{job_id}/rallies").json()["rallies"]
         assert [(rally["startMs"], rally["endMs"]) for rally in rallies] == DEMO_SPANS
