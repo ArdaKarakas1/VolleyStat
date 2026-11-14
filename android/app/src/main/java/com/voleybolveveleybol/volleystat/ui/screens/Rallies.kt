@@ -166,8 +166,12 @@ fun RalliesScreen(
                     }
                 }
             }
+            if (analysis.ralliesLoad == RalliesLoad.OUTDATED) {
+                // The server answered, and not with a list this app can read. Asking again would get the same answer.
+                item(key = "outdated") { Notice(stringResource(R.string.rallies_outdated_server), Tone.NEGATIVE) }
+            }
             if (list == null) {
-                if (analysis.ralliesLoad != RalliesLoad.UNREACHABLE) {
+                if (analysis.ralliesLoad != RalliesLoad.UNREACHABLE && analysis.ralliesLoad != RalliesLoad.OUTDATED) {
                     item(key = "loading") {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
@@ -214,10 +218,21 @@ private fun SectionLine(text: String) {
 @Composable
 private fun ListState(list: RallyList, analysis: AnalysisUi, scoresDiffer: Boolean, onCheck: () -> Unit, onOpenReview: (Rally) -> Unit) {
     val waiting = list.rallies.filter { it.waits }
+    // An interval the user called "not a rally" stays on the list, and it is not counted as a rally anywhere.
+    val rejected = list.rallies.count { it.status == Rally.REJECTED }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         CorrectionProblemNotice(analysis)
-        Text(stringResource(R.string.rallies_count, list.rallies.size), style = MaterialTheme.typography.titleSmall)
+        Text(
+            if (rejected == 0) stringResource(R.string.rallies_count, list.rallies.size)
+            else stringResource(R.string.rallies_count_rejected, list.rallies.size - rejected, rejected),
+            style = MaterialTheme.typography.titleSmall,
+        )
         Text(stringResource(R.string.rallies_help), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        // The scores next to the rallies are counts of this list. Until the user has confirmed the list they
+        // are lower bounds like every number of the report, and the list says so where it shows them.
+        if (!list.confirmed && list.sets.isNotEmpty()) {
+            Text(stringResource(R.string.rallies_scores_lower), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         when {
             list.confirmed -> Notice(stringResource(R.string.rallies_confirmed), Tone.POSITIVE)
             analysis.job?.mock == true -> Notice(stringResource(R.string.rallies_demo), Tone.NEUTRAL)

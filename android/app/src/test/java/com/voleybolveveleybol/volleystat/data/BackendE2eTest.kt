@@ -254,6 +254,9 @@ class BackendE2eTest {
             assertFalse(report.listConfirmed)
             assertEquals("add, move, split and merge", 4, report.corrections)
             assertEquals(1, report.ralliesUserCreated)
+            // The list grew by the rally the user added. What the analyzer proposed is still the number it proposed.
+            assertEquals(listOf(first.rallies.size + 1, first.rallies.size), listOf(report.ralliesTotal, report.ralliesProposed))
+            assertEquals(listOf(first.rallies.size + 1, first.rallies.size), api.latestAnalysis(check.videoId)!!.let { listOf(it.rallies, it.proposed) })
             assertEquals(StatValue(list.rallies.size, StatValue.PARTIAL), report.home.points)
         } finally {
             api.deleteMatch(matchId)

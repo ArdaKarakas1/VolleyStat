@@ -20,7 +20,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
@@ -28,6 +27,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -113,7 +113,7 @@ private val tabs = listOf(
 fun VolleyStatApp(
     viewModel: AppViewModel = viewModel(),
     /** The video of the range editor. A test puts a stand-in here, because no player runs in a test. */
-    editorVideo: @Composable (url: String, startMs: Long, windowEndMs: () -> Long) -> EditorVideo = { url, startMs, windowEndMs -> rememberEditorVideo(url, startMs, windowEndMs) },
+    editorVideo: @Composable (url: String, startMs: Long) -> EditorVideo = { url, startMs -> rememberEditorVideo(url, startMs) },
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val analysis by viewModel.analysis.collectAsStateWithLifecycle()
@@ -213,18 +213,23 @@ fun VolleyStatApp(
             clip = { card -> ClipPlayer(url, card.clipStartMs, card.clipEndMs) },
             onRetry = { viewModel.retryReview(match.localId) },
             onFixRally = { card -> go(Routes.rally(match.localId, card.rallyId)) },
-            onOpenRallies = { go(Routes.rallies(match.localId)) },
+            // The list may already be below, when this review was opened from it. Going back to it keeps the
+            // way back short: review and list would otherwise pile up, two screens for every round.
+            onOpenRallies = { if (!nav.popBackStack(Routes.rallies(match.localId), inclusive = false)) go(Routes.rallies(match.localId)) },
         )
     }
 
     /** The range editor on whatever [resolve] finds on the current rally list. One applied correction closes it. */
     @Composable
-    fun EditorRoute(match: MatchRecord?, route: String, title: Int, resolve: (RallyList) -> EditTarget?) {
+    fun EditorRoute(entry: NavBackStackEntry, match: MatchRecord?, route: String, title: Int, resolve: (RallyList) -> EditTarget?) {
         val videoId = match?.check?.videoId
         if (match == null || videoId == null) {
             LaunchedEffect(Unit) { leave(route) }
             return
         }
+        // Closes this editor and no other one. The answer to a correction can arrive after the user has left
+        // and opened the editor of another rally, and that editor must stay.
+        val done: () -> Unit = { if (nav.currentBackStackEntry?.id == entry.id) nav.popBackStack() }
         val shown = rallyState(match)
         // Opened from the review, the list in memory is older than the answers the user just gave. It can also
         // turn old while this screen is open, when the answer to a winner decision arrives late.
@@ -235,22 +240,20 @@ fun VolleyStatApp(
         when {
             list == null -> RallyEditorWaiting(stringResource(title), shown.ralliesLoad, onRetry = { viewModel.retryRallies(match.localId) }, onBack = { nav.popBackStack() })
             // The rally or the pause is no longer on the list, so there is nothing left to edit here.
-            target == null -> LaunchedEffect(Unit) { leave(route) }
+            target == null -> LaunchedEffect(Unit) { done() }
             else -> {
                 val url = remember(videoId, state.settings.serverTarget) { viewModel.api().videoContentUrl(videoId) }
                 val rally = (target as? EditTarget.OfRally)?.rally
                 val startMs = remember { rally?.startMs ?: target.windowStartMs }
-                val window by rememberUpdatedState(target)
-                val done = { leave(route) }
                 // Opened from a review card, the question is the screen below. Opened from the list, it takes the editor's place.
                 val below = remember { nav.previousBackStackEntry?.destination?.route }
                 val fromReview = below == Routes.REVIEW || below == Routes.REVIEW_AT
                 RallyEditorScreen(
-                    target, shown, editorVideo(url, startMs) { window.windowEndMs },
-                    onMove = { start, end -> if (rally != null) viewModel.moveRally(rally.id, start, end, done) },
-                    onSplit = { at -> if (rally != null) viewModel.splitRally(rally.id, at, done) },
-                    onMerge = { if (rally != null) viewModel.mergeWithPrevious(rally.id, done) },
-                    onAdd = { start, end -> viewModel.addRally(start, end, done) },
+                    target, shown, editorVideo(url, startMs),
+                    onMove = { start, end -> if (rally != null) viewModel.moveRally(rally.id, start, end) { done() } },
+                    onSplit = { at -> if (rally != null) viewModel.splitRally(rally.id, at) { done() } },
+                    onMerge = { if (rally != null) viewModel.mergeWithPrevious(rally.id) { done() } },
+                    onAdd = { start, end -> viewModel.addRally(start, end) { done() } },
                     onBack = { nav.popBackStack() },
                     onChooseWinner = if (rally == null || fromReview) null else ({
                         nav.navigate(Routes.reviewAt(match.localId, rally.id)) { popUpTo(route) { inclusive = true }; launchSingleTop = true }
@@ -431,11 +434,11 @@ fun VolleyStatApp(
             }
             composable(Routes.RALLY) { entry ->
                 val rallyId = entry.arguments?.getString("rally")
-                EditorRoute(match(entry.arguments?.getString("id")), Routes.RALLY, R.string.editor_title_rally) { list -> rallyId?.let { rallyTarget(list, it) } }
+                EditorRoute(entry, match(entry.arguments?.getString("id")), Routes.RALLY, R.string.editor_title_rally) { list -> rallyId?.let { rallyTarget(list, it) } }
             }
             composable(Routes.GAP) { entry ->
                 val atMs = entry.arguments?.getString("at")?.toLongOrNull()
-                EditorRoute(match(entry.arguments?.getString("id")), Routes.GAP, R.string.editor_title_gap) { list -> atMs?.let { gapTarget(list, it) } }
+                EditorRoute(entry, match(entry.arguments?.getString("id")), Routes.GAP, R.string.editor_title_gap) { list -> atMs?.let { gapTarget(list, it) } }
             }
         }
     }

@@ -18,10 +18,8 @@ sealed interface EditTarget {
     val windowStartMs: Long
     val windowEndMs: Long
 
-    data class OfRally(val rally: Rally, override val windowStartMs: Long, override val windowEndMs: Long) : EditTarget {
-        /** The server merges a rally with the one numbered just before it. The first rally has none. */
-        val hasPrevious get() = rally.sequence > 1
-    }
+    /** [previous] is the rally numbered just before this one, which is the one the server merges it with. The first rally has none. */
+    data class OfRally(val rally: Rally, val previous: Rally?, override val windowStartMs: Long, override val windowEndMs: Long) : EditTarget
 
     data class OfGap(override val windowStartMs: Long, override val windowEndMs: Long) : EditTarget
 }
@@ -32,7 +30,8 @@ fun rallyTarget(list: RallyList, rallyId: String): EditTarget.OfRally? {
     val others = list.rallies.filter { it.id != rallyId }
     val freeFrom = others.filter { it.endMs <= rally.startMs }.maxOfOrNull { it.endMs } ?: 0L
     val freeUntil = others.filter { it.startMs >= rally.endMs }.minOfOrNull { it.startMs } ?: list.videoDurationMs
-    return EditTarget.OfRally(rally, maxOf(freeFrom, rally.startMs - EDITOR_REACH_MS), minOf(freeUntil, rally.endMs + EDITOR_REACH_MS))
+    val previous = list.rallies.firstOrNull { it.sequence == rally.sequence - 1 }
+    return EditTarget.OfRally(rally, previous, maxOf(freeFrom, rally.startMs - EDITOR_REACH_MS), minOf(freeUntil, rally.endMs + EDITOR_REACH_MS))
 }
 
 /** The time without a rally around [atMs], or null when a rally covers that moment or no time is left there. */

@@ -122,7 +122,7 @@ class RallyFixE2eTest {
     @Test fun ralliesAreMovedSplitMergedAndAddedThroughTheScreens() {
         app.setContent {
             // The real player seeks to the start it is given. The stand-in does the same.
-            VolleyStatTheme { VolleyStatApp(editorVideo = { _, startMs, _ -> remember { control.positionMs = startMs; control.video } }) }
+            VolleyStatTheme { VolleyStatApp(editorVideo = { _, startMs -> remember { control.positionMs = startMs; control.video } }) }
         }
         val api = ApiClient(url!!)
         app.onAllNodesWithText(text(R.string.nav_matches)).onFirst().performClick()

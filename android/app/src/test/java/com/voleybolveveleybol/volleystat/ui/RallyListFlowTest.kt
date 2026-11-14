@@ -202,7 +202,7 @@ class RallyListFlowTest {
     private fun openTheRallyList() {
         ViewModelProvider(app.activity)[AppViewModel::class.java].baseUrlOverride = server.url("/v1").toString()
         app.setContent {
-            VolleyStatTheme { VolleyStatApp(editorVideo = { _, startMs, _ -> remember { control.positionMs = startMs; control.video } }) }
+            VolleyStatTheme { VolleyStatApp(editorVideo = { _, startMs -> remember { control.positionMs = startMs; control.video } }) }
         }
         app.onAllNodesWithText("$HOME_TEAM - $AWAY_TEAM", substring = true).onFirst().performClick()
         waitFor(text(R.string.rallies_title))
@@ -271,6 +271,22 @@ class RallyListFlowTest {
         assertEquals(readsBefore + 1, requests.count { it == "GET /matches/server-1/report" })
         back()
         app.onNodeWithText(text(R.string.home_new_match_body)).assertIsDisplayed()
+    }
+
+    @Test fun theListBelowAReviewIsGoneBackToAndNotOpenedASecondTime() {
+        winners = listOf("HOME", null, "HOME")
+        openTheRallyList()
+        tap(R.string.action_go_review)
+        waitFor(text(R.string.review_position, 2, 3))
+        app.onNodeWithText(HOME_TEAM).performClick()
+        waitFor(text(R.string.review_empty_title))
+
+        // The end of the review offers the list, and the list is the screen below. A second list on top would
+        // add two screens to the way back for every round between list and review.
+        tap(R.string.rallies_title)
+        waitFor(text(R.string.rallies_count, 3))
+        back()
+        waitFor(text(R.string.report_review_video))
     }
 
     @Test fun aDecisionThatLandsAfterTheListWasReadBringsTheListOfNowToTheScreen() {

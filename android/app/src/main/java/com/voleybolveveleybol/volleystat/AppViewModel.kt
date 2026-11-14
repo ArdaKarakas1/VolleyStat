@@ -102,14 +102,17 @@ enum class ReviewProblem { STALE, SAVE_FAILED, LOAD_FAILED }
 
 enum class ReportLoad { LOADING, READY, NONE, UNREACHABLE }
 
-enum class RalliesLoad { LOADING, READY, UNREACHABLE }
+/** OUTDATED: the server answered, but not with a rally list this app can read. An older server answers that way. */
+enum class RalliesLoad { LOADING, READY, UNREACHABLE, OUTDATED }
 
 /**
  * Why a correction of the rally list did not go through. STALE: the list changed after the screen
  * read it, and the app has read it again. OVERLAP: the interval shares time with another rally.
  * OUTSIDE: the interval is empty, outside the video or outside the rally. NOT_READY: a rally still
  * has no winner. DEMO: the list of a demo analysis can not be confirmed. UNREACHABLE: no answer
- * came and the list on the server is unchanged. REFUSED: the server answered and changed nothing.
+ * came, and the list that was read afterwards does not show the correction or could not be read.
+ * The server may hold the correction all the same; the next attempt finds out. REFUSED: the
+ * server answered and changed nothing.
  */
 enum class CorrectionProblem { STALE, OVERLAP, OUTSIDE, NOT_READY, DEMO, UNREACHABLE, REFUSED }
 
@@ -145,6 +148,20 @@ data class AnalysisUi(
      * behind while the list that is read next does not.
      */
     val currentRallies: RallyList? get() = rallies?.takeIf { it.version >= (job?.rallyListVersion ?: 0) }
+
+    /**
+     * This state with [job] in it. Cards, a rally list and a correction on its way belong to one
+     * job: when the match gets another job, none of them describes it, and a list version of the
+     * old job says nothing about the list of the new one.
+     */
+    fun withJob(job: AnalysisJob?): AnalysisUi {
+        val load = if (job == null) JobLoad.NO_JOB else JobLoad.READY
+        if (job?.id == this.job?.id) return copy(job = job, jobLoad = load)
+        return copy(
+            job = job, jobLoad = load, deck = null, cursor = 0, saving = false, reviewProblem = null,
+            rallies = null, ralliesLoad = RalliesLoad.LOADING, correcting = false, correctionProblem = null, overlapsRally = null,
+        )
+    }
 }
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
@@ -403,7 +420,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         ?.takeIf { it.status == com.voleybolveveleybol.volleystat.model.VideoCheck.READY }?.videoId
 
     private fun publish(matchId: String, job: AnalysisJob?) {
-        _analysis.update { if (it.matchId == matchId) it.copy(job = job, jobLoad = if (job == null) JobLoad.NO_JOB else JobLoad.READY) else it }
+        _analysis.update { if (it.matchId == matchId) it.withJob(job) else it }
         rememberAnalysis(matchId, job?.summary)
     }
 
@@ -482,8 +499,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Loads the cards and puts the cursor on the first one that still needs an answer. With
-     * [keepCursor] the card on screen stays on screen, wherever the new cards put it. With
-     * [atRally] the winner question of that rally comes up, answered or not.
+     * [keepCursor] the card on screen stays on screen, wherever the new cards put it; when it is
+     * gone, the winner question of its rally takes its place, and when the rally is gone too, the
+     * first card that needs an answer. With [atRally] the winner question of that rally comes
+     * up, answered or not.
      */
     fun loadReview(keepCursor: Boolean = false, atRally: String? = null) {
         val ui = _analysis.value
@@ -497,11 +516,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 if (current.matchId != matchId || current.job?.id != jobId) return@update current
                 if (deck == null) return@update current.copy(reviewProblem = ReviewProblem.LOAD_FAILED)
                 fun indexOf(found: (ReviewCard) -> Boolean) = deck.cards.indexOfFirst(found).takeIf { it >= 0 }
+                val shown = current.card
                 val cursor = when {
                     atRally != null -> indexOf { it.rallyId == atRally && it.questionType == ReviewCard.RALLY_WINNER }
-                    // A correction renumbers the rallies, so the card is found by what it is and not by where it was.
-                    keepCursor -> current.card?.let { shown -> indexOf { it.id == shown.id } } ?: current.cursor.coerceIn(0, deck.cards.size)
-                    else -> null
+                    !keepCursor || current.deck == null -> null
+                    // Past the last card stays past the last card.
+                    shown == null -> deck.cards.size
+                    // A correction renumbers the rallies, so the card is found by what it is and not by where it
+                    // was. A card that left the deck gives way to the winner question of its own rally: the place
+                    // it stood at may now hold the card of another rally.
+                    else -> indexOf { it.id == shown.id } ?: indexOf { it.rallyId == shown.rallyId && it.questionType == ReviewCard.RALLY_WINNER }
                 } ?: indexOf { it.open } ?: deck.cards.size
                 current.copy(deck = deck, cursor = cursor, reviewProblem = null)
             }
@@ -580,10 +604,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val jobId = ui.job?.id?.takeIf { ui.matchId == matchId } ?: return
         _analysis.update { it.copy(ralliesLoad = RalliesLoad.LOADING) }
         viewModelScope.launch {
-            val list = withContext(Dispatchers.IO) { runCatching { api().rallies(jobId) }.getOrNull() }
+            val read = withContext(Dispatchers.IO) { runCatching { api().rallies(jobId) } }
+            val list = read.getOrNull()
+            // No answer and a refusal are both failures of the connection or of the request. An answer that came
+            // and can not be read as a list is another matter: asking again will not change it.
+            val failure = if (read.exceptionOrNull() is IOException) RalliesLoad.UNREACHABLE else RalliesLoad.OUTDATED
             _analysis.update { current ->
                 if (current.matchId != matchId || current.job?.id != jobId) return@update current
-                if (list == null) current.copy(ralliesLoad = RalliesLoad.UNREACHABLE) else current.copy(rallies = newer(list, current.rallies), ralliesLoad = RalliesLoad.READY)
+                if (list == null) current.copy(ralliesLoad = failure) else current.copy(rallies = newer(list, current.rallies), ralliesLoad = RalliesLoad.READY)
             }
         }
     }
@@ -597,46 +625,55 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     /** Two reads of the list can answer in the wrong order. The list never goes back to an older version. */
     private fun newer(read: RallyList, held: RallyList?) = if (held != null && held.version > read.version) held else read
 
-    // Each correction says what it leaves on the list. That is how the app recognises a
-    // correction whose answer was lost.
+    // Each correction says how it is recognised on a list: the ids of the rallies it leaves
+    // there, or null when the list does not show it. That is how the app finds a correction
+    // whose answer was lost.
 
     fun addRally(startMs: Long, endMs: Long, onDone: () -> Unit) =
-        correct(onDone, landed = { list -> list.rallies.any { !it.fromAnalyzer && it.startMs == startMs && it.endMs == endMs } }) { api, jobId, version ->
+        correct(onDone, found = { list -> list.rallies.filter { !it.fromAnalyzer && it.startMs == startMs && it.endMs == endMs }.map { it.id }.ifEmpty { null } }) { api, jobId, version ->
             api.addRally(jobId, startMs, endMs, version)
         }
 
     fun moveRally(rallyId: String, startMs: Long, endMs: Long, onDone: () -> Unit) =
-        correct(onDone, landed = { list -> list.rallies.any { it.id == rallyId && it.startMs == startMs && it.endMs == endMs } }) { api, _, version ->
+        correct(onDone, found = { list -> list.rallies.filter { it.id == rallyId && it.startMs == startMs && it.endMs == endMs }.map { it.id }.ifEmpty { null } }) { api, _, version ->
             api.moveRally(rallyId, startMs, endMs, version)
         }
 
-    /** The later part keeps the id of the rally, and it starts where the cut was made. */
+    /** The later part keeps the id of the rally and starts where the cut was made. The new part ends there. */
     fun splitRally(rallyId: String, atMs: Long, onDone: () -> Unit) =
-        correct(onDone, landed = { list -> list.rallies.any { it.id == rallyId && it.startMs == atMs } }) { api, _, version -> api.splitRally(rallyId, atMs, version) }
+        correct(onDone, found = { list ->
+            list.rallies.firstOrNull { it.id == rallyId && it.startMs == atMs }?.let { later -> listOfNotNull(list.rallies.firstOrNull { it.endMs == atMs }?.id, later.id) }
+        }) { api, _, version -> api.splitRally(rallyId, atMs, version) }
 
     /** The rally stays and starts where the rally before it started. */
     fun mergeWithPrevious(rallyId: String, onDone: () -> Unit) {
         val before = _analysis.value.rallies?.rallies.orEmpty()
         val startOfPrevious = before.firstOrNull { it.id == rallyId }?.let { rally -> before.firstOrNull { it.sequence == rally.sequence - 1 } }?.startMs
-        correct(onDone, landed = { list -> startOfPrevious != null && list.rallies.any { it.id == rallyId && it.startMs == startOfPrevious } }) { api, _, version ->
+        correct(onDone, found = { list -> list.rallies.filter { startOfPrevious != null && it.id == rallyId && it.startMs == startOfPrevious }.map { it.id }.ifEmpty { null } }) { api, _, version ->
             api.mergeWithPrevious(rallyId, version)
         }
     }
 
     /** The user's statement that the list holds every rally of the video, for the list that is on screen. */
     fun confirmRallyList(onDone: () -> Unit) =
-        correct(onDone, landed = { it.confirmed }) { api, jobId, version -> Correction(emptyList(), emptyList(), api.confirmRallyList(jobId, version)) }
+        correct(onDone, found = { list -> emptyList<String>().takeIf { list.confirmed } }) { api, jobId, version ->
+            Correction(emptyList(), emptyList(), api.confirmRallyList(jobId, version))
+        }
 
     fun clearCorrectionProblem() = _analysis.update { it.copy(correctionProblem = null, overlapsRally = null) }
 
     /**
      * Sends one correction made on the list that is on screen. Whatever the outcome, the list is
      * read again afterwards, so the screen shows what the server holds. A correction is never
-     * sent a second time by the app. When no answer came, the app looks for the correction on
-     * the list it reads next ([landed]). A list version that moved on would not tell: a winner
-     * decision that was still on its way moves it too.
+     * sent a second time by the app.
+     *
+     * When no answer came, the app looks for the correction on the list it reads next ([found]).
+     * A list version that moved on would not tell: a winner decision that was still on its way
+     * moves it too. The app looks the same way when the server says that the list has moved on:
+     * that is the answer to a second attempt whose first attempt got through unseen, and telling
+     * the user to redo the correction would apply it to another rally.
      */
-    private fun correct(onDone: () -> Unit, landed: (RallyList) -> Boolean, send: (ApiClient, String, Int) -> Correction) {
+    private fun correct(onDone: () -> Unit, found: (RallyList) -> List<String>?, send: (ApiClient, String, Int) -> Correction) {
         val ui = _analysis.value
         val matchId = ui.matchId ?: return
         val jobId = ui.job?.id ?: return
@@ -651,15 +688,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     Result.failure(error)
                 }
             }
-            sent.getOrNull()?.let { publish(matchId, it.job) }
             val reloaded = withContext(Dispatchers.IO) { runCatching { api().rallies(jobId) }.getOrNull() }
             val error = sent.exceptionOrNull()
-            // No answer, and the list shows what this correction would have left there: the server applied it.
-            val applied = sent.isSuccess || (error !is ApiException && reloaded != null && landed(reloaded))
+            val refusal = (error as? ApiException)?.code
+            val onList = if (sent.isFailure && (refusal == null || refusal == "RALLY_LIST_STALE")) reloaded?.let(found) else null
+            val applied = sent.isSuccess || onList != null
             val problem = when {
                 applied -> null
-                error !is ApiException -> CorrectionProblem.UNREACHABLE
-                else -> when (error.code) {
+                refusal == null -> CorrectionProblem.UNREACHABLE
+                // The list moved on and the list of now did not arrive: there is nothing to redo the correction on.
+                refusal == "RALLY_LIST_STALE" && reloaded == null -> CorrectionProblem.UNREACHABLE
+                else -> when (refusal) {
                     "RALLY_LIST_STALE" -> CorrectionProblem.STALE
                     "RALLY_OVERLAP" -> CorrectionProblem.OVERLAP
                     "INVALID_INTERVAL", "SPLIT_POINT_OUTSIDE" -> CorrectionProblem.OUTSIDE
@@ -669,13 +708,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
             val blocker = (error as? ApiException)?.takeIf { problem == CorrectionProblem.OVERLAP }?.details?.optString("rallyId")
-            val affected = sent.getOrNull()?.affected?.map { it.id }.orEmpty()
+            val affected = sent.getOrNull()?.affected?.map { it.id } ?: onList.orEmpty()
+            val job = sent.getOrNull()?.job
             val deck = if (applied) withContext(Dispatchers.IO) { runCatching { api().reviewCards(jobId, if (ui.detail) "ALL" else "SCORE") }.getOrNull() } else null
             var shown = false
             _analysis.update { current ->
                 if (current.matchId != matchId || current.job?.id != jobId) return@update current
                 shown = true
-                val rallies = reloaded?.let { newer(it, current.rallies) } ?: current.rallies
+                val rallies = when {
+                    reloaded != null -> newer(reloaded, current.rallies)
+                    // The server applied the correction and the list of now did not arrive. The list in
+                    // memory is the one from before the correction, so it is not shown as the list.
+                    applied -> null
+                    else -> current.rallies
+                }
                 val cursor = deck?.cards?.let { cards ->
                     fun indexOf(found: (ReviewCard) -> Boolean) = cards.indexOfFirst(found).takeIf { it >= 0 }
                     // The corrected rally asks its question first. When it has nothing to ask, the
@@ -685,15 +731,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         ?: current.card?.let { shown -> indexOf { it.id == shown.id } }
                         ?: indexOf { it.open } ?: cards.size
                 }
+                // The job of the answer comes to the screen together with its list. A job that ran ahead of
+                // the list would make the list look old, and the editor would show "loading" over its video.
                 current.copy(
-                    rallies = rallies, ralliesLoad = if (rallies == null) RalliesLoad.UNREACHABLE else RalliesLoad.READY,
+                    job = job ?: current.job,
+                    rallies = rallies, ralliesLoad = if (reloaded == null) RalliesLoad.UNREACHABLE else RalliesLoad.READY,
                     deck = deck ?: current.deck, cursor = cursor ?: current.cursor,
                     correcting = false, correctionProblem = problem,
                     overlapsRally = rallies?.rallies?.firstOrNull { it.id == blocker }?.sequence,
                 )
             }
+            if (shown && job != null) rememberAnalysis(matchId, job.summary)
             if (applied && shown) {
-                if (sent.isFailure) watch(matchId, startIfMissing = false, startNow = false)
+                if (job == null) watch(matchId, startIfMissing = false, startNow = false)
                 onDone()
             }
         }

@@ -180,6 +180,7 @@ class ApiClient(private val baseUrl: String) {
             mock = json.getBoolean("mock"),
             failureCode = json.optJSONObject("failure")?.getString("code"),
             rallies = counts.getInt("rallies"), reviewOpen = counts.getInt("reviewOpen"), reviewTotal = counts.getInt("reviewTotal"),
+            proposed = counts.optInt("proposed", counts.getInt("rallies")),
             rallyListVersion = json.optInt("rallyListVersion", 0), listConfirmed = json.optBoolean("listConfirmed", false),
         )
     }
@@ -206,7 +207,8 @@ class ApiClient(private val baseUrl: String) {
         return MatchReport(
             jobId = json.getString("jobId"), analyzerId = analyzer.getString("id"), analyzerKind = analyzer.getString("kind"),
             mock = json.getBoolean("mock"), verificationStatus = json.getString("verificationStatus"),
-            ralliesProposed = rallies.getInt("proposed"), ralliesVerified = rallies.getInt("verified"), ralliesRejected = rallies.getInt("rejected"),
+            ralliesProposed = rallies.getInt("proposed"), ralliesTotal = rallies.optInt("total", rallies.getInt("proposed")),
+            ralliesVerified = rallies.getInt("verified"), ralliesRejected = rallies.getInt("rejected"),
             ralliesUnresolved = rallies.getInt("unresolved"), ralliesOpen = rallies.getInt("open"),
             scoreStatus = score.getString("status"),
             setsWonHome = if (setsWon.isNull("home")) null else setsWon.getInt("home"),

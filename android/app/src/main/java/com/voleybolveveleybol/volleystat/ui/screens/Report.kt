@@ -257,8 +257,12 @@ fun ReportScreen(
                             )
                         }
                         Spacer(Modifier.height(4.dp))
+                        // The four rows below the gap add up to the first one. What the analyzer proposed is another
+                        // number once the user has merged or added rallies.
+                        FactRow(stringResource(R.string.report_rallies_listed), report.ralliesTotal.toString())
                         FactRow(stringResource(R.string.report_rallies_total), report.ralliesProposed.toString())
                         FactRow(stringResource(R.string.report_rallies_user), report.ralliesUserCreated.toString())
+                        Spacer(Modifier.height(4.dp))
                         FactRow(stringResource(R.string.report_rallies_verified), report.ralliesVerified.toString())
                         FactRow(stringResource(R.string.report_rallies_open), report.ralliesOpen.toString())
                         FactRow(stringResource(R.string.report_rallies_unresolved), report.ralliesUnresolved.toString())

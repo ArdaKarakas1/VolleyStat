@@ -1,9 +1,7 @@
 package com.voleybolveveleybol.volleystat.model
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /** Where the range editor may move. The times are invented and describe no match. */
@@ -16,14 +14,14 @@ class RallyEditingTest {
     @Test fun aRallyMayGrowIntoThePausesAroundItAndNeverIntoItsNeighbours() {
         val target = rallyTarget(four, "r2")!!
         assertEquals(listOf(9_000L, 30_000L), listOf(target.windowStartMs, target.windowEndMs))
-        assertTrue(target.hasPrevious)
+        assertEquals("the rally a merge would join it with", "r1", target.previous!!.id)
     }
 
     @Test fun theWindowOfARallyEndsHalfAMinuteFromItWhenNoNeighbourIsCloser() {
         val lonely = list(rally(1, 50_000, 60_000), durationMs = 600_000)
         val target = rallyTarget(lonely, "r1")!!
         assertEquals(listOf(50_000 - EDITOR_REACH_MS, 60_000 + EDITOR_REACH_MS), listOf(target.windowStartMs, target.windowEndMs))
-        assertFalse("the first rally has none before it to merge with", target.hasPrevious)
+        assertNull("the first rally has none before it to merge with", target.previous)
     }
 
     @Test fun theWindowOfARallyStaysInsideTheVideo() {

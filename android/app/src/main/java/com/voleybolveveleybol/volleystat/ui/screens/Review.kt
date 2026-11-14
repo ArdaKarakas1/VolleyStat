@@ -188,7 +188,8 @@ fun ReviewScreen(
                         stringResource(R.string.review_rally, card.rallySequence, formatClock(card.clipStartMs)), style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f),
                     )
-                    TextButton(onClick = { onFixRally(card) }, enabled = !analysis.saving) { Text(stringResource(R.string.review_fix_rally)) }
+                    // Not while an answer or a correction is on its way: the editor would open on a list that is about to change.
+                    TextButton(onClick = { onFixRally(card) }, enabled = !analysis.saving && !analysis.correcting) { Text(stringResource(R.string.review_fix_rally)) }
                 }
 
                 when (analysis.reviewProblem) {

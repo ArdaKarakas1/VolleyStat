@@ -607,10 +607,41 @@ class AppViewModelTest {
         await("the new cards") { vm.analysis.value.deck!!.cards.size == 4 }
         assertEquals("c3", vm.analysis.value.card!!.id)
 
-        // Its rally was merged away. The review does not jump to another rally's card on its own.
-        cards = deck(card("c1", 1, "HOME"), card("c2", 2))
+        // Its rally was merged away. The card that happens to stand at the old place belongs to another rally and
+        // is answered, so the review does not show it: it goes to the first card that still needs an answer.
+        cards = deck(card("c-new", 1, "HOME"), card("c1", 2, "HOME"), card("c2", 3, "AWAY"), card("c4", 4, "HOME"), card("c5", 5))
         vm.loadReview(keepCursor = true)
-        await("the shorter deck") { vm.analysis.value.deck!!.cards.size == 2 }
+        await("the deck without the card") { vm.analysis.value.deck!!.cards.none { it.id == "c3" } }
+        assertEquals("c5", vm.analysis.value.card!!.id)
+    }
+
+    @Test fun aDetailCardThatLeavesTheDeckGivesWayToTheWinnerQuestionOfItsOwnRally() {
+        fun detail(id: String, rally: String, sequence: Int) = card(id, sequence, "ATTACK").put("rallyId", rally).put("questionType", "TERMINAL_ACTION").put("scope", "DETAIL")
+        var cards = deck(card("c1", 1, "HOME"), card("c2", 2, "HOME"), detail("d2", "rally-c2", 2), card("c3", 3))
+        val vm = withCards { cards }
+        vm.loadReview()
+        await("the cards") { vm.analysis.value.deck != null }
+        vm.moveReview(-1)
+        assertEquals("d2", vm.analysis.value.card!!.id)
+
+        // The user turns the detail questions off while one of them is on screen.
+        cards = deck(card("c1", 1, "HOME"), card("c2", 2, "HOME"), card("c3", 3))
+        vm.loadReview(keepCursor = true)
+        await("the deck without detail cards") { vm.analysis.value.deck!!.cards.size == 3 }
+        assertEquals("the same rally stays on screen", "c2", vm.analysis.value.card!!.id)
+    }
+
+    @Test fun pastTheLastCardAReloadStaysPastTheLastCard() {
+        var cards = deck(card("c1", 1, "HOME"), card("c2", 2, "AWAY"))
+        val vm = withCards { cards }
+        vm.loadReview()
+        await("the cards") { vm.analysis.value.deck != null }
+        assertNull("every card is answered", vm.analysis.value.card)
+
+        // A rally was added. The end of the review does not turn into whichever card now stands at the old place.
+        cards = deck(card("c1", 1, "HOME"), card("c-new", 2), card("c2", 3, "AWAY"))
+        vm.loadReview(keepCursor = true)
+        await("the longer deck") { vm.analysis.value.deck!!.cards.size == 3 }
         assertNull(vm.analysis.value.card)
     }
 
@@ -703,5 +734,171 @@ class AppViewModelTest {
         vm.loadRallies("A")
         await("the list") { vm.analysis.value.rallies!!.version == 4 }
         assertEquals(RalliesLoad.READY, vm.analysis.value.ralliesLoad)
+    }
+
+    private val lost = { MockResponse().setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AFTER_REQUEST) }
+
+    @Test fun aCorrectionThatIsTriedAgainAfterItsFirstAttemptGotThroughIsDoneAndNotAskedForOnceMore() {
+        var merged = false
+        var listReadable = true
+        val vm = withRallyList {
+            if (merged) rallies(4, rally("r2", 1, 2_000, 24_000), rally("r3", 2, 30_000, 41_000))
+            else rallies(3, rally("r1", 1, 2_000, 9_000), rally("r2", 2, 15_000, 24_000), rally("r3", 3, 30_000, 41_000))
+        }
+        val list = script.getValue("GET /analyses/J/rallies")
+        on("GET /analyses/J/rallies") { request -> if (listReadable) list(request) else lost() }
+        on("POST /rallies/r2/merge-previous") {
+            if (merged) refuse(409, "RALLY_LIST_STALE") else { merged = true; lost() }
+        }
+
+        // The server applies the merge. Neither its answer nor the list that is read next arrives.
+        listReadable = false
+        vm.mergeWithPrevious("r2") { fail("the app does not know yet whether the merge got through") }
+        await("the failure") { vm.analysis.value.correctionProblem != null }
+        assertEquals(CorrectionProblem.UNREACHABLE, vm.analysis.value.correctionProblem)
+        assertEquals(RalliesLoad.UNREACHABLE, vm.analysis.value.ralliesLoad)
+
+        // The user taps again. The server says the list has moved on, and the list shows why: the merge is there.
+        // Asking the user to merge once more would take away the rally before, which is another rally now.
+        listReadable = true
+        var done = false
+        vm.mergeWithPrevious("r2") { done = true }
+        await("the second attempt") { done }
+        assertNull(vm.analysis.value.correctionProblem)
+        assertEquals(listOf("r2", "r3"), vm.analysis.value.rallies!!.rallies.map { it.id })
+        assertEquals(2, requests.count { it == "POST /rallies/r2/merge-previous" })
+    }
+
+    @Test fun aRefusalWhoseListCouldNotBeReadDoesNotClaimThatTheListWasRead() {
+        var listReadable = true
+        val vm = withRallyList { rallies(3, rally("r1", 1, 2_000, 9_000), rally("r2", 2, 15_000, 24_000)) }
+        val list = script.getValue("GET /analyses/J/rallies")
+        on("GET /analyses/J/rallies") { request -> if (listReadable) list(request) else lost() }
+        on("POST /rallies/r1/move") { refuse(409, "RALLY_LIST_STALE") }
+
+        listReadable = false
+        vm.moveRally("r1", 2_000, 10_000) { fail("the server refused") }
+        await("the refusal") { vm.analysis.value.correctionProblem != null }
+        // "The app read the list again, redo the correction" would be false: there is no new list to redo it on.
+        assertEquals(CorrectionProblem.UNREACHABLE, vm.analysis.value.correctionProblem)
+        assertEquals(RalliesLoad.UNREACHABLE, vm.analysis.value.ralliesLoad)
+        assertEquals(3, vm.analysis.value.rallies!!.version)
+    }
+
+    @Test fun anAppliedCorrectionWhoseListCouldNotBeReadLeavesNoOlderListOnScreen() {
+        var listReadable = true
+        val vm = withRallyList(job("J", "video-A", "COMPLETE", open = 0).put("rallyListVersion", 7)) { rallies(7, rally("r1", 1, 2_000, 9_000, "VERIFIED")) }
+        val list = script.getValue("GET /analyses/J/rallies")
+        on("GET /analyses/J/rallies") { request -> if (listReadable) list(request) else lost() }
+        on("POST /analyses/J/rally-list/confirm") {
+            ok(JSONObject().put("job", job("J", "video-A", "COMPLETE", open = 0).put("rallyListVersion", 7).put("listConfirmed", true)).put("reportRevision", 9))
+        }
+
+        listReadable = false
+        var done = false
+        vm.confirmRallyList { done = true }
+        await("the confirmation") { done }
+        // The list in memory says "not confirmed", and a confirmation moves no version, so nothing else would mark it as old.
+        assertTrue(vm.analysis.value.job!!.listConfirmed)
+        assertNull(vm.analysis.value.currentRallies)
+        assertEquals(RalliesLoad.UNREACHABLE, vm.analysis.value.ralliesLoad)
+    }
+
+    @Test fun aSplitThatIsFoundOnTheListBringsUpTheQuestionOfTheNewPart() {
+        var cut = false
+        val vm = withRallyList {
+            if (cut) rallies(4, rally("rally-c1", 1, 2_000, 9_000), rally("rally-new", 2, 15_000, 20_000).put("origin", "USER"), rally("rally-c2", 3, 20_000, 24_000))
+            else rallies(3, rally("rally-c1", 1, 2_000, 9_000), rally("rally-c2", 2, 15_000, 24_000))
+        }
+        on("GET /analyses/J/review-cards") {
+            if (cut) ok(deck(card("c1", 1, "HOME"), card("c-new", 2).put("rallyId", "rally-new"), card("c2", 3, "HOME")))
+            else ok(deck(card("c1", 1, "HOME"), card("c2", 2, "HOME")))
+        }
+        vm.loadReview()
+        await("the cards") { vm.analysis.value.deck != null }
+        vm.moveReview(-1)
+        assertEquals("c2", vm.analysis.value.card!!.id)
+        on("POST /rallies/rally-c2/split") { cut = true; lost() }
+
+        var done = false
+        vm.splitRally("rally-c2", 20_000) { done = true }
+        await("the split") { done }
+        // The answer was lost, so the app learned of the new part from the list. Its question still comes up first.
+        assertEquals("c-new", vm.analysis.value.card!!.id)
+    }
+
+    @Test fun theJobAndTheListOfACorrectionReachTheScreenTogether() {
+        var version = 3
+        val held = java.util.concurrent.CountDownLatch(1)
+        val vm = withRallyList(job("J", "video-A", "NEEDS_REVIEW").put("rallyListVersion", 3)) {
+            if (version == 3) rallies(3, rally("r1", 1, 2_000, 9_000)) else rallies(4, rally("r1", 1, 2_000, 10_000))
+        }
+        val list = script.getValue("GET /analyses/J/rallies")
+        on("GET /analyses/J/rallies") { request -> held.await(15, java.util.concurrent.TimeUnit.SECONDS); list(request) }
+        on("POST /rallies/r1/move") {
+            version = 4
+            ok(corrected(job("J", "video-A", "NEEDS_REVIEW").put("rallyListVersion", 4), rally("r1", 1, 2_000, 10_000)))
+        }
+
+        var done = false
+        vm.moveRally("r1", 2_000, 10_000) { done = true }
+        await("the answer of the server") { requests.contains("GET /analyses/J/rallies") }
+        settle()
+        // The answer is in and the list is still being read. A job that ran ahead of its list would make the editor
+        // show "loading" in place of the video until the list arrives.
+        assertTrue(vm.analysis.value.correcting)
+        assertEquals(3, vm.analysis.value.currentRallies!!.version)
+        held.countDown()
+        await("the correction") { done }
+        assertEquals(listOf(4, 4), listOf(vm.analysis.value.job!!.rallyListVersion, vm.analysis.value.currentRallies!!.version))
+    }
+
+    @Test fun aNewJobOfTheSameMatchStartsWithoutTheCardsAndTheListOfTheOldOne() {
+        var latest = job("J", "video-A", "NEEDS_REVIEW").put("rallyListVersion", 12)
+        on("GET /videos/video-A/analyses/latest") { ok(latest) }
+        on("GET /analyses/J/rallies") { ok(rallies(12, rally("old", 1, 2_000, 9_000))) }
+        on("GET /analyses/J/review-cards") { ok(deck(card("c1", 1), card("c2", 2))) }
+        on("GET /analyses/J2/rallies") { ok(rallies(0, rally("new", 1, 5_000, 8_000))) }
+        val vm = viewModel(StoredState(matches = listOf(accepted("A"))))
+        vm.watchAnalysis("A", startIfMissing = false)
+        await("the job") { vm.analysis.value.job != null }
+        vm.loadRallies("A")
+        vm.loadReview()
+        await("the list and the cards") { vm.analysis.value.rallies != null && vm.analysis.value.deck != null }
+
+        // The video was analysed again. Nothing the user saw of the first job describes the second one.
+        latest = job("J2", "video-A", "NEEDS_REVIEW").put("rallyListVersion", 0)
+        vm.watchAnalysis("A", startIfMissing = false)
+        await("the new job") { vm.analysis.value.job?.id == "J2" }
+        assertNull(vm.analysis.value.rallies)
+        assertNull(vm.analysis.value.deck)
+
+        // The list of the new job starts at version 0. The old list, at version 12, must not win over it.
+        vm.loadRallies("A")
+        await("the list of the new job") { vm.analysis.value.rallies != null }
+        assertEquals(listOf("new"), vm.analysis.value.rallies!!.rallies.map { it.id })
+    }
+
+    @Test fun anAnswerThatIsNotAListOfThisVersionIsToldApartFromNoAnswer() {
+        var answer: () -> MockResponse = { ok(JSONObject().put("rallies", JSONArray())) }
+        on("GET /videos/video-A/analyses/latest") { ok(job("J", "video-A", "NEEDS_REVIEW")) }
+        on("GET /analyses/J/rallies") { answer() }
+        val vm = viewModel(StoredState(matches = listOf(accepted("A"))))
+        vm.watchAnalysis("A", startIfMissing = false)
+        await("the job") { vm.analysis.value.job != null }
+
+        // A server from before the corrections sends the rallies and nothing else. Asking again changes nothing.
+        vm.loadRallies("A")
+        await("the answer") { vm.analysis.value.ralliesLoad != RalliesLoad.LOADING }
+        assertEquals(RalliesLoad.OUTDATED, vm.analysis.value.ralliesLoad)
+        assertNull(vm.analysis.value.rallies)
+
+        // No answer and a refusal are worth another try.
+        listOf(lost, { refuse(500, "INTERNAL_ERROR") }).forEach { failure ->
+            answer = failure
+            vm.loadRallies("A")
+            await("the failure") { vm.analysis.value.ralliesLoad != RalliesLoad.LOADING }
+            assertEquals(RalliesLoad.UNREACHABLE, vm.analysis.value.ralliesLoad)
+        }
     }
 }

@@ -14,7 +14,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -98,7 +97,11 @@ private class PlayerControl(val player: ExoPlayer) : VideoControl {
         private set
     override var playing by mutableStateOf(false)
         private set
+    override var ended by mutableStateOf(false)
+        private set
     override var failed by mutableStateOf(false)
+
+    override fun positionNow(): Long = player.currentPosition.also { positionMs = it }
 
     // Seek parameters are a part of Media3 that may change between releases. The library version is pinned.
     @OptIn(UnstableApi::class)
@@ -107,6 +110,7 @@ private class PlayerControl(val player: ExoPlayer) : VideoControl {
         player.setSeekParameters(if (exact) SeekParameters.EXACT else SeekParameters.CLOSEST_SYNC)
         player.seekTo(positionMs)
         this.positionMs = positionMs
+        ended = false
     }
 
     override fun play() {
@@ -121,15 +125,16 @@ private class PlayerControl(val player: ExoPlayer) : VideoControl {
 
     override fun speed(fast: Boolean) = player.setPlaybackSpeed(if (fast) 2f else 1f)
 
-    /** Reads where the picture stands. Playback ends where the window ends: what comes after belongs to another rally. */
-    fun follow(windowEndMs: Long) {
-        val at = player.currentPosition
-        if (playing && (at >= windowEndMs || player.playbackState == Player.STATE_ENDED)) {
-            pause()
-            if (at > windowEndMs) seekTo(windowEndMs, exact = true) else positionMs = at
-        } else {
-            positionMs = at
-        }
+    /** A failed player stands idle. Preparing it again reads the video from where the picture stood. */
+    override fun retry() {
+        failed = false
+        player.prepare()
+    }
+
+    /** Looks at the player. Where playback has to stop is the editor's rule, not the player's. */
+    fun look() {
+        positionMs = player.currentPosition
+        ended = player.playbackState == Player.STATE_ENDED
     }
 }
 
@@ -138,9 +143,8 @@ private class PlayerControl(val player: ExoPlayer) : VideoControl {
  * the whole file, so moving through it asks the server only for the bytes of the new position.
  */
 @Composable
-fun rememberEditorVideo(url: String, startMs: Long, windowEndMs: () -> Long): EditorVideo {
+fun rememberEditorVideo(url: String, startMs: Long): EditorVideo {
     val context = LocalContext.current
-    val end by rememberUpdatedState(windowEndMs)
     val control = remember(url) {
         PlayerControl(ExoPlayer.Builder(context).build().apply { volume = 0f }).apply {
             player.setMediaItem(MediaItem.fromUri(url))
@@ -163,7 +167,7 @@ fun rememberEditorVideo(url: String, startMs: Long, windowEndMs: () -> Long): Ed
     }
     LaunchedEffect(control) {
         while (true) {
-            control.follow(end())
+            control.look()
             delay(50)
         }
     }

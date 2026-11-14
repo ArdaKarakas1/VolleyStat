@@ -6,6 +6,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
@@ -194,6 +196,33 @@ class ScreenStatesTest {
         compose.onNodeWithText(text(R.string.report_source_corrected, "motion-baseline", "BASELINE")).performScrollTo().assertIsDisplayed()
         assertEquals(false, shown(text(R.string.report_source, "motion-baseline", "BASELINE")))
         compose.onNodeWithText(text(R.string.report_rallies_user)).performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun theReportTellsTheSizeOfTheListApartFromWhatTheAnalyzerProposed() {
+        // The analyzer proposed 41 rallies. After merges and additions the list holds 37 intervals.
+        show { ReportScreen(match, ReportLoad.READY, report("PARTIAL").copy(ralliesProposed = 41, ralliesTotal = 37), {}, {}, {}, {}, {}) }
+        compose.onNodeWithText(text(R.string.report_rallies_listed)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("37").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.report_rallies_total)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("41").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun theStatusScreenCountsWhatTheServerProposedAndNotWhatTheUserMade() {
+        // The list holds five rallies, and the user added one of them.
+        status(AnalysisUi("m1", JobLoad.READY, job(AnalysisSummary.NEEDS_REVIEW).copy(rallies = 5, proposed = 4)))
+        compose.onNodeWithText(text(R.string.stage_rallies_done, 4)).performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun noEditorOpensFromACardWhileACorrectionIsOnItsWay() {
+        val deck = ReviewDeck(listOf(card(1, null)), 0, 1)
+        var correcting by mutableStateOf(true)
+        show {
+            ReviewScreen(match, AnalysisUi("m1", JobLoad.READY, job(AnalysisSummary.NEEDS_REVIEW), deck, correcting = correcting), emptyList(), {}, {}, {}, {}, {}) { ClipPlaceholder() }
+        }
+        compose.onNodeWithText(text(R.string.review_fix_rally)).assertIsNotEnabled()
+        correcting = false
+        compose.waitForIdle()
+        compose.onNodeWithText(text(R.string.review_fix_rally)).assertIsEnabled()
     }
 
     @Test fun theReportLeadsToTheRallyList() {

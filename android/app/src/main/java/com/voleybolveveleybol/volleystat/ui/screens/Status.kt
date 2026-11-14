@@ -341,7 +341,7 @@ fun StatusScreen(
                             jobLoad == JobLoad.NO_ANALYZER -> stringResource(R.string.analysis_none_title)
                             job?.state == AnalysisSummary.QUEUED -> stringResource(R.string.stage_queue_waiting)
                             job?.state == AnalysisSummary.PROCESSING -> stringResource(R.string.stage_rallies_running)
-                            job?.state == AnalysisSummary.NEEDS_REVIEW || job?.state == AnalysisSummary.COMPLETE -> stringResource(R.string.stage_rallies_done, job.rallies)
+                            job?.state == AnalysisSummary.NEEDS_REVIEW || job?.state == AnalysisSummary.COMPLETE -> stringResource(R.string.stage_rallies_done, job.proposed)
                             else -> null
                         },
                         when {

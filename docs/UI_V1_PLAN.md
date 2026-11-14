@@ -165,7 +165,7 @@ Ekip bu bölümü 13 Kasım 2026'da, kodu yazdıktan sonra ekledi. Üstteki böl
 | Profil | "Bu sürümde neler var" listesi | "Çalışıyor" etiketi cihazda denenmemiş özellik için fazla iddialıydı. |
 | Rapor | Kararsız ralli uyarısı | Sunucu set skorunu kazananı belli olmayan ilk rallide durdurur. Ekran bunu söyler. |
 | Rapor | "Sayılar alt sınırdır" uyarısı | Analizör ralli kaçırabilir. Sunucu kullanıcı ralli listesini onaylayana kadar raporu `ralliesMayBeMissing` ile işaretler ve ekran bunu yazar. |
-| Ralli listesi ve ralli düzenleyici | UI Tasarım V1 paketinde olmayan iki ekran | Arda 14 Kasım 2026'da kullanıcının ralli listesini düzeltmesine izin verdi (ADR-0114). Ekranlar mevcut bileşenlerle kuruldu. |
+| Ralli listesi ve ralli düzenleyici | UI Tasarım V1 paketinde olmayan iki ekran | Arda 14 Kasım 2026'da kullanıcının ralli listesini düzeltmesine izin verdi (ADR-0114). Oturum ekranları mevcut bileşenlerle kurdu. |
 | Ralli düzenleyici | İşaret düğmeleri sabit durur, birleştirme düğmesi kayan bölümdedir | 320 dp telefonda dört sabit düğme konum çubuğunu ve adım düğmelerini ekranın dışına itiyordu. |
 | Ralli düzenleyici | Adım düğmesinin birimi büyük yazıda alt satıra iner | 1,5 kat yazıda "+0,2 sn" yazısı düğmeden taşıyordu. |
 | Yükleme sonrası gezinme | Uygulama analiz ekranında kalır | Cihaz testi şunu buldu: Kontrol ekranı yükleme başlayınca kullanıcıyı ana ekrana atıyordu ve analiz izlenmiyordu. |

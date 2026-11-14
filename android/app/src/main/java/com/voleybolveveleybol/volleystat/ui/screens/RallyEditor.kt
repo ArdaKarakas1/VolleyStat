@@ -24,13 +24,16 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -50,6 +53,7 @@ import com.voleybolveveleybol.volleystat.AnalysisUi
 import com.voleybolveveleybol.volleystat.R
 import com.voleybolveveleybol.volleystat.RalliesLoad
 import com.voleybolveveleybol.volleystat.model.EditTarget
+import com.voleybolveveleybol.volleystat.model.Rally
 import com.voleybolveveleybol.volleystat.ui.components.DemoBanner
 import com.voleybolveveleybol.volleystat.ui.components.Notice
 import com.voleybolveveleybol.volleystat.ui.components.PrimaryButton
@@ -63,18 +67,27 @@ import com.voleybolveveleybol.volleystat.ui.theme.LocalVsColors
 /** What the range editor needs from a video player. Screen tests steer the editor with a stand-in. */
 @Stable
 interface VideoControl {
-    /** Where the picture stands, in milliseconds of the video. */
+    /** Where the picture stood when the player was last looked at, in milliseconds of the video. */
     val positionMs: Long
 
     /** The user asked for playback, and it has not been stopped since. */
     val playing: Boolean
     val failed: Boolean
 
+    /** The video has played to its own end. That can lie a little before the length the server reports. */
+    val ended: Boolean
+
+    /** Where the picture stands at this instant. A mark is made with this, not with the last look. */
+    fun positionNow(): Long
+
     /** [exact] false shows the nearest key frame at once, for a finger that is still moving. */
     fun seekTo(positionMs: Long, exact: Boolean = true)
     fun play()
     fun pause()
     fun speed(fast: Boolean)
+
+    /** Tries the video once more after a failure, at the place where the picture stood. */
+    fun retry()
 }
 
 /** A video the range editor can steer, and the composable that shows its picture. */
@@ -84,11 +97,14 @@ class EditorVideo(val control: VideoControl, val picture: @Composable () -> Unit
 @Composable
 fun RallyEditorWaiting(title: String, load: RalliesLoad, onRetry: () -> Unit, onBack: () -> Unit) {
     FlowScaffold(title = title, onBack = onBack) {
-        if (load == RalliesLoad.UNREACHABLE) {
-            Notice(stringResource(R.string.rallies_load_failed), Tone.NEGATIVE)
-            SecondaryButton(stringResource(R.string.action_retry), onRetry)
-        } else {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        when (load) {
+            RalliesLoad.UNREACHABLE -> {
+                Notice(stringResource(R.string.rallies_load_failed), Tone.NEGATIVE)
+                SecondaryButton(stringResource(R.string.action_retry), onRetry)
+            }
+            // Asking again does not change what an older server answers, so there is no retry here.
+            RalliesLoad.OUTDATED -> Notice(stringResource(R.string.rallies_outdated_server), Tone.NEGATIVE)
+            else -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                 Text(stringResource(R.string.rallies_loading), style = MaterialTheme.typography.bodyMedium)
             }
@@ -98,9 +114,10 @@ fun RallyEditorWaiting(title: String, load: RalliesLoad, onRetry: () -> Unit, on
 
 /**
  * The range editor: the user moves through the part of the video around one rally, or through one
- * pause between two rallies, and marks where a rally starts and ends. Every mark is the moment
- * the picture shows. One correction goes to the server per tap, and the caller closes the screen
- * once the server has applied it.
+ * pause between two rallies, and marks where a rally starts and ends. A mark is the position of
+ * the player at the moment of the tap, which is the number the screen shows as "Konum". One
+ * correction goes to the server per tap, and the caller closes the screen once the server has
+ * applied it.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -127,13 +144,30 @@ fun RallyEditorScreen(
     // A start that the list has since given to another rally is no start any more.
     val markedStart = marked?.takeIf { it >= window.first && it < window.last }
     val rally = (target as? EditTarget.OfRally)?.rally
-    // Nothing is marked on a picture the user can not see, and nothing is sent while a correction is on its way.
+    val previous = (target as? EditTarget.OfRally)?.previous
+    // Nothing is marked while the video does not play at all, and nothing is sent while a correction is on its way.
     val usable = !analysis.correcting && !control.failed
+
+    /** The moment a mark is made at. The picture may have moved on since the screen last looked at the player. */
+    fun here() = (scrub ?: control.positionNow()).coerceIn(window)
 
     fun stand(atMs: Long) {
         control.pause()
         control.seekTo(atMs.coerceIn(window))
     }
+
+    // Playback ends where the window ends: what comes after belongs to another rally. It also ends
+    // where the video itself ends, which the player reaches a little before the length the server reports.
+    LaunchedEffect(control, window) {
+        snapshotFlow { control.positionMs to control.ended }.collect { (at, ended) ->
+            if (control.playing && (at >= window.last || ended)) {
+                control.pause()
+                if (at > window.last) control.seekTo(window.last)
+            }
+        }
+    }
+    // The speed belongs to the screen. A player that was built anew, after the theme changed for example, takes it over.
+    LaunchedEffect(control, fast) { control.speed(fast) }
 
     FlowScaffold(
         title = stringResource(if (rally != null) R.string.editor_title_rally else R.string.editor_title_gap), onBack = onBack,
@@ -141,16 +175,16 @@ fun RallyEditorScreen(
             if (rally != null) {
                 // The end comes first: the winner is judged on what the clip shows at the end of a rally.
                 PrimaryButton(
-                    stringResource(R.string.action_end_here), onClick = { control.pause(); onMove(rally.startMs, position) },
+                    stringResource(R.string.action_end_here), onClick = { control.pause(); onMove(rally.startMs, here()) },
                     enabled = usable && position > rally.startMs && position != rally.endMs,
                 )
                 Row(Modifier.height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     SecondaryButton(
-                        stringResource(R.string.action_start_here), onClick = { control.pause(); onMove(position, rally.endMs) },
+                        stringResource(R.string.action_start_here), onClick = { control.pause(); onMove(here(), rally.endMs) },
                         enabled = usable && position < rally.endMs && position != rally.startMs, modifier = Modifier.weight(1f).fillMaxHeight(),
                     )
                     SecondaryButton(
-                        stringResource(R.string.action_split_here), onClick = { control.pause(); onSplit(position) },
+                        stringResource(R.string.action_split_here), onClick = { control.pause(); onSplit(here()) },
                         enabled = usable && position > rally.startMs && position < rally.endMs, modifier = Modifier.weight(1f).fillMaxHeight(),
                     )
                 }
@@ -160,12 +194,12 @@ fun RallyEditorScreen(
                 val end = stringResource(R.string.action_rally_ended)
                 val canStart = usable && position < window.last && position != markedStart
                 if (markedStart == null) {
-                    PrimaryButton(start, onClick = { marked = position }, enabled = canStart)
+                    PrimaryButton(start, onClick = { marked = here() }, enabled = canStart)
                     SecondaryButton(end, onClick = {}, enabled = false)
                 } else {
                     // The video keeps running after the start mark, so the end can be marked as the rally ends.
-                    SecondaryButton(start, onClick = { marked = position }, enabled = canStart)
-                    PrimaryButton(end, onClick = { control.pause(); onAdd(markedStart, position) }, enabled = usable && position > markedStart)
+                    SecondaryButton(start, onClick = { marked = here() }, enabled = canStart)
+                    PrimaryButton(end, onClick = { control.pause(); onAdd(markedStart, here()) }, enabled = usable && position > markedStart)
                 }
             }
         },
@@ -176,7 +210,11 @@ fun RallyEditorScreen(
             contentAlignment = Alignment.Center,
         ) {
             if (control.failed) {
-                Text(stringResource(R.string.editor_video_failed), style = MaterialTheme.typography.bodyMedium, color = Color.White, textAlign = TextAlign.Center, modifier = Modifier.padding(16.dp))
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(16.dp)) {
+                    Text(stringResource(R.string.editor_video_failed), style = MaterialTheme.typography.bodyMedium, color = Color.White, textAlign = TextAlign.Center)
+                    // A short loss of the connection ends playback for good unless somebody asks for the video again.
+                    TextButton(onClick = { control.retry() }) { Text(stringResource(R.string.action_retry), color = Color.White) }
+                }
             } else {
                 video.picture()
             }
@@ -192,7 +230,7 @@ fun RallyEditorScreen(
                     )
                     Text(stringResource(R.string.editor_position, formatClockTenths(position)), style = MaterialTheme.typography.bodyMedium)
                 }
-                FilterChip(selected = fast, onClick = { fast = !fast; control.speed(fast) }, label = { Text(stringResource(R.string.editor_fast)) })
+                FilterChip(selected = fast, onClick = { fast = !fast }, label = { Text(stringResource(R.string.editor_fast)) })
             }
 
             val seekLabel = stringResource(R.string.editor_seek)
@@ -243,17 +281,21 @@ fun RallyEditorScreen(
                 StepButton(stringResource(R.string.editor_back_1), enabled = !control.failed && position > window.first) { stand(position - 1_000) }
                 StepButton(stringResource(R.string.editor_back_02), enabled = !control.failed && position > window.first) { stand(position - 200) }
                 val scheme = MaterialTheme.colorScheme
+                val canPlay = !control.failed
                 Surface(
                     onClick = {
                         if (control.playing) {
                             control.pause()
                         } else {
-                            // At the end of the window there is nothing left to play, so playback starts over.
-                            if (position >= window.last) control.seekTo(rally?.startMs ?: window.first)
+                            // At the end of the window, or of the video, there is nothing left to play, so playback starts over.
+                            if (position >= window.last || control.ended) control.seekTo(rally?.startMs ?: window.first)
                             control.play()
                         }
                     },
-                    enabled = !control.failed, shape = MaterialTheme.shapes.small, color = scheme.primary, contentColor = scheme.onPrimary,
+                    enabled = canPlay, shape = MaterialTheme.shapes.small,
+                    // A button that does nothing does not look like one that does.
+                    color = if (canPlay) scheme.primary else scheme.onSurface.copy(alpha = 0.12f),
+                    contentColor = if (canPlay) scheme.onPrimary else scheme.onSurface.copy(alpha = 0.38f),
                     modifier = Modifier.weight(1f).fillMaxHeight().heightIn(min = Dimens.touchTarget),
                 ) {
                     Box(contentAlignment = Alignment.Center) {
@@ -271,7 +313,7 @@ fun RallyEditorScreen(
         CorrectionProblemNotice(analysis)
         if (rally != null) {
             Text(stringResource(R.string.editor_end_note), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if ((target as EditTarget.OfRally).hasPrevious) {
+            if (previous != null) {
                 // Merging names no moment of the video, so it works without a picture too.
                 SecondaryButton(stringResource(R.string.action_merge_previous), onClick = { merging = true }, enabled = !analysis.correcting)
             }
@@ -283,10 +325,15 @@ fun RallyEditorScreen(
         }
     }
 
-    if (merging && rally != null) {
+    if (merging && rally != null && previous != null) {
+        // The dialog names every answer the merge takes away, and no answer that is not there.
+        val effects = listOfNotNull(
+            stringResource(R.string.merge_body, previous.sequence, rally.sequence),
+            stringResource(R.string.merge_body_previous_answer, previous.sequence).takeIf { previous.status != Rally.PROPOSED },
+            stringResource(R.string.merge_body_reopens, rally.sequence).takeIf { rally.status == Rally.REJECTED },
+        )
         ConfirmDialog(
-            title = stringResource(R.string.merge_title),
-            body = stringResource(R.string.merge_body, rally.sequence - 1, rally.sequence),
+            title = stringResource(R.string.merge_title), body = effects.joinToString(" "),
             confirm = stringResource(R.string.merge_confirm),
             onConfirm = { merging = false; control.pause(); onMerge() }, onDismiss = { merging = false },
         )

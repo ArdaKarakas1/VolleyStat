@@ -2,6 +2,7 @@ package com.voleybolveveleybol.volleystat.ui
 
 import android.content.Context
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
@@ -9,6 +10,7 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasScrollToNodeAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
+import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -125,7 +127,10 @@ class RallyScreensTest {
     @Test fun theListShowsEveryRallyWithItsOutcomeAndEveryPauseBetweenThem() {
         val taps = list(state(mixed))
 
-        compose.onNodeWithText(text(R.string.rallies_count, 4)).assertIsDisplayed()
+        // Three rallies and one interval the user called "not a rally": the head does not count that one as a rally.
+        compose.onNodeWithText(text(R.string.rallies_count_rejected, 3, 1)).assertIsDisplayed()
+        // The scores in the rows are counts of an unconfirmed list, and the list says what that makes them.
+        compose.onNodeWithText(text(R.string.rallies_scores_lower)).assertIsDisplayed()
         listOf(
             text(R.string.rallies_gap, "2 sn"), text(R.string.rallies_set_header, 1), "A Takımı", "1 - 0",
             text(R.string.rally_rejected), "B Takımı · ${text(R.string.rally_user_made)}", "1 - 1",
@@ -195,6 +200,22 @@ class RallyScreensTest {
         list(state(decided.copy(confirmed = true)))
         compose.onNodeWithText(text(R.string.rallies_confirmed)).assertIsDisplayed()
         assertFalse(shown(text(R.string.action_check_score)))
+        assertFalse("a confirmed list has no lower bounds to warn about", shown(text(R.string.rallies_scores_lower)))
+    }
+
+    @Test fun aListWithoutAnyScoreHasNoScoreToCallALowerBound() {
+        list(state(four))
+        compose.onNodeWithText(text(R.string.rallies_count, 4)).assertIsDisplayed()
+        assertFalse(shown(text(R.string.rallies_scores_lower)))
+    }
+
+    @Test fun aServerThatAnswersInAnOlderFormIsNamedAndNotAskedAgain() {
+        list(state(null, load = RalliesLoad.OUTDATED))
+        compose.onNodeWithText(text(R.string.rallies_outdated_server)).assertIsDisplayed()
+        // The same question would get the same answer, so the screen offers no retry and does not keep "loading".
+        assertFalse(shown(text(R.string.action_retry)))
+        assertFalse(shown(text(R.string.rallies_loading)))
+        assertFalse(shown(text(R.string.rallies_load_failed)))
     }
 
     @Test fun aListThatCouldNotBeReadSaysSoAndCanBeAskedForAgain() {
@@ -329,14 +350,17 @@ class RallyScreensTest {
         compose.onNodeWithContentDescription(text(R.string.editor_pause)).performClick()
         assertFalse(control.playing)
 
+        // The chip changes what the screen holds; the player takes it over on the next frame.
         compose.onNodeWithText(text(R.string.editor_fast)).performClick()
+        compose.waitForIdle()
         assertTrue(control.fast)
     }
 
-    @Test fun mergingAsksFirstAndNamesTheRallyThatLosesItsAnswer() {
+    @Test fun mergingAsksFirstAndNamesNoAnswerWhereThereIsNone() {
         val marks = editor(rallyTarget(four, "r2")!!, FakeControl(15_000))
 
         button(R.string.action_merge_previous).performClick()
+        // Neither rally has an answer, so the dialog speaks of none.
         compose.onNodeWithText(text(R.string.merge_body, 1, 2)).assertIsDisplayed()
         compose.onNodeWithText(text(R.string.action_give_up)).performClick()
         assertEquals(0, marks.merges)
@@ -345,6 +369,87 @@ class RallyScreensTest {
         compose.onNodeWithText(text(R.string.merge_confirm)).performClick()
         assertEquals(1, marks.merges)
         assertFalse(shown(text(R.string.merge_title)))
+    }
+
+    @Test fun theMergeDialogNamesEveryAnswerTheMergeTakesAway() {
+        // Rally 1 has a winner, and the user called rally 2 "not a rally".
+        val answered = four.copy(rallies = four.rallies.map {
+            when (it.sequence) {
+                1 -> it.copy(status = Rally.VERIFIED, winner = "HOME")
+                2 -> it.copy(status = Rally.REJECTED)
+                else -> it
+            }
+        })
+        editor(rallyTarget(answered, "r2")!!, FakeControl(15_000), state(answered))
+        button(R.string.action_merge_previous).performClick()
+        val body = listOf(text(R.string.merge_body, 1, 2), text(R.string.merge_body_previous_answer, 1), text(R.string.merge_body_reopens, 2)).joinToString(" ")
+        compose.onNodeWithText(body).assertIsDisplayed()
+    }
+
+    @Test fun playbackStopsWhereTheWindowEnds() {
+        val control = FakeControl(29_000).apply { playing = true }
+        editor(rallyTarget(four, "r2")!!, control)
+
+        // The next rally starts at 30,0. The player is looked at every 50 ms, so it is a little past that when the screen sees it.
+        control.standAt(30_040)
+        assertFalse(control.playing)
+        assertEquals(listOf(30_000L to true), control.seeks)
+        compose.onNodeWithText(text(R.string.editor_position, "00:30,0")).assertIsDisplayed()
+    }
+
+    @Test fun aVideoThatPlayedToItsOwnEndStopsAndStartsOverOnPlay() {
+        // The last rally: its window ends where the server says the video ends, at 60,0.
+        val control = FakeControl(59_000).apply { playing = true }
+        editor(rallyTarget(four, "r4")!!, control)
+
+        // The player reaches the end of the file a little before that.
+        control.positionMs = 59_996
+        control.ended = true
+        compose.waitForIdle()
+        assertFalse(control.playing)
+
+        compose.onNodeWithContentDescription(text(R.string.editor_play)).performClick()
+        assertEquals("from the start of the rally, although the position is not at the end of the window", listOf(48_000L to true), control.seeks)
+        assertTrue(control.playing)
+    }
+
+    @Test fun aMarkIsWhereThePlayerStandsAtTheTapAndNotWhereItStoodAtTheLastLook() {
+        val control = FakeControl(20_000).apply { playing = true }
+        val marks = editor(rallyTarget(four, "r2")!!, control)
+        control.movedOnMs = 80
+        button(R.string.action_end_here).performClick()
+        assertEquals(listOf(15_000L to 20_080L), marks.moves)
+    }
+
+    @Test fun aVideoThatFailedCanBeAskedForAgain() {
+        val control = FakeControl(20_000).apply { failed = true }
+        editor(rallyTarget(four, "r2")!!, control)
+        button(R.string.action_end_here).assertIsNotEnabled()
+
+        compose.onNodeWithText(text(R.string.action_retry)).performClick()
+        assertEquals(1, control.retries)
+        assertFalse(shown(text(R.string.editor_video_failed)))
+        button(R.string.action_end_here).assertIsEnabled()
+    }
+
+    @Test fun aPlayerThatIsBuiltAnewTakesOverTheSpeedTheUserChose() {
+        val players = mutableListOf<FakeControl>()
+        val restoration = StateRestorationTester(compose)
+        restoration.setContent {
+            VolleyStatTheme(dark = false) {
+                // Each start of the screen builds its own player, as the app does after the theme or the text size changed.
+                val control = remember { FakeControl(20_000).also { players += it } }
+                RallyEditorScreen(rallyTarget(four, "r2")!!, state(four), control.video, { _, _ -> }, {}, {}, { _, _ -> }, {})
+            }
+        }
+        compose.onNodeWithText(text(R.string.editor_fast)).performClick()
+        compose.waitForIdle()
+        assertTrue(players.single().fast)
+
+        restoration.emulateSavedInstanceStateRestore()
+        compose.waitForIdle()
+        assertEquals(2, players.size)
+        assertTrue("the chip still says 2x, so the new player has to run at 2x", players.last().fast)
     }
 
     @Test fun openedFromTheListTheEditorLeadsToTheQuestionOfItsRally() {

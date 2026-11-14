@@ -14,9 +14,12 @@ data class AnalysisJob(
     /** True for the demo analyzer: its rally intervals are invented. */
     val mock: Boolean,
     val failureCode: String?,
+    /** The rallies on the list, which the user's corrections change. */
     val rallies: Int,
     val reviewOpen: Int,
     val reviewTotal: Int,
+    /** The rallies the analyzer proposed. No correction changes this number. */
+    val proposed: Int = rallies,
     /** Moves with every correction of the rally list and every winner decision. */
     val rallyListVersion: Int = 0,
     /** The user declared the list complete, and nothing changed it since. */
@@ -121,6 +124,8 @@ data class MatchReport(
     val mock: Boolean,
     val verificationStatus: String,
     val ralliesProposed: Int,
+    /** Every interval on the list: decided, open, unsure and "not a rally" together. */
+    val ralliesTotal: Int = ralliesProposed,
     val ralliesVerified: Int,
     val ralliesRejected: Int,
     val ralliesUnresolved: Int,
