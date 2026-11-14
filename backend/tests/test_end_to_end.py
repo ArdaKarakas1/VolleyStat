@@ -33,9 +33,9 @@ CASES = {
         "answers": ("HOME", "AWAY", "HOME"),
         "rallyStatuses": ["VERIFIED", "VERIFIED", "VERIFIED"],
         "verificationStatus": "VERIFIED",
-        "rallies": {"proposed": 3, "verified": 3, "rejected": 0, "unresolved": 0, "open": 0},
+        "rallies": {"proposed": 3, "total": 3, "userCreated": 0, "verified": 3, "rejected": 0, "unresolved": 0, "open": 0},
         # Every card is answered, and still nothing is MEASURED: the demo analyzer may have missed
-        # rallies, and the review can not add one.
+        # rallies, and the invented list of a demo job can not be confirmed as complete.
         "score": {"status": "PARTIAL", "setsWon": {"home": 0, "away": 0},
                   "sets": [{"number": 1, "home": 2, "away": 1, "complete": False}], "stoppedAtRally": None},
         "points": {"home": partial(2), "away": partial(1)},
@@ -46,7 +46,7 @@ CASES = {
         "answers": ("AWAY", "UNSURE", "NOT_A_RALLY"),
         "rallyStatuses": ["VERIFIED", "UNRESOLVED", "REJECTED"],
         "verificationStatus": "PARTIALLY_VERIFIED",
-        "rallies": {"proposed": 3, "verified": 1, "rejected": 1, "unresolved": 1, "open": 0},
+        "rallies": {"proposed": 3, "total": 3, "userCreated": 0, "verified": 1, "rejected": 1, "unresolved": 1, "open": 0},
         "score": {"status": "PARTIAL", "setsWon": {"home": 0, "away": 0},
                   "sets": [{"number": 1, "home": 0, "away": 1, "complete": False}], "stoppedAtRally": 2},
         # Home won none of the verified rallies; the unsure rally can still add to either side.
@@ -58,7 +58,7 @@ CASES = {
         "answers": ("NOT_A_RALLY", "NOT_A_RALLY", "NOT_A_RALLY"),
         "rallyStatuses": ["REJECTED", "REJECTED", "REJECTED"],
         "verificationStatus": "VERIFIED",
-        "rallies": {"proposed": 3, "verified": 0, "rejected": 3, "unresolved": 0, "open": 0},
+        "rallies": {"proposed": 3, "total": 3, "userCreated": 0, "verified": 0, "rejected": 3, "unresolved": 0, "open": 0},
         "score": {"status": "UNKNOWN", "setsWon": {"home": None, "away": None}, "sets": [], "stoppedAtRally": None},
         "points": {"home": UNKNOWN_VALUE, "away": UNKNOWN_VALUE},
         "unattributed": {"home": None, "away": None},
@@ -133,7 +133,7 @@ def test_match_upload_demo_analysis_review_and_report(storage, make_clip, monkey
             assert draft["teams"][side] == {field: UNKNOWN_VALUE for field in TEAM_FIELDS}
         assert draft["players"] == []
         # What remains are counts of rallies and decisions, not values of the match.
-        assert draft["rallies"] == {"proposed": 3, "verified": 0, "rejected": 0, "unresolved": 0, "open": 3}
+        assert draft["rallies"] == {"proposed": 3, "total": 3, "userCreated": 0, "verified": 0, "rejected": 0, "unresolved": 0, "open": 3}
         # No point is known yet, so the points without a player are unknown as well, not zero.
         assert draft["unattributed"] == {"home": None, "away": None}
         assert [(entry["metricId"], entry["eligibleN"], entry["observedN"], entry["verifiedN"], entry["status"])

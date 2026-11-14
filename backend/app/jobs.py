@@ -124,7 +124,12 @@ def checked_proposals(proposals: Iterable[RallyProposal], duration_ms: int, kind
         if not all(isinstance(reason, str) and reason for reason in reasons):
             raise TypeError("uncertainty reasons must be non-empty strings")
         checked.append(replace(proposal, start_ms=start, end_ms=end, confidence=confidence, uncertainty_reasons=reasons))
-    return sorted(checked, key=lambda item: (item.start_ms, item.end_ms))
+    checked.sort(key=lambda item: (item.start_ms, item.end_ms))
+    for earlier, later in zip(checked, checked[1:]):
+        # One ball is in play at a time. Rallies may touch; two that share time would count a point twice.
+        if later.start_ms < earlier.end_ms:
+            raise ValueError(f"rallies {earlier.start_ms}-{earlier.end_ms} ms and {later.start_ms}-{later.end_ms} ms overlap")
+    return checked
 
 
 def analyzer_payload(job) -> dict[str, str]:
@@ -140,6 +145,11 @@ def find_job(db, job_id: str):
     if not job:
         fail("ANALYSIS_NOT_FOUND", "Analysis job does not exist", 404)
     return job
+
+
+def list_confirmed(job) -> bool:
+    """True while the user's confirmation still names the current rally list. Any later change of the list moves the version on."""
+    return job["list_confirmed_version"] is not None and job["list_confirmed_version"] == job["rally_list_version"]
 
 
 def job_payload(db, job) -> dict[str, Any]:
@@ -161,6 +171,7 @@ def job_payload(db, job) -> dict[str, Any]:
         "analyzer": analyzer_payload(job), "mock": is_mock(job),
         "failure": failure,
         "counts": {"rallies": rallies, "reviewOpen": still_open, "reviewTotal": total},
+        "rallyListVersion": job["rally_list_version"], "listConfirmed": list_confirmed(job),
         "createdAt": job["created_at"], "startedAt": job["started_at"], "finishedAt": job["finished_at"],
     }
 
@@ -396,13 +407,19 @@ class JobWorker:
                 # Rallies, cards and the state change commit together: a job never shows half a rally list.
                 duration_ms = int(json.loads(run.video["media_json"])["durationMs"])
                 for sequence, rally in enumerate(outcome, start=1):
-                    rally_id = new_id()
+                    rally_id, proposal_id = new_id(), new_id()
+                    proposed = (rally.proposed_winner, rally.confidence, json.dumps(rally.uncertainty_reasons))
+                    # The proposal is kept as its own record. The rally row is the working copy that
+                    # the user may correct, and it names the proposal it came from.
+                    db.execute(
+                        "INSERT INTO rally_proposals(id, job_id, start_ms, end_ms, proposed_winner, confidence, uncertainty_json)"
+                        " VALUES(?,?,?,?,?,?,?)", (proposal_id, run.job_id, rally.start_ms, rally.end_ms, *proposed),
+                    )
                     db.execute(
                         "INSERT INTO rallies(id, job_id, sequence, start_ms, end_ms, clip_start_ms, clip_end_ms,"
-                        " proposed_winner, confidence, uncertainty_json) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                        " proposed_winner, confidence, uncertainty_json, proposal_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                         (rally_id, run.job_id, sequence, rally.start_ms, rally.end_ms,
-                         *clip_bounds(rally.start_ms, rally.end_ms, duration_ms),
-                         rally.proposed_winner, rally.confidence, json.dumps(rally.uncertainty_reasons)),
+                         *clip_bounds(rally.start_ms, rally.end_ms, duration_ms), *proposed, proposal_id),
                     )
                     db.execute(
                         "INSERT INTO review_cards(id, job_id, rally_id, question_type) VALUES(?,?,?,'RALLY_WINNER')",

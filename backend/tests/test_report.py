@@ -61,7 +61,7 @@ def value_objects(node):
 def test_unreviewed_rallies_give_a_draft_with_unknown_values_and_no_zero():
     report = build_report([OPEN, OPEN, OPEN])
     assert report["verificationStatus"] == "DRAFT"
-    assert report["rallies"] == {"proposed": 3, "verified": 0, "rejected": 0, "unresolved": 0, "open": 3}
+    assert report["rallies"] == {"proposed": 3, "total": 3, "userCreated": 0, "verified": 0, "rejected": 0, "unresolved": 0, "open": 3}
     # The score walk stops at the first rally: it has no winner yet.
     assert report["score"] == {"status": "UNKNOWN", "setsWon": {"home": None, "away": None}, "sets": [], "stoppedAtRally": 1}
     for side in ("home", "away"):
@@ -235,7 +235,7 @@ def test_the_score_walk_skips_rejected_rallies_and_names_the_stop_by_its_sequenc
 def test_a_rejected_rally_takes_part_in_nothing():
     rallies = [won(HOME)] * 24 + [NOT_A_RALLY] + [won(HOME)]
     report = build_report(rallies)
-    assert report["rallies"] == {"proposed": 26, "verified": 25, "rejected": 1, "unresolved": 0, "open": 0}
+    assert report["rallies"] == {"proposed": 26, "total": 26, "userCreated": 0, "verified": 25, "rejected": 1, "unresolved": 0, "open": 0}
     # It is not an undecided rally either: the set closes across it.
     assert report["score"] == {"status": "MEASURED", "setsWon": {"home": 1, "away": 0},
                                "sets": [{"number": 1, "home": 25, "away": 0, "complete": True}], "stoppedAtRally": None}
@@ -285,7 +285,7 @@ def test_a_counted_zero_is_measured_once_every_rally_has_a_winner():
 
 def test_an_unresolved_rally_keeps_points_partial():
     report = build_report([won(HOME), UNSURE])
-    assert report["rallies"] == {"proposed": 2, "verified": 1, "rejected": 0, "unresolved": 1, "open": 0}
+    assert report["rallies"] == {"proposed": 2, "total": 2, "userCreated": 0, "verified": 1, "rejected": 0, "unresolved": 1, "open": 0}
     assert report["teams"]["home"]["points"] == partial(1)
     assert report["teams"]["away"]["points"] == partial(0)
 
@@ -436,7 +436,7 @@ def test_the_example_of_the_contract_is_reproduced():
                + [NOT_A_RALLY] + [OPEN] * 10)
     report = build_report(rallies)
     assert report["verificationStatus"] == "PARTIALLY_VERIFIED"
-    assert report["rallies"] == {"proposed": 18, "verified": 7, "rejected": 1, "unresolved": 0, "open": 10}
+    assert report["rallies"] == {"proposed": 18, "total": 18, "userCreated": 0, "verified": 7, "rejected": 1, "unresolved": 0, "open": 10}
     assert report["score"] == {"status": "PARTIAL", "setsWon": {"home": 0, "away": 0},
                                "sets": [{"number": 1, "home": 4, "away": 3, "complete": False}], "stoppedAtRally": 9}
     assert report["teams"]["home"] == {"points": partial(4), "attackPoints": partial(2), "blockPoints": UNKNOWN_VALUE,
@@ -446,6 +446,13 @@ def test_the_example_of_the_contract_is_reproduced():
     assert report["coverage"][0] == {"metricId": "RALLY_WINNER", "eligibleN": 17, "observedN": 7, "verifiedN": 7, "status": "PARTIAL"}
     assert set(report) == {"verificationStatus", "rallies", "ralliesMayBeMissing", "rules", "score", "teams", "players",
                            "unattributed", "coverage"}
+
+
+def test_the_rally_counts_tell_proposals_from_rallies_the_user_made():
+    made_by_user = {**won(AWAY), "user_created": True}
+    counts = build_report([won(HOME), made_by_user, OPEN], proposed=7)["rallies"]
+    # Seven were proposed, three are in the list now, and one of the three is the user's own.
+    assert counts == {"proposed": 7, "total": 3, "userCreated": 1, "verified": 2, "rejected": 0, "unresolved": 0, "open": 1}
 
 
 def test_nothing_is_measured_while_the_analyzer_may_have_missed_rallies():
@@ -525,10 +532,10 @@ def test_report_route_names_its_job_and_follows_the_decisions(storage, make_clip
         draft = draft.json()
         assert (draft["matchId"], draft["jobId"], draft["revision"]) == (video["matchId"], job["id"], 0)
         assert draft["analyzer"] == {"id": "scripted", "version": "t1", "kind": "BASELINE"} and draft["mock"] is False
-        assert set(draft) == {"matchId", "jobId", "revision", "analyzer", "mock", "verificationStatus", "rallies",
+        assert set(draft) == {"matchId", "jobId", "revision", "analyzer", "mock", "rallyList", "verificationStatus", "rallies",
                               "ralliesMayBeMissing", "rules", "score", "teams", "players", "unattributed", "coverage"}
-        # A baseline has no measured recall, so its report says that rallies may be missing.
-        assert draft["ralliesMayBeMissing"] is True
+        # Nobody has confirmed the rally list, so the report says that rallies may be missing.
+        assert draft["ralliesMayBeMissing"] is True and draft["rallyList"] == {"confirmed": False, "confirmedAt": None}
         assert draft["verificationStatus"] == "DRAFT" and draft["score"]["status"] == "UNKNOWN"
 
         first = decide(client, card_of(client, job["id"], 1), "HOME")
@@ -556,8 +563,8 @@ def test_a_model_proposal_reaches_the_report_only_as_observed(storage, make_clip
         video, job = reviewed_job(client, make_clip)
         report = client.get(f"/v1/matches/{video['matchId']}/report").json()
         assert report["verificationStatus"] == "DRAFT"
-        # Only a measured model is trusted to have found every rally.
-        assert report["ralliesMayBeMissing"] is False
+        # Not even a measured model is trusted to have found every rally: only the user's confirmation closes the list.
+        assert report["ralliesMayBeMissing"] is True
         assert report["score"] == {"status": "UNKNOWN", "setsWon": {"home": None, "away": None}, "sets": [], "stoppedAtRally": 1}
         assert report["teams"]["home"]["points"] == UNKNOWN_VALUE
         assert report["coverage"][0] == {"metricId": "RALLY_WINNER", "eligibleN": 2, "observedN": 1, "verifiedN": 0, "status": "UNKNOWN"}
@@ -582,8 +589,7 @@ def test_a_newer_job_without_rallies_does_not_hide_the_reviewed_one(storage, mak
         newer = request_job(client, video["id"])
         run_pending(client)
         report = client.get(report_url).json()
-        assert report["jobId"] == newer["id"] and report["rallies"] == {
-            "proposed": 1, "verified": 0, "rejected": 0, "unresolved": 0, "open": 1}
+        assert report["jobId"] == newer["id"] and report["rallies"] == {"proposed": 1, "total": 1, "userCreated": 0, "verified": 0, "rejected": 0, "unresolved": 0, "open": 1}
 
 
 def test_a_match_whose_only_job_was_cancelled_has_no_report(storage, make_clip):

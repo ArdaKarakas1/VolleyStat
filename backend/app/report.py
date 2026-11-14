@@ -8,9 +8,10 @@ The team points and the set score answer different questions. The points count e
 rally of the match. The set score needs the rallies in order, so it ends at the first rally
 without a winner: whoever won that rally decides where every later point belongs.
 
-The review can only confirm or reject the rallies an analyzer proposed. It can not add a rally
-the analyzer missed. So unless the analyzer is a measured model, every count is a lower bound
-and a set boundary may sit in the wrong place, however many cards the user answered.
+An analyzer misses rallies, and nothing here can know how many. The user can add, split, merge
+and move rallies, and can then confirm that the list holds every rally of the video. Until that
+confirmation every count is a lower bound and a set boundary may sit in the wrong place,
+however many cards the user answered.
 """
 from __future__ import annotations
 
@@ -45,8 +46,12 @@ def _coverage(metric: str, eligible: int, observed: int, verified: int) -> dict[
     return {"metricId": metric, "eligibleN": eligible, "observedN": observed, "verifiedN": verified, "status": status}
 
 
-def _score(numbered: Sequence[tuple[int, Mapping[str, Any]]], may_be_missing: bool) -> dict[str, Any]:
-    """Count sets over (sequence number, rally) pairs in match order, up to the first rally without a winner."""
+def _score(numbered: Sequence[tuple[int, Mapping[str, Any]]], may_be_missing: bool,
+           after: dict[int, dict[str, int]] | None = None) -> dict[str, Any]:
+    """Count sets over (sequence number, rally) pairs in match order, up to the first rally without a winner.
+
+    `after`, when given, receives the score of the running set after each counted rally.
+    """
     sets: list[dict[str, Any]] = []
     won = {HOME: 0, AWAY: 0}
     current: dict[str, Any] | None = None
@@ -58,6 +63,8 @@ def _score(numbered: Sequence[tuple[int, Mapping[str, Any]]], may_be_missing: bo
         if current is None:
             current = {"number": len(sets) + 1, "home": 0, "away": 0, "complete": False}
         current[rally["winner"].lower()] += 1
+        if after is not None:
+            after[sequence] = {"set": current["number"], "home": current["home"], "away": current["away"]}
         target = RULES["decidingSetTarget"] if current["number"] == RULES["decidingSetNumber"] else RULES["setTarget"]
         lead = abs(current["home"] - current["away"])
         if max(current["home"], current["away"]) >= target and lead >= RULES["winBy"]:
@@ -78,27 +85,45 @@ def _score(numbered: Sequence[tuple[int, Mapping[str, Any]]], may_be_missing: bo
     }
 
 
-def build_report(rallies: Sequence[Mapping[str, Any]], *, rallies_may_be_missing: bool = False) -> dict[str, Any]:
+def score_after(rallies: Sequence[Mapping[str, Any]]) -> dict[int, dict[str, int]]:
+    """The score of the running set after each counted rally, by sequence number.
+
+    The same walk as the score of the report: a rejected rally has no entry, and neither has the
+    first rally without a winner nor any rally after it.
+    """
+    after: dict[int, dict[str, int]] = {}
+    _score(_numbered(rallies), True, after)
+    return after
+
+
+def _numbered(rallies: Sequence[Mapping[str, Any]]) -> list[tuple[int, Mapping[str, Any]]]:
+    # A rejected rally is not a rally: it takes part in no score, no statistic and no denominator.
+    # It keeps its sequence number, which is what the client knows the rally by.
+    return [(rally.get("sequence", position), rally) for position, rally in enumerate(rallies, start=1)
+            if rally["status"] != "REJECTED"]
+
+
+def build_report(rallies: Sequence[Mapping[str, Any]], *, rallies_may_be_missing: bool = False,
+                 proposed: int | None = None) -> dict[str, Any]:
     """Build the computed part of the report from the rallies of one job, given in match order.
 
-    `rallies_may_be_missing` is true when nothing measured how many rallies the analyzer finds
-    (every analyzer that is not a measured model). Then no count is reported as MEASURED.
+    `rallies_may_be_missing` is true until the user confirmed that the list holds every rally of
+    the video. Then no count is reported as MEASURED. `proposed` is the number of rallies the
+    analyzer proposed; when absent every rally of the list counts as a proposal.
 
     Each record has `status` (PROPOSED, VERIFIED, UNRESOLVED or REJECTED), `winner` (HOME or AWAY
     exactly when the status is VERIFIED, otherwise None), `terminal_action` (ATTACK, BLOCK, ACE,
-    OPPONENT_ERROR or None), `scorer_jersey` (int or None) and optionally `proposed_winner` and
-    `sequence` (the number of the rally in its job; the position in the list when absent).
-    The caller adds the identity fields (matchId, jobId, revision, analyzer, mock).
+    OPPONENT_ERROR or None), `scorer_jersey` (int or None) and optionally `proposed_winner`,
+    `user_created` (true for a rally the user made) and `sequence` (the number of the rally in
+    its job; the position in the list when absent).
+    The caller adds the identity fields (matchId, jobId, revision, analyzer, mock, rallyList).
     """
     for rally in rallies:
         if rally["status"] not in STATUSES or (rally["status"] == "VERIFIED") != (rally["winner"] in SIDES):
             raise ValueError(f"inconsistent rally record: {dict(rally)!r}")
 
     count = {status: sum(rally["status"] == status for rally in rallies) for status in STATUSES}
-    # A rejected rally is not a rally: it takes part in no score, no statistic and no denominator.
-    # It keeps its sequence number, which is what the client knows the rally by.
-    numbered = [(rally.get("sequence", position), rally) for position, rally in enumerate(rallies, start=1)
-                if rally["status"] != "REJECTED"]
+    numbered = _numbered(rallies)
     eligible = [rally for _, rally in numbered]
     verified = [rally for rally in eligible if rally["status"] == "VERIFIED"]
     winners_complete = bool(verified) and len(verified) == len(eligible) and not rallies_may_be_missing
@@ -149,7 +174,10 @@ def build_report(rallies: Sequence[Mapping[str, Any]], *, rallies_may_be_missing
     return {
         "verificationStatus": verification,
         "rallies": {
-            "proposed": len(rallies), "verified": count["VERIFIED"], "rejected": count["REJECTED"],
+            # What the analyzer proposed, what the list holds now, and how much of it the user made.
+            "proposed": len(rallies) if proposed is None else proposed,
+            "total": len(rallies), "userCreated": sum(bool(rally.get("user_created")) for rally in rallies),
+            "verified": count["VERIFIED"], "rejected": count["REJECTED"],
             "unresolved": count["UNRESOLVED"], "open": count["PROPOSED"],
         },
         "ralliesMayBeMissing": rallies_may_be_missing,

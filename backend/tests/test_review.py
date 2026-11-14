@@ -69,10 +69,10 @@ def test_rallies_are_listed_in_order_as_undecided_proposals(review):
     assert len(rallies) == len(SPANS)
     for sequence, (found, (start, end)) in enumerate(zip(rallies, SPANS), start=1):
         assert found == {
-            "id": found["id"], "sequence": sequence, "startMs": start, "endMs": end,
+            "id": found["id"], "sequence": sequence, "startMs": start, "endMs": end, "origin": "ANALYZER",
             "status": "PROPOSED", "proposedWinner": "UNKNOWN", "confidence": None,
             "winner": None, "terminalAction": None, "scorer": None,
-            "uncertaintyReasons": ["NO_WINNER_MODEL"],
+            "uncertaintyReasons": ["NO_WINNER_MODEL"], "scoreAfter": None,
         }
     assert len({found["id"] for found in rallies}) == len(SPANS)
 

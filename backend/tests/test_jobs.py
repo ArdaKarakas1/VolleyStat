@@ -61,13 +61,14 @@ def test_a_requested_analysis_is_queued_and_can_be_read(storage, make_clip):
             "state": "QUEUED", "stage": None, "progress": None,
             "analyzer": SCRIPTED, "mock": False, "failure": None,
             "counts": {"rallies": 0, "reviewOpen": 0, "reviewTotal": 0},
+            "rallyListVersion": 0, "listConfirmed": False,
             "createdAt": job["createdAt"], "startedAt": None, "finishedAt": None,
         }
         assert TIMESTAMP.fullmatch(job["createdAt"])
         assert get_job(client, job["id"]) == job
         assert client.get(f"/v1/videos/{video['id']}/analyses/latest").json() == job
         # Nothing was analysed yet, so there is nothing to review.
-        assert client.get(f"/v1/analyses/{job['id']}/rallies").json() == {"rallies": []}
+        assert client.get(f"/v1/analyses/{job['id']}/rallies").json()["rallies"] == []
         assert client.get(f"/v1/analyses/{job['id']}/review-cards").json() == {"cards": [], "position": {"answered": 0, "total": 0}}
 
 
@@ -364,7 +365,7 @@ def test_an_analyzer_without_rallies_fails_the_job(storage, make_clip):
         assert job["failure"] == {"code": "NO_RALLIES_FOUND", "message": "The analyzer found no rally in this video"}
         assert job["counts"] == {"rallies": 0, "reviewOpen": 0, "reviewTotal": 0}
         assert TIMESTAMP.fullmatch(job["finishedAt"])
-        assert client.get(f"/v1/analyses/{job['id']}/rallies").json() == {"rallies": []}
+        assert client.get(f"/v1/analyses/{job['id']}/rallies").json()["rallies"] == []
         # A failed run does not block the next request.
         assert client.post(f"/v1/videos/{job['videoId']}/analyses").status_code == 202
 
