@@ -177,6 +177,7 @@ fun ReportScreen(
     onOpenStatus: () -> Unit,
     onRetry: () -> Unit,
     onBack: () -> Unit,
+    onOpenRallies: () -> Unit = {},
 ) {
     var pointTypesOpen by rememberSaveable { mutableStateOf(false) }
     FlowScaffold(title = stringResource(R.string.report_title), onBack = onBack) {
@@ -208,8 +209,12 @@ fun ReportScreen(
                     Notice(stringResource(R.string.report_score_stopped, report.scoreStoppedAtRally), Tone.CAUTION)
                 }
                 // Answering every card does not make the score complete: a rally the analyzer never
-                // proposed has no card. The report says so for as long as that can happen.
-                if (report.ralliesMayBeMissing) Notice(stringResource(R.string.report_may_miss), Tone.NEUTRAL)
+                // proposed has no card. The report says so until the user has confirmed the list, and
+                // for a demo job always, because invented intervals can not be confirmed.
+                when {
+                    report.ralliesMayBeMissing -> Notice(stringResource(if (report.mock) R.string.report_may_miss_demo else R.string.report_may_miss), Tone.NEUTRAL)
+                    report.listConfirmed -> Notice(stringResource(R.string.report_list_confirmed), Tone.POSITIVE)
+                }
                 if (report.ralliesOpen > 0) {
                     PrimaryButton(stringResource(R.string.report_open_review, report.ralliesOpen), onOpenReview, icon = R.drawable.ic_fact_check)
                 }
@@ -233,6 +238,8 @@ fun ReportScreen(
                     RowDivider()
                     ListRow(R.drawable.ic_smart_display, stringResource(R.string.report_review_video), null, onOpenReview)
                     RowDivider()
+                    ListRow(R.drawable.ic_sports_volleyball, stringResource(R.string.rallies_title), null, onOpenRallies)
+                    RowDivider()
                     ListRow(R.drawable.ic_info, stringResource(R.string.definitions_title), null, { pointTypesOpen = true })
                 }
 
@@ -251,12 +258,17 @@ fun ReportScreen(
                         }
                         Spacer(Modifier.height(4.dp))
                         FactRow(stringResource(R.string.report_rallies_total), report.ralliesProposed.toString())
+                        FactRow(stringResource(R.string.report_rallies_user), report.ralliesUserCreated.toString())
                         FactRow(stringResource(R.string.report_rallies_verified), report.ralliesVerified.toString())
                         FactRow(stringResource(R.string.report_rallies_open), report.ralliesOpen.toString())
                         FactRow(stringResource(R.string.report_rallies_unresolved), report.ralliesUnresolved.toString())
                         FactRow(stringResource(R.string.report_rallies_rejected), report.ralliesRejected.toString())
                         Spacer(Modifier.height(4.dp))
-                        Text(stringResource(R.string.report_source, report.analyzerId, report.analyzerKind), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        // Once the user has moved, added, split or merged, the intervals are not the analyzer's alone.
+                        Text(
+                            stringResource(if (report.corrections > 0) R.string.report_source_corrected else R.string.report_source, report.analyzerId, report.analyzerKind),
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                         Text(stringResource(R.string.report_rules), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }

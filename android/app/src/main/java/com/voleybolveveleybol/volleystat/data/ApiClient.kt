@@ -1,11 +1,15 @@
 package com.voleybolveveleybol.volleystat.data
 
 import com.voleybolveveleybol.volleystat.model.AnalysisJob
+import com.voleybolveveleybol.volleystat.model.Correction
 import com.voleybolveveleybol.volleystat.model.Coverage
 import com.voleybolveveleybol.volleystat.model.MatchReport
 import com.voleybolveveleybol.volleystat.model.PlayerLine
+import com.voleybolveveleybol.volleystat.model.Rally
+import com.voleybolveveleybol.volleystat.model.RallyList
 import com.voleybolveveleybol.volleystat.model.ReviewCard
 import com.voleybolveveleybol.volleystat.model.ReviewDeck
+import com.voleybolveveleybol.volleystat.model.SetPoint
 import com.voleybolveveleybol.volleystat.model.SetScore
 import com.voleybolveveleybol.volleystat.model.StatValue
 import com.voleybolveveleybol.volleystat.model.TeamStats
@@ -114,6 +118,48 @@ class ApiClient(private val baseUrl: String) {
         return parseJob(request("POST", "/review-cards/$cardId/decisions", body.toString().toByteArray()).getJSONObject("job"))
     }
 
+    // ----- Corrections of the rally list (docs/API_V1.md, section 9) -----
+    // Every correction names the version of the list the user was looking at. The server refuses a
+    // correction of a list that has moved on with code RALLY_LIST_STALE, so none applies twice.
+
+    fun rallies(jobId: String): RallyList {
+        val json = request("GET", "/analyses/$jobId/rallies")
+        return RallyList(
+            json.getJSONArray("rallies").objects().map(::parseRally), json.getInt("rallyListVersion"),
+            json.getBoolean("listConfirmed"), json.getLong("videoDurationMs"), json.getJSONArray("sets").objects().map(::parseSet),
+        )
+    }
+
+    fun addRally(jobId: String, startMs: Long, endMs: Long, listVersion: Int): Correction =
+        correction("/analyses/$jobId/rallies", JSONObject().put("startMs", startMs).put("endMs", endMs), listVersion)
+
+    fun moveRally(rallyId: String, startMs: Long, endMs: Long, listVersion: Int): Correction =
+        correction("/rallies/$rallyId/move", JSONObject().put("startMs", startMs).put("endMs", endMs), listVersion)
+
+    fun splitRally(rallyId: String, atMs: Long, listVersion: Int): Correction =
+        correction("/rallies/$rallyId/split", JSONObject().put("atMs", atMs), listVersion)
+
+    fun mergeWithPrevious(rallyId: String, listVersion: Int): Correction =
+        correction("/rallies/$rallyId/merge-previous", JSONObject(), listVersion)
+
+    /** Records the user's statement that the list holds every rally of the video. */
+    fun confirmRallyList(jobId: String, listVersion: Int): AnalysisJob =
+        parseJob(request("POST", "/analyses/$jobId/rally-list/confirm", JSONObject().put("expectedListVersion", listVersion).toString().toByteArray()).getJSONObject("job"))
+
+    private fun correction(path: String, body: JSONObject, listVersion: Int): Correction {
+        val json = request("POST", path, body.put("expectedListVersion", listVersion).toString().toByteArray())
+        val removed = json.getJSONArray("removed")
+        return Correction(json.getJSONArray("affected").objects().map(::parseRally), List(removed.length()) { removed.getString(it) }, parseJob(json.getJSONObject("job")))
+    }
+
+    private fun parseSet(json: JSONObject) = SetScore(json.getInt("number"), json.getInt("home"), json.getInt("away"), json.getBoolean("complete"))
+
+    private fun parseRally(json: JSONObject) = Rally(
+        id = json.getString("id"), sequence = json.getInt("sequence"), startMs = json.getLong("startMs"), endMs = json.getLong("endMs"),
+        fromAnalyzer = json.getString("origin") == "ANALYZER", status = json.getString("status"), winner = json.optStringOrNull("winner"),
+        scoreAfter = json.optJSONObject("scoreAfter")?.let { SetPoint(it.getInt("set"), it.getInt("home"), it.getInt("away")) },
+    )
+
     /** The report of a match, or null when the match has no analysis job. */
     fun report(matchId: String): MatchReport? = try {
         parseReport(request("GET", "/matches/$matchId/report"))
@@ -134,6 +180,7 @@ class ApiClient(private val baseUrl: String) {
             mock = json.getBoolean("mock"),
             failureCode = json.optJSONObject("failure")?.getString("code"),
             rallies = counts.getInt("rallies"), reviewOpen = counts.getInt("reviewOpen"), reviewTotal = counts.getInt("reviewTotal"),
+            rallyListVersion = json.optInt("rallyListVersion", 0), listConfirmed = json.optBoolean("listConfirmed", false),
         )
     }
 
@@ -164,9 +211,12 @@ class ApiClient(private val baseUrl: String) {
             scoreStatus = score.getString("status"),
             setsWonHome = if (setsWon.isNull("home")) null else setsWon.getInt("home"),
             setsWonAway = if (setsWon.isNull("away")) null else setsWon.getInt("away"),
-            sets = score.getJSONArray("sets").objects().map { SetScore(it.getInt("number"), it.getInt("home"), it.getInt("away"), it.getBoolean("complete")) },
+            sets = score.getJSONArray("sets").objects().map(::parseSet),
             scoreStoppedAtRally = if (score.isNull("stoppedAtRally")) null else score.getInt("stoppedAtRally"),
             ralliesMayBeMissing = json.optBoolean("ralliesMayBeMissing", false),
+            listConfirmed = json.optJSONObject("rallyList")?.optBoolean("confirmed", false) ?: false,
+            corrections = json.optJSONObject("rallyList")?.optInt("corrections", 0) ?: 0,
+            ralliesUserCreated = rallies.optInt("userCreated", 0),
             home = team("home"), away = team("away"),
             players = json.getJSONArray("players").objects().map {
                 PlayerLine(it.getString("side") == "HOME", it.getInt("jersey"), it.getInt("points"), it.getInt("attackPoints"), it.getInt("blockPoints"), it.getInt("aces"))

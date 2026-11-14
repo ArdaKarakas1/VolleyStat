@@ -85,7 +85,7 @@ Bir videonun aynı anda tek süren işi olur. `Idempotency-Key` başlığı iste
 
 ## 4. Ralliler
 
-`GET /v1/analyses/{jobId}/rallies` → `{"rallies": [Rally], "rallyListVersion": 4, "listConfirmed": false, "videoDurationMs": 5400000}`
+`GET /v1/analyses/{jobId}/rallies` → `{"rallies": [Rally], "rallyListVersion": 4, "listConfirmed": false, "videoDurationMs": 5400000, "sets": [Set]}`
 
 ```json
 {"id": "…", "sequence": 3, "startMs": 41200, "endMs": 52800, "origin": "ANALYZER",
@@ -99,6 +99,7 @@ Bir videonun aynı anda tek süren işi olur. `Idempotency-Key` başlığı iste
 - `origin`: `ANALYZER` (ralli bir analizör önerisinden geliyor) ya da `USER` (ralliyi kullanıcı ekledi ya da bölerek oluşturdu). `USER` ralli öneri taşımaz: `proposedWinner` `UNKNOWN`, `confidence` `null` ve `uncertaintyReasons` boş gelir.
 - `scoreAfter`: `{"set": 1, "home": 4, "away": 3}`. Sunucu bu değeri raporun skor sayımıyla aynı yürüyüşten üretir. Değer `REJECTED` rallide, kazananı belli olmayan ilk rallide ve ondan sonraki her rallide `null` olur. Telefon skor hesaplamaz.
 - `videoDurationMs`: Bir düzeltmenin verebileceği en büyük zaman.
+- `sets`: Listenin bu sürümünün set skorları, raporun `score.sets` alanıyla aynı biçimde ve aynı sayımdan (`{"number": 1, "home": 25, "away": 21, "complete": true}`). Kullanıcı listeyi onaylamadan önce bu skorları maçta oynanan skorlarla karşılaştırır (bölüm 9). İstemci onay ekranında raporu değil bu alanı gösterir, çünkü onay isteği bu yanıttaki `rallyListVersion` değerini taşır.
 
 - `status`: `PROPOSED` (karar yok), `VERIFIED` (kullanıcı kazananı seçti), `UNRESOLVED` (kullanıcı emin değil), `REJECTED` (kullanıcı "ralli değil" dedi).
 - `winner`: `HOME`, `AWAY` ya da `null`. Yalnız kullanıcı kararıyla dolar.
@@ -160,7 +161,7 @@ Bir videonun aynı anda tek süren işi olur. `Idempotency-Key` başlığı iste
 {
   "matchId": "…", "jobId": "…", "revision": 4,
   "analyzer": {"id": "motion-baseline", "version": "0.2", "kind": "BASELINE"}, "mock": false,
-  "rallyList": {"confirmed": false, "confirmedAt": null},
+  "rallyList": {"confirmed": false, "confirmedAt": null, "corrections": 0},
   "verificationStatus": "PARTIALLY_VERIFIED",
   "rallies": {"proposed": 18, "total": 18, "userCreated": 0, "verified": 7, "rejected": 1, "unresolved": 0, "open": 10},
   "ralliesMayBeMissing": true,
@@ -185,7 +186,7 @@ Bir videonun aynı anda tek süren işi olur. `Idempotency-Key` başlığı iste
 - `verificationStatus`: `DRAFT` (hiç karar yok), `PARTIALLY_VERIFIED`, `VERIFIED` (açık `SCORE` kartı yok ve `UNRESOLVED` ralli yok).
 - Değer nesnesi: `{"value": sayı ya da null, "status": "MEASURED" | "PARTIAL" | "UNKNOWN"}`. `PARTIAL` değerin alt sınır olduğunu söyler. `UNKNOWN` değerde `value` her zaman `null` olur. `MEASURED` şunu söyler: Kullanıcı sayıya giren her rallinin kazananını seçti ve ralli listesinin eksiksiz olduğunu onayladı. `MEASURED` bir modelin ölçümü değildir.
 - `rallies`: `proposed` analizörün önerdiği ralli sayısıdır ve düzeltmelerle değişmez. `total` listedeki ralli sayısıdır. `userCreated` listedeki rallilerden kaçını kullanıcının oluşturduğunu söyler. Öbür dört sayı listedeki rallileri duruma göre sayar.
-- `rallyList`: `confirmed` kullanıcının bugünkü listeyi eksiksiz ilan ettiğini söyler. `confirmedAt` o onayın zamanıdır ve onay düşünce `null` olur.
+- `rallyList`: `confirmed` kullanıcının bugünkü listeyi eksiksiz ilan ettiğini söyler. `confirmedAt` o onayın zamanıdır ve onay düşünce `null` olur. `corrections` kullanıcının bu işte yaptığı ekleme, taşıma, bölme ve birleştirme sayısıdır. Sunucu liste onayını ve hiçbir şeyi değiştirmeyen taşımayı bu sayıya katmaz. Sayı sıfırdan büyükse rapordaki aralıklar yalnız analizörün değildir, istemci kaynağı buna göre yazar.
 - Rapor maçın rallisi olan en yeni işini izler. `revision` o işe aittir. Eski bir işin kartına verilen karar o işin `revision` değerini artırır ve raporu değiştirmez.
 - `ralliesMayBeMissing`: Kullanıcı ralli listesini onaylayana kadar `true` olur, analizörün türü ne olursa olsun. Hiçbir analizör bütün rallileri bulmaz ve listeyi yalnız kullanıcının kendi denetimi kapatır. Deneme analizörünün işinde (`mock: true`) bu alan her zaman `true` kalır, çünkü sunucu o işin listesini onaylatmaz. Alan `true` iken sunucu `teams` altındaki hiçbir değeri ve `score.status` alanını `MEASURED` olarak bildirmez. Bu alanlar en fazla `PARTIAL` olur, bütün kartlar yanıtlanmış olsa bile. `coverage[].status` bu kuralın dışındadır: O alan kullanıcının listedeki rallilerin ne kadarını karara bağladığını söyler ve bütün ralliler karara bağlandığında `MEASURED` olur. `coverage` listede olmayan ralliyi saymaz.
 - Skor: Sunucu rallileri sırayla sayar, reddedilen ralliyi atlar ve seti kurala göre kapatır: Set 25 sayıda, beşinci set 15 sayıda ve iki farkla biter. Maçı bitiren bir kural yoktur. Ralliler sürdükçe sunucu yeni set açar, çünkü antrenman maçları çoğu zaman sabit sayıda set oynar. Beşinci setten sonraki set yine 25 sayıya gider.

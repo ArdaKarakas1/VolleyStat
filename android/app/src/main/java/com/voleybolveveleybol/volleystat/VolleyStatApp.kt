@@ -20,6 +20,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
@@ -32,11 +33,16 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.voleybolveveleybol.volleystat.model.EditTarget
 import com.voleybolveveleybol.volleystat.model.MatchRecord
 import com.voleybolveveleybol.volleystat.model.MatchStatus
+import com.voleybolveveleybol.volleystat.model.RallyList
 import com.voleybolveveleybol.volleystat.model.ReviewCard
+import com.voleybolveveleybol.volleystat.model.gapTarget
+import com.voleybolveveleybol.volleystat.model.rallyTarget
 import com.voleybolveveleybol.volleystat.model.status
 import com.voleybolveveleybol.volleystat.ui.screens.ClipPlayer
+import com.voleybolveveleybol.volleystat.ui.screens.EditorVideo
 import com.voleybolveveleybol.volleystat.ui.screens.GuideScreen
 import com.voleybolveveleybol.volleystat.ui.screens.HomeScreen
 import com.voleybolveveleybol.volleystat.ui.screens.MatchCreateScreen
@@ -44,6 +50,9 @@ import com.voleybolveveleybol.volleystat.ui.screens.MatchTeamsScreen
 import com.voleybolveveleybol.volleystat.ui.screens.MatchesScreen
 import com.voleybolveveleybol.volleystat.ui.screens.PlayersScreen
 import com.voleybolveveleybol.volleystat.ui.screens.ProfileScreen
+import com.voleybolveveleybol.volleystat.ui.screens.RalliesScreen
+import com.voleybolveveleybol.volleystat.ui.screens.RallyEditorScreen
+import com.voleybolveveleybol.volleystat.ui.screens.RallyEditorWaiting
 import com.voleybolveveleybol.volleystat.ui.screens.RecordRoute
 import com.voleybolveveleybol.volleystat.ui.screens.ReportScreen
 import com.voleybolveveleybol.volleystat.ui.screens.ReviewScreen
@@ -53,6 +62,7 @@ import com.voleybolveveleybol.volleystat.ui.screens.TeamsScreen
 import com.voleybolveveleybol.volleystat.ui.screens.VideoCheckScreen
 import com.voleybolveveleybol.volleystat.ui.screens.VideoSourceScreen
 import com.voleybolveveleybol.volleystat.ui.screens.WelcomeScreen
+import com.voleybolveveleybol.volleystat.ui.screens.rememberEditorVideo
 import java.time.LocalDate
 
 private object Routes {
@@ -70,13 +80,24 @@ private object Routes {
     const val GUIDE = "guide"
     const val STATUS = "status/{id}"
     const val REVIEW = "review/{id}"
+    /** The review, opened on the winner question of one rally. */
+    const val REVIEW_AT = "review/{id}/at/{rally}"
     const val REPORT = "report/{id}"
     const val PLAYERS = "players/{id}"
+    const val RALLIES = "rallies/{id}"
+    /** The range editor on one rally of the list. */
+    const val RALLY = "rally/{id}/{rally}"
+    /** The range editor on the pause that holds the moment {at} of the video. */
+    const val GAP = "gap/{id}/{at}"
     fun team(id: String) = "team/$id"
     fun status(id: String) = "status/$id"
     fun review(id: String) = "review/$id"
+    fun reviewAt(id: String, rallyId: String) = "review/$id/at/$rallyId"
     fun report(id: String) = "report/$id"
     fun players(id: String) = "players/$id"
+    fun rallies(id: String) = "rallies/$id"
+    fun rally(id: String, rallyId: String) = "rally/$id/$rallyId"
+    fun gap(id: String, atMs: Long) = "gap/$id/$atMs"
 }
 
 private class Tab(val route: String, val label: Int, val icon: Int, val selectedIcon: Int)
@@ -89,7 +110,11 @@ private val tabs = listOf(
 )
 
 @Composable
-fun VolleyStatApp(viewModel: AppViewModel = viewModel()) {
+fun VolleyStatApp(
+    viewModel: AppViewModel = viewModel(),
+    /** The video of the range editor. A test puts a stand-in here, because no player runs in a test. */
+    editorVideo: @Composable (url: String, startMs: Long, windowEndMs: () -> Long) -> EditorVideo = { url, startMs, windowEndMs -> rememberEditorVideo(url, startMs, windowEndMs) },
+) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val analysis by viewModel.analysis.collectAsStateWithLifecycle()
     val nav = rememberNavController()
@@ -131,6 +156,101 @@ fun VolleyStatApp(viewModel: AppViewModel = viewModel()) {
             unselectedIconColor = scheme.onSurfaceVariant, unselectedTextColor = scheme.onSurfaceVariant,
         ),
     )
+
+    /**
+     * The analysis state for a screen of the rally list. The shared state may still hold another
+     * match, and a list that was read before the last winner decision is not the list the server
+     * holds any more: the screen then waits for the new one instead of showing the old one.
+     */
+    @Composable
+    fun rallyState(match: MatchRecord): AnalysisUi {
+        val own = if (analysis.matchId == match.localId) analysis else AnalysisUi(matchId = match.localId)
+        LaunchedEffect(match.localId) {
+            // A problem belongs to the screen it happened on.
+            viewModel.clearCorrectionProblem()
+            if (analysis.matchId != match.localId || analysis.job == null) viewModel.watchAnalysis(match.localId, startIfMissing = false)
+        }
+        // Without a job there is no list to wait for, and the screen says so instead of loading forever.
+        val noJob = own.job == null && own.jobLoad != JobLoad.LOADING && own.jobLoad != JobLoad.READY
+        return own.copy(rallies = own.currentRallies, ralliesLoad = if (noJob) RalliesLoad.UNREACHABLE else own.ralliesLoad)
+    }
+
+    @Composable
+    fun ReviewRoute(match: MatchRecord?, route: String, atRally: String?) {
+        val videoId = match?.check?.videoId
+        if (match == null || videoId == null) {
+            LaunchedEffect(Unit) { leave(route) }
+            return
+        }
+        // The shared state may still hold another match. This screen only ever shows its own.
+        val shown = if (analysis.matchId == match.localId) analysis else AnalysisUi(matchId = match.localId)
+        LaunchedEffect(match.localId) {
+            if (analysis.matchId != match.localId || analysis.job == null) viewModel.watchAnalysis(match.localId, startIfMissing = false)
+        }
+        // Opening the screen goes to the card it was opened for. Coming back to it, from the range
+        // editor or the rally list, stays on the card it shows, which a correction may have chosen.
+        var opened by rememberSaveable { mutableStateOf(false) }
+        LaunchedEffect(shown.job?.id) {
+            if (shown.job != null) {
+                if (opened && shown.deck != null) viewModel.loadReview(keepCursor = true) else viewModel.loadReview(atRally = atRally)
+                opened = true
+            }
+        }
+        // The scorer belongs to the side that won the rally, as answered on that rally's winner card.
+        val winner = shown.deck?.cards?.firstOrNull { it.rallyId == shown.card?.rallyId && it.questionType == ReviewCard.RALLY_WINNER }?.answer
+        val url = remember(videoId, state.settings.serverTarget) { viewModel.api().videoContentUrl(videoId) }
+        ReviewScreen(
+            match, shown,
+            scorerRoster = roster(if (winner == ReviewCard.AWAY) match.awayTeamId else match.homeTeamId),
+            onAnswer = viewModel::answerReview, onMove = viewModel::moveReview, onDetail = viewModel::setReviewDetail,
+            onOpenReport = {
+                // The report may already be below: going back to it shows the one report there is, and it reloads.
+                if (!nav.popBackStack(Routes.report(match.localId), inclusive = false)) {
+                    nav.navigate(Routes.report(match.localId)) { popUpTo(route) { inclusive = true }; launchSingleTop = true }
+                }
+            },
+            onBack = { nav.popBackStack() },
+            clip = { card -> ClipPlayer(url, card.clipStartMs, card.clipEndMs) },
+            onRetry = { viewModel.retryReview(match.localId) },
+            onFixRally = { card -> go(Routes.rally(match.localId, card.rallyId)) },
+            onOpenRallies = { go(Routes.rallies(match.localId)) },
+        )
+    }
+
+    /** The range editor on whatever [resolve] finds on the current rally list. One applied correction closes it. */
+    @Composable
+    fun EditorRoute(match: MatchRecord?, route: String, title: Int, resolve: (RallyList) -> EditTarget?) {
+        val videoId = match?.check?.videoId
+        if (match == null || videoId == null) {
+            LaunchedEffect(Unit) { leave(route) }
+            return
+        }
+        val shown = rallyState(match)
+        // Opened from the review, the list in memory is older than the answers the user just gave.
+        LaunchedEffect(shown.job?.id) { if (shown.job != null && shown.rallies == null) viewModel.loadRallies(match.localId) }
+        val list = shown.rallies
+        val target = list?.let(resolve)
+        when {
+            list == null -> RallyEditorWaiting(stringResource(title), shown.ralliesLoad, onRetry = { viewModel.retryRallies(match.localId) }, onBack = { nav.popBackStack() })
+            // The rally or the pause is no longer on the list, so there is nothing left to edit here.
+            target == null -> LaunchedEffect(Unit) { leave(route) }
+            else -> {
+                val url = remember(videoId, state.settings.serverTarget) { viewModel.api().videoContentUrl(videoId) }
+                val rally = (target as? EditTarget.OfRally)?.rally
+                val startMs = remember { rally?.startMs ?: target.windowStartMs }
+                val window by rememberUpdatedState(target)
+                val done = { leave(route) }
+                RallyEditorScreen(
+                    target, shown, editorVideo(url, startMs) { window.windowEndMs },
+                    onMove = { start, end -> if (rally != null) viewModel.moveRally(rally.id, start, end, done) },
+                    onSplit = { at -> if (rally != null) viewModel.splitRally(rally.id, at, done) },
+                    onMerge = { if (rally != null) viewModel.mergeWithPrevious(rally.id, done) },
+                    onAdd = { start, end -> viewModel.addRally(start, end, done) },
+                    onBack = { nav.popBackStack() },
+                )
+            }
+        }
+    }
 
     NavigationSuiteScaffold(
         // Task screens have no bottom bar: one step, one action, and back pops one step.
@@ -241,36 +361,9 @@ fun VolleyStatApp(viewModel: AppViewModel = viewModel()) {
                     )
                 }
             }
-            composable(Routes.REVIEW) { entry ->
-                val match = match(entry.arguments?.getString("id"))
-                val videoId = match?.check?.videoId
-                if (match == null || videoId == null) {
-                    LaunchedEffect(Unit) { leave(Routes.REVIEW) }
-                } else {
-                    // The shared state may still hold another match. This screen only ever shows its own.
-                    val shown = if (analysis.matchId == match.localId) analysis else AnalysisUi(matchId = match.localId)
-                    LaunchedEffect(match.localId) {
-                        if (analysis.matchId != match.localId || analysis.job == null) viewModel.watchAnalysis(match.localId, startIfMissing = false)
-                    }
-                    LaunchedEffect(shown.job?.id) { if (shown.job != null) viewModel.loadReview() }
-                    // The scorer belongs to the side that won the rally, as answered on that rally's winner card.
-                    val winner = shown.deck?.cards?.firstOrNull { it.rallyId == shown.card?.rallyId && it.questionType == ReviewCard.RALLY_WINNER }?.answer
-                    val url = remember(videoId, state.settings.serverTarget) { viewModel.api().videoContentUrl(videoId) }
-                    ReviewScreen(
-                        match, shown,
-                        scorerRoster = roster(if (winner == ReviewCard.AWAY) match.awayTeamId else match.homeTeamId),
-                        onAnswer = viewModel::answerReview, onMove = viewModel::moveReview, onDetail = viewModel::setReviewDetail,
-                        onOpenReport = {
-                            // Opened from the report: going back to it shows the one report there is, and it reloads.
-                            val below = nav.previousBackStackEntry
-                            if (below?.destination?.route == Routes.REPORT && below.arguments?.getString("id") == match.localId) nav.popBackStack()
-                            else nav.navigate(Routes.report(match.localId)) { popUpTo(Routes.review(match.localId)) { inclusive = true }; launchSingleTop = true }
-                        },
-                        onBack = { nav.popBackStack() },
-                        clip = { card -> ClipPlayer(url, card.clipStartMs, card.clipEndMs) },
-                        onRetry = { viewModel.retryReview(match.localId) },
-                    )
-                }
+            composable(Routes.REVIEW) { entry -> ReviewRoute(match(entry.arguments?.getString("id")), Routes.REVIEW, atRally = null) }
+            composable(Routes.REVIEW_AT) { entry ->
+                ReviewRoute(match(entry.arguments?.getString("id")), Routes.REVIEW_AT, atRally = entry.arguments?.getString("rally"))
             }
             composable(Routes.REPORT) { entry ->
                 val match = match(entry.arguments?.getString("id"))
@@ -283,7 +376,7 @@ fun VolleyStatApp(viewModel: AppViewModel = viewModel()) {
                         match, if (analysis.matchId == match.localId) analysis.reportLoad else ReportLoad.LOADING, analysis.report.takeIf { analysis.matchId == match.localId },
                         onOpenReview = { go(Routes.review(match.localId)) }, onOpenPlayers = { go(Routes.players(match.localId)) },
                         onOpenStatus = { go(Routes.status(match.localId)) }, onRetry = { viewModel.loadReport(match.localId) },
-                        onBack = { nav.popBackStack() },
+                        onBack = { nav.popBackStack() }, onOpenRallies = { go(Routes.rallies(match.localId)) },
                     )
                 }
             }
@@ -300,6 +393,32 @@ fun VolleyStatApp(viewModel: AppViewModel = viewModel()) {
                         load = if (own) analysis.reportLoad else ReportLoad.LOADING, onRetry = { viewModel.loadReport(match.localId) },
                     )
                 }
+            }
+            composable(Routes.RALLIES) { entry ->
+                val match = match(entry.arguments?.getString("id"))
+                if (match?.check?.videoId == null) {
+                    LaunchedEffect(Unit) { leave(Routes.RALLIES) }
+                } else {
+                    val shown = rallyState(match)
+                    // Read again whenever the screen comes back: a decision made in review changes the scores of the list.
+                    LaunchedEffect(shown.job?.id) { if (shown.job != null) viewModel.loadRallies(match.localId) }
+                    RalliesScreen(
+                        match, shown,
+                        onOpenRally = { go(Routes.rally(match.localId, it.id)) }, onOpenGap = { go(Routes.gap(match.localId, it)) },
+                        onConfirm = { viewModel.confirmRallyList {} },
+                        // A new screen on top, so that back leads to this list again.
+                        onOpenReview = { go(Routes.reviewAt(match.localId, it.id)) },
+                        onRetry = { viewModel.retryRallies(match.localId) }, onBack = { nav.popBackStack() },
+                    )
+                }
+            }
+            composable(Routes.RALLY) { entry ->
+                val rallyId = entry.arguments?.getString("rally")
+                EditorRoute(match(entry.arguments?.getString("id")), Routes.RALLY, R.string.editor_title_rally) { list -> rallyId?.let { rallyTarget(list, it) } }
+            }
+            composable(Routes.GAP) { entry ->
+                val atMs = entry.arguments?.getString("at")?.toLongOrNull()
+                EditorRoute(match(entry.arguments?.getString("id")), Routes.GAP, R.string.editor_title_gap) { list -> atMs?.let { gapTarget(list, it) } }
             }
         }
     }

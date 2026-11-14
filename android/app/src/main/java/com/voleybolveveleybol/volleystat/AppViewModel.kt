@@ -19,8 +19,10 @@ import com.voleybolveveleybol.volleystat.data.VideoInspector
 import com.voleybolveveleybol.volleystat.model.Draft
 import com.voleybolveveleybol.volleystat.model.LocalVideo
 import com.voleybolveveleybol.volleystat.model.AnalysisJob
+import com.voleybolveveleybol.volleystat.model.Correction
 import com.voleybolveveleybol.volleystat.model.AnalysisSummary
 import com.voleybolveveleybol.volleystat.model.MatchReport
+import com.voleybolveveleybol.volleystat.model.RallyList
 import com.voleybolveveleybol.volleystat.model.ReviewCard
 import com.voleybolveveleybol.volleystat.model.ReviewDeck
 import com.voleybolveveleybol.volleystat.model.MatchRecord
@@ -100,6 +102,17 @@ enum class ReviewProblem { STALE, SAVE_FAILED, LOAD_FAILED }
 
 enum class ReportLoad { LOADING, READY, NONE, UNREACHABLE }
 
+enum class RalliesLoad { LOADING, READY, UNREACHABLE }
+
+/**
+ * Why a correction of the rally list did not go through. STALE: the list changed after the screen
+ * read it, and the app has read it again. OVERLAP: the interval shares time with another rally.
+ * OUTSIDE: the interval is empty, outside the video or outside the rally. NOT_READY: a rally still
+ * has no winner. DEMO: the list of a demo analysis can not be confirmed. UNREACHABLE: no answer
+ * came and the list on the server is unchanged. REFUSED: the server answered and changed nothing.
+ */
+enum class CorrectionProblem { STALE, OVERLAP, OUTSIDE, NOT_READY, DEMO, UNREACHABLE, REFUSED }
+
 /** Analysis, review and report state of the one match that is open on screen. */
 data class AnalysisUi(
     val matchId: String? = null,
@@ -114,8 +127,22 @@ data class AnalysisUi(
     val reviewProblem: ReviewProblem? = null,
     val reportLoad: ReportLoad = ReportLoad.LOADING,
     val report: MatchReport? = null,
+    val ralliesLoad: RalliesLoad = RalliesLoad.LOADING,
+    /** The rally list as the server last sent it. Every correction names its version. */
+    val rallies: RallyList? = null,
+    val correcting: Boolean = false,
+    val correctionProblem: CorrectionProblem? = null,
+    /** With OVERLAP: the number of the rally that is in the way, when it is on the list. */
+    val overlapsRally: Int? = null,
 ) {
     val card: ReviewCard? get() = deck?.cards?.getOrNull(cursor)
+
+    /**
+     * The rally list, when it is the list of the job as the app last heard of it. Every winner
+     * decision moves the list on, so a list that was read before a decision is no longer the one
+     * the server holds, and a correction made on it would be refused.
+     */
+    val currentRallies: RallyList? get() = rallies?.takeIf { it.version == job?.rallyListVersion }
 }
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
@@ -451,8 +478,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         loadReview(keepCursor = true)
     }
 
-    /** Loads the cards and puts the cursor on the first one that still needs an answer. */
-    fun loadReview(keepCursor: Boolean = false) {
+    /**
+     * Loads the cards and puts the cursor on the first one that still needs an answer. With
+     * [keepCursor] the card on screen stays on screen, wherever the new cards put it. With
+     * [atRally] the winner question of that rally comes up, answered or not.
+     */
+    fun loadReview(keepCursor: Boolean = false, atRally: String? = null) {
         val ui = _analysis.value
         val matchId = ui.matchId ?: return
         val jobId = ui.job?.id ?: return
@@ -463,7 +494,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 // answer arrives another match may be open, and its screen must never get these cards.
                 if (current.matchId != matchId || current.job?.id != jobId) return@update current
                 if (deck == null) return@update current.copy(reviewProblem = ReviewProblem.LOAD_FAILED)
-                val cursor = if (keepCursor) current.cursor.coerceIn(0, deck.cards.size) else deck.cards.indexOfFirst { it.open }.let { if (it < 0) deck.cards.size else it }
+                fun indexOf(found: (ReviewCard) -> Boolean) = deck.cards.indexOfFirst(found).takeIf { it >= 0 }
+                val cursor = when {
+                    atRally != null -> indexOf { it.rallyId == atRally && it.questionType == ReviewCard.RALLY_WINNER }
+                    // A correction renumbers the rallies, so the card is found by what it is and not by where it was.
+                    keepCursor -> current.card?.let { shown -> indexOf { it.id == shown.id } } ?: current.cursor.coerceIn(0, deck.cards.size)
+                    else -> null
+                } ?: indexOf { it.open } ?: deck.cards.size
                 current.copy(deck = deck, cursor = cursor, reviewProblem = null)
             }
         }
@@ -529,6 +566,111 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 val here = deck.cards.indexOfFirst { it.id == card.id }
                 val next = deck.cards.withIndex().firstOrNull { (index, candidate) -> index > here && candidate.open }?.index ?: deck.cards.size
                 current.copy(deck = deck, cursor = next, saving = false, reviewProblem = null)
+            }
+        }
+    }
+
+    // ----- Corrections of the rally list -----
+
+    /** Reads the rally list of the open match's job. */
+    fun loadRallies(matchId: String) {
+        val ui = _analysis.value
+        val jobId = ui.job?.id?.takeIf { ui.matchId == matchId } ?: return
+        _analysis.update { it.copy(ralliesLoad = RalliesLoad.LOADING) }
+        viewModelScope.launch {
+            val list = withContext(Dispatchers.IO) { runCatching { api().rallies(jobId) }.getOrNull() }
+            _analysis.update { current ->
+                if (current.matchId != matchId || current.job?.id != jobId) return@update current
+                if (list == null) current.copy(ralliesLoad = RalliesLoad.UNREACHABLE) else current.copy(rallies = list, ralliesLoad = RalliesLoad.READY)
+            }
+        }
+    }
+
+    /** Asks again for what a screen of the rally list is missing: the job first, then its list. */
+    fun retryRallies(matchId: String) {
+        val ui = _analysis.value
+        if (ui.matchId != matchId || ui.job == null) watchAnalysis(matchId, startIfMissing = false) else loadRallies(matchId)
+    }
+
+    fun addRally(startMs: Long, endMs: Long, onDone: () -> Unit) = correct(onDone) { api, jobId, version -> api.addRally(jobId, startMs, endMs, version) }
+
+    fun moveRally(rallyId: String, startMs: Long, endMs: Long, onDone: () -> Unit) =
+        correct(onDone) { api, _, version -> api.moveRally(rallyId, startMs, endMs, version) }
+
+    fun splitRally(rallyId: String, atMs: Long, onDone: () -> Unit) = correct(onDone) { api, _, version -> api.splitRally(rallyId, atMs, version) }
+
+    fun mergeWithPrevious(rallyId: String, onDone: () -> Unit) = correct(onDone) { api, _, version -> api.mergeWithPrevious(rallyId, version) }
+
+    /** The user's statement that the list holds every rally of the video, for the list that is on screen. */
+    fun confirmRallyList(onDone: () -> Unit) = correct(onDone) { api, jobId, version -> Correction(emptyList(), emptyList(), api.confirmRallyList(jobId, version)) }
+
+    fun clearCorrectionProblem() = _analysis.update { it.copy(correctionProblem = null, overlapsRally = null) }
+
+    /**
+     * Sends one correction made on the list that is on screen. Whatever the outcome, the list is
+     * read again afterwards, so the screen shows what the server holds. A correction is never
+     * sent a second time by the app: when no answer came, the reloaded list tells whether the
+     * server applied it, because every applied correction moves the list version on.
+     */
+    private fun correct(onDone: () -> Unit, send: (ApiClient, String, Int) -> Correction) {
+        val ui = _analysis.value
+        val matchId = ui.matchId ?: return
+        val jobId = ui.job?.id ?: return
+        val list = ui.rallies ?: return
+        if (ui.correcting) return
+        _analysis.update { it.copy(correcting = true, correctionProblem = null, overlapsRally = null) }
+        viewModelScope.launch {
+            val sent = withContext(Dispatchers.IO) {
+                try {
+                    Result.success(send(api(), jobId, list.version))
+                } catch (error: IOException) {
+                    Result.failure(error)
+                }
+            }
+            sent.getOrNull()?.let { publish(matchId, it.job) }
+            val reloaded = withContext(Dispatchers.IO) { runCatching { api().rallies(jobId) }.getOrNull() }
+            val error = sent.exceptionOrNull()
+            // No answer and a list that moved on: this phone is the only one that corrects, so the correction went through.
+            val applied = sent.isSuccess || (error !is ApiException && reloaded != null && reloaded.version > list.version)
+            val problem = when {
+                applied -> null
+                error !is ApiException -> CorrectionProblem.UNREACHABLE
+                else -> when (error.code) {
+                    "RALLY_LIST_STALE" -> CorrectionProblem.STALE
+                    "RALLY_OVERLAP" -> CorrectionProblem.OVERLAP
+                    "INVALID_INTERVAL", "SPLIT_POINT_OUTSIDE" -> CorrectionProblem.OUTSIDE
+                    "LIST_NOT_READY" -> CorrectionProblem.NOT_READY
+                    "MOCK_LIST_NOT_CONFIRMABLE" -> CorrectionProblem.DEMO
+                    else -> CorrectionProblem.REFUSED
+                }
+            }
+            val blocker = (error as? ApiException)?.takeIf { problem == CorrectionProblem.OVERLAP }?.details?.optString("rallyId")
+            val affected = sent.getOrNull()?.affected?.map { it.id }.orEmpty()
+            val deck = if (applied) withContext(Dispatchers.IO) { runCatching { api().reviewCards(jobId, if (ui.detail) "ALL" else "SCORE") }.getOrNull() } else null
+            var shown = false
+            _analysis.update { current ->
+                if (current.matchId != matchId || current.job?.id != jobId) return@update current
+                shown = true
+                val rallies = reloaded ?: current.rallies
+                val cursor = deck?.cards?.let { cards ->
+                    fun indexOf(found: (ReviewCard) -> Boolean) = cards.indexOfFirst(found).takeIf { it >= 0 }
+                    // The corrected rally asks its question first. When it has nothing to ask, the
+                    // review stays on that rally, and without a corrected rally on the card it showed.
+                    indexOf { it.open && it.rallyId in affected }
+                        ?: indexOf { it.rallyId in affected && it.questionType == ReviewCard.RALLY_WINNER }
+                        ?: current.card?.let { shown -> indexOf { it.id == shown.id } }
+                        ?: indexOf { it.open } ?: cards.size
+                }
+                current.copy(
+                    rallies = rallies, ralliesLoad = if (rallies == null) RalliesLoad.UNREACHABLE else RalliesLoad.READY,
+                    deck = deck ?: current.deck, cursor = cursor ?: current.cursor,
+                    correcting = false, correctionProblem = problem,
+                    overlapsRally = rallies?.rallies?.firstOrNull { it.id == blocker }?.sequence,
+                )
+            }
+            if (applied && shown) {
+                if (sent.isFailure) watch(matchId, startIfMissing = false, startNow = false)
+                onDone()
             }
         }
     }

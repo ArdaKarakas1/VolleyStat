@@ -85,15 +85,15 @@ def _score(numbered: Sequence[tuple[int, Mapping[str, Any]]], may_be_missing: bo
     }
 
 
-def score_after(rallies: Sequence[Mapping[str, Any]]) -> dict[int, dict[str, int]]:
-    """The score of the running set after each counted rally, by sequence number.
+def running_score(rallies: Sequence[Mapping[str, Any]]) -> tuple[list[dict[str, Any]], dict[int, dict[str, int]]]:
+    """The sets of a rally list, and the score of the running set after each counted rally by sequence number.
 
     The same walk as the score of the report: a rejected rally has no entry, and neither has the
     first rally without a winner nor any rally after it.
     """
     after: dict[int, dict[str, int]] = {}
-    _score(_numbered(rallies), True, after)
-    return after
+    sets = _score(_numbered(rallies), True, after)["sets"]
+    return sets, after
 
 
 def _numbered(rallies: Sequence[Mapping[str, Any]]) -> list[tuple[int, Mapping[str, Any]]]:

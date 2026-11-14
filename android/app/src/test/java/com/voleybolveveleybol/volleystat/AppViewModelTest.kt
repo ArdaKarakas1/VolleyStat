@@ -83,6 +83,30 @@ class AppViewModelTest {
     private fun deck(vararg cards: JSONObject) = JSONObject().put("cards", JSONArray(cards.toList()))
         .put("position", JSONObject().put("answered", cards.count { it.getString("status") != "OPEN" }).put("total", cards.size))
 
+    private fun rally(id: String, sequence: Int, startMs: Long, endMs: Long, status: String = "PROPOSED") = JSONObject().put("id", id)
+        .put("sequence", sequence).put("startMs", startMs).put("endMs", endMs).put("origin", "ANALYZER").put("status", status)
+        .put("proposedWinner", "UNKNOWN").put("winner", JSONObject.NULL).put("scoreAfter", JSONObject.NULL)
+
+    private fun rallies(version: Int, vararg list: JSONObject, confirmed: Boolean = false) = JSONObject().put("rallies", JSONArray(list.toList()))
+        .put("rallyListVersion", version).put("listConfirmed", confirmed).put("videoDurationMs", 60_000).put("sets", JSONArray())
+
+    private fun corrected(job: JSONObject, vararg affected: JSONObject) = JSONObject().put("correctionId", "correction-1")
+        .put("affected", JSONArray(affected.toList())).put("removed", JSONArray()).put("job", job).put("reportRevision", 5)
+
+    /** A view model that follows job J of match A and has read its rally list, which the test can then change. */
+    private fun withRallyList(list: () -> JSONObject): AppViewModel {
+        on("GET /videos/video-A/analyses/latest") { ok(job("J", "video-A", "NEEDS_REVIEW")) }
+        on("GET /analyses/J/rallies") { ok(list()) }
+        on("GET /analyses/J/review-cards") { ok(deck(card("c1", 1), card("c2", 2), card("c3", 3))) }
+        val vm = viewModel(StoredState(matches = listOf(accepted("A"))))
+        vm.watchAnalysis("A", startIfMissing = false)
+        await("the job") { vm.analysis.value.job != null }
+        vm.loadRallies("A")
+        await("the rally list") { vm.analysis.value.rallies != null }
+        requests.clear()
+        return vm
+    }
+
     private fun video(path: String) = LocalVideo(path, VideoSource.CAMERA, File(path).name, 10, "video/mp4", null, null, null, null)
 
     /** A match whose file the server accepted as video-<id>. */
@@ -341,5 +365,108 @@ class AppViewModelTest {
         assertEquals("DELETE /matches/$created", requests.last())
         assertFalse(requests.any { it.endsWith("/complete") })
         assertTrue(vm.state.value.matches.isEmpty())
+    }
+
+    @Test fun aCorrectionNamesTheListOnScreenAndThenTheListAndTheCardsAreReadAgain() {
+        var version = 3
+        val sent = CopyOnWriteArrayList<JSONObject>()
+        // The server sends the list in match order, as the real one does.
+        val vm = withRallyList {
+            if (version == 3) rallies(3, rally("r1", 1, 2_000, 9_000), rally("r2", 2, 15_000, 24_000))
+            else rallies(version, rally("r1", 1, 2_000, 9_000), rally("r-new", 2, 10_000, 13_000), rally("r2", 3, 15_000, 24_000))
+        }
+        on("POST /analyses/J/rallies") { request ->
+            sent += JSONObject(request.body.readUtf8())
+            version = 4
+            MockResponse().setResponseCode(201).setHeader("Content-Type", "application/json").setBody(corrected(job("J", "video-A", "NEEDS_REVIEW", open = 3), rally("r-new", 2, 10_000, 13_000)).toString())
+        }
+        on("GET /analyses/J/review-cards") { ok(deck(card("c1", 1, "HOME"), card("c-new", 2).put("rallyId", "r-new"), card("c2", 3))) }
+
+        var done = false
+        vm.addRally(10_000, 13_000) { done = true }
+        await("the correction") { done }
+
+        assertEquals(listOf(3, 10_000, 13_000), sent.single().let { listOf(it.getInt("expectedListVersion"), it.getInt("startMs"), it.getInt("endMs")) })
+        assertEquals(listOf("POST /analyses/J/rallies", "GET /analyses/J/rallies", "GET /analyses/J/review-cards"), requests.toList())
+        val ui = vm.analysis.value
+        assertEquals(4, ui.rallies!!.version)
+        assertEquals(listOf("r1", "r-new", "r2"), ui.rallies!!.rallies.map { it.id })
+        assertFalse(ui.correcting)
+        assertNull(ui.correctionProblem)
+        // The rally that was just made asks its question first.
+        assertEquals("c-new", ui.card!!.id)
+        assertEquals(3, ui.job!!.reviewOpen)
+    }
+
+    @Test fun aRefusedCorrectionNamesItsCauseAndShowsTheListTheServerHolds() {
+        var version = 3
+        val vm = withRallyList { rallies(version, rally("r1", 1, 2_000, 9_000), rally("r2", 2, 15_000, 24_000)) }
+        val overlap = MockResponse().setResponseCode(409).setHeader("Content-Type", "application/json").setBody(
+            JSONObject().put("error", JSONObject().put("code", "RALLY_OVERLAP").put("message", "x").put("details", JSONObject().put("rallyId", "r2"))).toString())
+        val refusals = listOf(
+            { overlap } to CorrectionProblem.OVERLAP,
+            { refuse(409, "RALLY_LIST_STALE") } to CorrectionProblem.STALE,
+            { refuse(422, "INVALID_INTERVAL") } to CorrectionProblem.OUTSIDE,
+            { refuse(422, "SPLIT_POINT_OUTSIDE") } to CorrectionProblem.OUTSIDE,
+            { refuse(409, "LIST_NOT_READY") } to CorrectionProblem.NOT_READY,
+            { refuse(409, "MOCK_LIST_NOT_CONFIRMABLE") } to CorrectionProblem.DEMO,
+            { refuse(409, "JOB_NOT_REVIEWABLE") } to CorrectionProblem.REFUSED,
+        )
+        refusals.forEach { (answer, problem) ->
+            on("POST /rallies/r1/move") { answer() }
+            version++  // somebody else's change: the reload after the refusal must bring it to the screen
+            vm.moveRally("r1", 2_000, 16_000) { fail("the app treated a refused correction as done") }
+            await("the refusal") { vm.analysis.value.correctionProblem != null }
+            assertEquals(problem, vm.analysis.value.correctionProblem)
+            assertEquals(if (problem == CorrectionProblem.OVERLAP) 2 else null, vm.analysis.value.overlapsRally)
+            assertEquals(version, vm.analysis.value.rallies!!.version)
+            assertFalse(vm.analysis.value.correcting)
+            vm.clearCorrectionProblem()
+        }
+        // A refusal is never followed by a second attempt, and the cards are not read again for it.
+        assertEquals(refusals.size, requests.count { it == "POST /rallies/r1/move" })
+        assertFalse(requests.any { it.endsWith("/review-cards") })
+    }
+
+    @Test fun aCorrectionWhoseAnswerWasLostIsFoundOnTheListAndIsNotSentAgain() {
+        var version = 3
+        val vm = withRallyList { rallies(version, rally("r1", 1, 2_000, 9_000), rally("r2", 2, 15_000, 24_000)) }
+        on("POST /rallies/r2/split") {
+            version = 4  // the server applied the split; only its answer never arrives
+            MockResponse().setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AFTER_REQUEST)
+        }
+        var done = false
+        vm.splitRally("r2", 20_000) { done = true }
+        await("the correction") { done }
+        assertNull(vm.analysis.value.correctionProblem)
+        assertEquals(4, vm.analysis.value.rallies!!.version)
+        assertEquals(1, requests.count { it == "POST /rallies/r2/split" })
+    }
+
+    @Test fun aCorrectionThatNeverReachedTheServerSaysSoAndIsNotCalledDone() {
+        val vm = withRallyList { rallies(3, rally("r1", 1, 2_000, 9_000), rally("r2", 2, 15_000, 24_000)) }
+        on("POST /rallies/r2/merge-previous") { MockResponse().setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AFTER_REQUEST) }
+        vm.mergeWithPrevious("r2") { fail("the list did not change, so nothing was done") }
+        await("the failure") { vm.analysis.value.correctionProblem != null }
+        assertEquals(CorrectionProblem.UNREACHABLE, vm.analysis.value.correctionProblem)
+        assertEquals(3, vm.analysis.value.rallies!!.version)
+        assertEquals(1, requests.count { it == "POST /rallies/r2/merge-previous" })
+    }
+
+    @Test fun confirmingTheListNamesTheVersionTheUserSaw() {
+        var confirmed = false
+        val sent = CopyOnWriteArrayList<JSONObject>()
+        val vm = withRallyList { rallies(7, rally("r1", 1, 2_000, 9_000, "VERIFIED"), confirmed = confirmed) }
+        on("POST /analyses/J/rally-list/confirm") { request ->
+            sent += JSONObject(request.body.readUtf8())
+            confirmed = true
+            ok(JSONObject().put("job", job("J", "video-A", "COMPLETE", open = 0).put("rallyListVersion", 7).put("listConfirmed", true)).put("reportRevision", 9))
+        }
+        var done = false
+        vm.confirmRallyList { done = true }
+        await("the confirmation") { done }
+        assertEquals(7, sent.single().getInt("expectedListVersion"))
+        assertTrue(vm.analysis.value.rallies!!.confirmed)
+        assertTrue(vm.analysis.value.job!!.listConfirmed)
     }
 }

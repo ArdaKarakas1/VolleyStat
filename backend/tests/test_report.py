@@ -535,7 +535,7 @@ def test_report_route_names_its_job_and_follows_the_decisions(storage, make_clip
         assert set(draft) == {"matchId", "jobId", "revision", "analyzer", "mock", "rallyList", "verificationStatus", "rallies",
                               "ralliesMayBeMissing", "rules", "score", "teams", "players", "unattributed", "coverage"}
         # Nobody has confirmed the rally list, so the report says that rallies may be missing.
-        assert draft["ralliesMayBeMissing"] is True and draft["rallyList"] == {"confirmed": False, "confirmedAt": None}
+        assert draft["ralliesMayBeMissing"] is True and draft["rallyList"] == {"confirmed": False, "confirmedAt": None, "corrections": 0}
         assert draft["verificationStatus"] == "DRAFT" and draft["score"]["status"] == "UNKNOWN"
 
         first = decide(client, card_of(client, job["id"], 1), "HOME")

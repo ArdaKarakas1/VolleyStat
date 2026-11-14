@@ -20,13 +20,12 @@ from pydantic import BaseModel, Field
 from .db import new_id, utc_now
 from .errors import fail
 from .jobs import COMPLETE, NEEDS_REVIEW, clip_bounds, find_job, is_mock, job_payload, list_confirmed
-from .review import RALLY_WINNER, _audit, _set_answer, rally_payloads
+from .review import CONFIRM_LIST, RALLY_WINNER, _audit, _set_answer, rally_payloads
 
 ADD = "ADD"
 MOVE = "MOVE"
 SPLIT = "SPLIT"
 MERGE_PREVIOUS = "MERGE_PREVIOUS"
-CONFIRM_LIST = "CONFIRM_LIST"
 
 
 class _OnList(BaseModel):

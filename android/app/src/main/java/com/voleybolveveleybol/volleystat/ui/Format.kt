@@ -39,6 +39,9 @@ fun formatClock(durationMs: Long): String {
     return if (hours > 0) "$hours:$rest" else rest
 }
 
+/** "12:36,4": a position in the video to a tenth of a second, for placing the boundary of a rally. */
+fun formatClockTenths(positionMs: Long): String = "${formatClock(positionMs)},${positionMs % 1000 / 100}"
+
 /** "12 Kas 21:40". */
 fun formatMoment(epochMs: Long): String = SimpleDateFormat("d MMM HH:mm", turkish).format(Date(epochMs))
 

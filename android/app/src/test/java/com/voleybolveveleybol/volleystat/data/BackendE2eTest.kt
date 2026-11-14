@@ -1,11 +1,15 @@
 package com.voleybolveveleybol.volleystat.data
 
+import com.voleybolveveleybol.volleystat.model.AnalysisJob
 import com.voleybolveveleybol.volleystat.model.AnalysisSummary
+import com.voleybolveveleybol.volleystat.model.Rally
 import com.voleybolveveleybol.volleystat.model.ReviewCard
 import com.voleybolveveleybol.volleystat.model.StatValue
 import com.voleybolveveleybol.volleystat.model.UploadSession
 import com.voleybolveveleybol.volleystat.model.VideoCheck
+import com.voleybolveveleybol.volleystat.model.gaps
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -87,6 +91,34 @@ class BackendE2eTest {
         }
     }
 
+    /** Starts the demo analysis of a video and waits for its rallies. Skips the test on a server without the demo analyzer. */
+    private fun demoJob(api: ApiClient, videoId: String): AnalysisJob {
+        var job = try {
+            api.startAnalysis(videoId, "e2e-${System.nanoTime()}")
+        } catch (error: ApiException) {
+            assumeTrue("the server runs without an analyzer", error.code != "MODEL_NOT_CONFIGURED")
+            throw error
+        }
+        assumeTrue("this test needs the demo analyzer", job.analyzerId == "demo")
+        assertTrue(job.mock)
+        val deadline = System.nanoTime() + 60_000_000_000
+        while (job.state == AnalysisSummary.QUEUED || job.state == AnalysisSummary.PROCESSING) {
+            assertTrue("the job did not finish within a minute", System.nanoTime() < deadline)
+            Thread.sleep(200)
+            job = api.latestAnalysis(videoId)!!
+        }
+        assertEquals(AnalysisSummary.NEEDS_REVIEW, job.state)
+        return job
+    }
+
+    private fun refused(code: String, call: () -> Unit): ApiException = try {
+        call()
+        throw AssertionError("the server accepted what it has to refuse with $code")
+    } catch (error: ApiException) {
+        assertEquals(code, error.code)
+        error
+    }
+
     @Test fun aDemoAnalysisIsReviewedAndTheReportFollowsExactlyThoseAnswers() {
         assumeTrue(url != null && clip != null && clip.isFile)
         val api = ApiClient(url!!)
@@ -94,21 +126,7 @@ class BackendE2eTest {
         val videoId = check!!.videoId
         val matchId = session.serverMatchId!!
         try {
-            var job = try {
-                api.startAnalysis(videoId, "e2e-${System.nanoTime()}")
-            } catch (error: ApiException) {
-                assumeTrue("the server runs without an analyzer", error.code != "MODEL_NOT_CONFIGURED")
-                throw error
-            }
-            assumeTrue("this test needs the demo analyzer", job.analyzerId == "demo")
-            assertTrue(job.mock)
-            val deadline = System.nanoTime() + 60_000_000_000
-            while (job.state == AnalysisSummary.QUEUED || job.state == AnalysisSummary.PROCESSING) {
-                assertTrue("the job did not finish within a minute", System.nanoTime() < deadline)
-                Thread.sleep(200)
-                job = api.latestAnalysis(videoId)!!
-            }
-            assertEquals(AnalysisSummary.NEEDS_REVIEW, job.state)
+            var job = demoJob(api, videoId)
 
             val deck = api.reviewCards(job.id, "SCORE")
             val total = deck.cards.size
@@ -166,6 +184,77 @@ class BackendE2eTest {
             } catch (error: ApiException) {
                 assertEquals("REVIEW_STALE_VERSION", error.code)
             }
+        } finally {
+            api.deleteMatch(matchId)
+        }
+    }
+
+    @Test fun theRallyListIsCorrectedOnTheRealServerAndADemoListCanNotBeConfirmed() {
+        assumeTrue(url != null && clip != null && clip.isFile)
+        val api = ApiClient(url!!)
+        val (session, check) = upload(clip!!)
+        val matchId = session.serverMatchId!!
+        try {
+            val job = demoJob(api, check!!.videoId)
+            val first = api.rallies(job.id)
+            assertEquals(job.rallyListVersion, first.version)
+            assertEquals(check.durationMs, first.videoDurationMs)
+            assertEquals(job.rallies, first.rallies.size)
+            assertTrue(first.rallies.all { it.fromAnalyzer && it.status == Rally.PROPOSED && it.scoreAfter == null })
+            assertFalse(first.confirmed)
+            assertTrue("no winner, so no set score yet", first.sets.isEmpty())
+
+            // A rally the analyzer missed, inside the longest pause of the list.
+            val pause = gaps(first).maxBy { it.windowEndMs - it.windowStartMs }
+            val added = api.addRally(job.id, pause.windowStartMs + 100, pause.windowStartMs + 900, first.version)
+            val made = added.affected.single()
+            assertFalse(made.fromAnalyzer)
+            assertEquals(listOf(pause.windowStartMs + 100, pause.windowStartMs + 900), listOf(made.startMs, made.endMs))
+            assertEquals(job.reviewOpen + 1, added.job.reviewOpen)
+            assertEquals(first.version + 1, added.job.rallyListVersion)
+            var list = api.rallies(job.id)
+            assertEquals(first.rallies.size + 1, list.rallies.size)
+            assertEquals("the list stays in match order", list.rallies.map { it.startMs }.sorted(), list.rallies.map { it.startMs })
+            assertEquals((1..list.rallies.size).toList(), list.rallies.map { it.sequence })
+
+            // A correction made on the list as it was before is refused, so none applies twice.
+            refused("RALLY_LIST_STALE") { api.addRally(job.id, pause.windowStartMs + 100, pause.windowStartMs + 900, first.version) }
+            val blocked = refused("RALLY_OVERLAP") { api.addRally(job.id, made.startMs + 100, made.endMs + 100, list.version) }
+            assertEquals(made.id, blocked.details.optString("rallyId"))
+            assertEquals("a refused correction leaves the list as it was", list, api.rallies(job.id))
+
+            val moved = api.moveRally(made.id, made.startMs, made.endMs - 200, list.version).affected.single()
+            assertEquals(made.endMs - 200, moved.endMs)
+
+            // Cutting an analyzer rally in two: the later part stays that rally, the earlier part is the user's.
+            list = api.rallies(job.id)
+            val whole = list.rallies.first { it.fromAnalyzer }
+            val middle = (whole.startMs + whole.endMs) / 2
+            val cut = api.splitRally(whole.id, middle, list.version)
+            assertEquals(listOf(false to (whole.startMs to middle), true to (middle to whole.endMs)), cut.affected.map { it.fromAnalyzer to (it.startMs to it.endMs) })
+            assertEquals(whole.id, cut.affected.last().id)
+            assertEquals(first.rallies.size + 2, api.rallies(job.id).rallies.size)
+
+            // Joining the two parts again removes the earlier one.
+            val joined = api.mergeWithPrevious(whole.id, cut.job.rallyListVersion)
+            assertEquals(listOf(cut.affected.first().id), joined.removed)
+            assertEquals(whole.startMs to whole.endMs, joined.affected.single().let { it.startMs to it.endMs })
+
+            // Every rally gets a winner. The invented intervals of a demo job still can not be confirmed.
+            var done = joined.job
+            api.reviewCards(job.id, "SCORE").cards.forEach { card -> done = api.decide(card.id, ReviewCard.HOME, card.version, "e2e-fix-${card.id}") }
+            assertEquals(AnalysisSummary.COMPLETE, done.state)
+            list = api.rallies(job.id)
+            assertEquals(done.rallyListVersion, list.version)
+            assertEquals("the list carries the set scores of its own version", listOf(Triple(1, list.rallies.size, 0)), list.sets.map { Triple(it.number, it.home, it.away) })
+            refused("MOCK_LIST_NOT_CONFIRMABLE") { api.confirmRallyList(job.id, list.version) }
+
+            val report = api.report(matchId)!!
+            assertTrue(report.ralliesMayBeMissing)
+            assertFalse(report.listConfirmed)
+            assertEquals("add, move, split and merge", 4, report.corrections)
+            assertEquals(1, report.ralliesUserCreated)
+            assertEquals(StatValue(list.rallies.size, StatValue.PARTIAL), report.home.points)
         } finally {
             api.deleteMatch(matchId)
         }

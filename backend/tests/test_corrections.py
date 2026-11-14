@@ -124,7 +124,7 @@ def revision(storage, job_id):
 def test_the_rally_list_carries_its_version_the_video_length_and_where_each_rally_came_from(match):
     client, job_id, _ = match
     found = listing(client, job_id)
-    assert set(found) == {"rallies", "rallyListVersion", "listConfirmed", "videoDurationMs"}
+    assert set(found) == {"rallies", "rallyListVersion", "listConfirmed", "videoDurationMs", "sets"}
     assert (found["rallyListVersion"], found["listConfirmed"], found["videoDurationMs"]) == (0, False, VIDEO_MS)
     assert [(item["sequence"], item["origin"], item["scoreAfter"]) for item in found["rallies"]] == [
         (1, "ANALYZER", None), (2, "ANALYZER", None), (3, "ANALYZER", None), (4, "ANALYZER", None)]
@@ -141,6 +141,18 @@ def test_the_score_after_each_rally_follows_the_walk_of_the_report_and_stops_whe
 
     decide(client, card_of(client, job_id, 1), "UNSURE")
     assert [item["scoreAfter"] for item in listing(client, job_id)["rallies"]] == [None, None, None, None]
+
+
+def test_the_rally_list_carries_the_set_scores_that_the_user_is_asked_to_check(match):
+    client, job_id, _ = match
+    assert listing(client, job_id)["sets"] == []
+
+    answer_all(client, job_id, ["HOME", "NOT_A_RALLY", "AWAY", "HOME"])
+
+    found = listing(client, job_id)
+    assert found["sets"] == [{"number": 1, "home": 2, "away": 1, "complete": False}]
+    # One count for both: the scores a user confirms on the list are the scores the report prints.
+    assert found["sets"] == report_of(client, job_id)["score"]["sets"]
 
 
 # --- add ------------------------------------------------------------------------------------
@@ -491,7 +503,7 @@ def test_a_confirmation_lapses_when_a_winner_or_the_list_changes_but_not_on_a_de
     assert confirmed(), "an answer about how a point was scored changes no score"
 
     decide(client, card_of(client, job_id, 2), "HOME")
-    assert not confirmed() and report_of(client, job_id)["rallyList"] == {"confirmed": False, "confirmedAt": None}
+    assert not confirmed() and report_of(client, job_id)["rallyList"] == {"confirmed": False, "confirmedAt": None, "corrections": 0}
     assert confirm(client, job_id).status_code == 200 and confirmed()
 
     assert move(client, job_id, 3, 29_000, 41_000).status_code == 200
@@ -524,7 +536,7 @@ def test_the_counts_are_lower_bounds_until_the_user_confirms_the_list(match):
     client, job_id, _ = match
     answer_all(client, job_id, ["HOME", "AWAY", "HOME", "HOME"])
     draft = report_of(client, job_id)
-    assert (draft["ralliesMayBeMissing"], draft["rallyList"]) == (True, {"confirmed": False, "confirmedAt": None})
+    assert (draft["ralliesMayBeMissing"], draft["rallyList"]) == (True, {"confirmed": False, "confirmedAt": None, "corrections": 0})
     assert (draft["teams"]["home"]["points"], draft["score"]["status"]) == ({"value": 3, "status": "PARTIAL"}, "PARTIAL")
 
     assert confirm(client, job_id).status_code == 200
@@ -538,6 +550,28 @@ def test_the_counts_are_lower_bounds_until_the_user_confirms_the_list(match):
     assert add(client, job_id, 10_000, 13_000).status_code == 201
     again = report_of(client, job_id)
     assert (again["ralliesMayBeMissing"], again["rallyList"]["confirmed"], again["teams"]["home"]["points"]["status"]) == (True, False, "PARTIAL")
+
+
+def test_the_report_says_how_many_corrections_shaped_its_intervals(match):
+    client, job_id, _ = match
+
+    def corrected():
+        return report_of(client, job_id)["rallyList"]["corrections"]
+
+    assert corrected() == 0
+    assert move(client, job_id, 1, 2_000, 9_000).status_code == 200, "the interval it already has: nothing to correct"
+    assert code(add(client, job_id, 8_000, 12_000)) == "RALLY_OVERLAP"
+    assert corrected() == 0
+
+    assert add(client, job_id, 10_000, 13_000).status_code == 201
+    assert move(client, job_id, 1, 1_000, 9_000).status_code == 200
+    assert split(client, job_id, 5, 52_000).status_code == 200
+    assert merge_previous(client, job_id, 6).status_code == 200
+    assert corrected() == 4
+
+    answer_all(client, job_id, ["HOME", "AWAY", "HOME", "AWAY", "HOME"])
+    assert confirm(client, job_id).status_code == 200
+    assert corrected() == 4, "a confirmation changes no interval"
 
 
 def test_a_measured_model_does_not_make_its_own_list_complete(storage, make_clip):

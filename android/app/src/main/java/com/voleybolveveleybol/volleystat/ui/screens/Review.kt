@@ -30,6 +30,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -120,6 +121,9 @@ fun ReviewScreen(
     onOpenReport: () -> Unit,
     onBack: () -> Unit,
     onRetry: () -> Unit = {},
+    /** Opens the range editor on the rally of this card: its clip is cut wrong, holds two rallies, or is half a rally. */
+    onFixRally: (ReviewCard) -> Unit = {},
+    onOpenRallies: () -> Unit = {},
     clip: @Composable (ReviewCard) -> Unit,
 ) {
     val deck = analysis.deck
@@ -141,6 +145,8 @@ fun ReviewScreen(
                     SecondaryButton(stringResource(R.string.action_open_report), onOpenReport)
                 } else {
                     PrimaryButton(stringResource(R.string.action_open_report), onOpenReport, icon = R.drawable.ic_bar_chart)
+                    // Every card is answered. The next step towards an exact score is the list: a rally the analyzer missed has no card.
+                    SecondaryButton(stringResource(R.string.rallies_title), onOpenRallies)
                     if (deck.cards.isNotEmpty()) SecondaryButton(stringResource(R.string.review_previous), onClick = { onMove(-1) })
                 }
             } else {
@@ -177,7 +183,13 @@ fun ReviewScreen(
                     Text(stringResource(R.string.review_position, analysis.cursor + 1, deck.cards.size), style = MaterialTheme.typography.labelMedium)
                 }
                 Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(MaterialTheme.shapes.large).background(MaterialTheme.colorScheme.scrim)) { clip(card) }
-                Text(stringResource(R.string.review_rally, card.rallySequence, formatClock(card.clipStartMs)), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        stringResource(R.string.review_rally, card.rallySequence, formatClock(card.clipStartMs)), style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = { onFixRally(card) }, enabled = !analysis.saving) { Text(stringResource(R.string.review_fix_rally)) }
+                }
 
                 when (analysis.reviewProblem) {
                     ReviewProblem.STALE -> Notice(stringResource(R.string.review_stale), Tone.CAUTION)
