@@ -197,7 +197,7 @@ Bu incelemeden iki konu açık kaldı. Hiçbir test gerçek oynatıcının bir h
 
 Sıra bağımlılığa göredir. İlk dört iş gerçek video beklemez.
 
-1. **Set sonu ve düzeltme süresi:** Ralli düzeltme sürüm 0.5.0 ile geldi (ADR-0114). İki eksik kaldı. Set kuralı sabit olduğu için sunucu takımların başka bir kuralla oynadığı maçın set sayısını yanlış hesaplar. Çözüm adayı kullanıcının her setin son rallisini işaretlemesidir ve ürün sahibinin kararını bekler (bölüm 8). Kimse düzeltmenin gerçek bir maçta kaç dakika sürdüğünü de ölçmedi. Ekip bu süreyi ilk gerçek maçta ölçer.
+1. **Set sonu ve düzeltme süresi:** Ralli düzeltme sürüm 0.5.0 ile geldi (ADR-0114). İki eksik kaldı. Set kuralı sabit olduğu için sunucu takımların başka bir kuralla oynadığı maçın set sayısını yanlış hesaplar. İki çözüm adayı ürün sahibinin kararını bekler (bölüm 8). Kimse düzeltmenin gerçek bir maçta kaç dakika sürdüğünü de ölçmedi. Ekip bu süreyi ilk gerçek maçta ölçer.
 2. **Saha yarısı ve taraf değişimi:** Maç kaydı hangi takımın hangi yarıda başladığını ve takımların ne zaman yer değiştirdiğini taşımıyor. Kazanan önerisi ve oyuncu tarafı bu bilgiyi ister.
 3. **Saha bölgesi seçimi:** Kullanıcı bir karede sahanın köşelerine dokunur. Sunucu homografiyi saklar. Baseline hareketi saha içiyle sınırlar (deney B2'nin ön koşulu).
 4. **Arka plan yükleme:** WorkManager ve ön plan hizmeti. Gerçek telefonda deneme ister.
@@ -224,6 +224,6 @@ Doğrulayıcılar iki adayı reddetti. Önceki rallinin kazananından çıkarıl
 | Uygulama simgesi kararı | Suluboya logo küçük boyda zor okunur ve mor arayüzle aynı paleti paylaşmaz. |
 | Bulut ve GPU kararı | Ücretli hizmet onayı sende. O zamana kadar her şey yerelde çalışır. |
 | Depo görünürlüğü | Depo herkese açık. Kapalı olmasını istersen GitHub ayarından değiştirirsin. |
-| Set sonu işareti | Sunucu seti 25 sayıda, beşinci seti 15 sayıda bitirir. Sunucu üç setlik maçın 15 sayılık karar setinde takımların kazandığı set sayısını yanlış hesaplar. Sunucu 21 sayılık sette set skorlarını da yanlış hesaplar ve kullanıcı listeyi onaylayamaz. Öneri: Kullanıcı her setin son rallisini işaretler (maç başına üç ile beş dokunuş). Bu yeni bir elle giriştir ve senin kararını ister (bölüm 7, 1. iş). |
+| Set kuralı | Sunucu seti 25 sayıda, beşinci seti 15 sayıda bitirir. Sunucu üç setlik maçın 15 sayılık karar setinde takımların kazandığı set sayısını yanlış hesaplar. Sunucu 21 sayılık sette set skorlarını da yanlış hesaplar ve kullanıcı listeyi onaylayamaz. Birinci aday: Kullanıcı maçı açarken maç kuralını bir kez seçer (maçı kaç set kazanan alır, set kaç sayıda biter, karar seti kaç sayıda biter). Kullanıcı standart kuralla oynanan maçta hiçbir şeye dokunmaz. İkinci aday: Kullanıcı her setin son rallisini işaretler (maç başına üç ile beş dokunuş). Bu aday süreyle biten seti de karşılar. Öneri birinci adaydır. İki aday da yeni bir elle giriştir ve senin kararını ister (bölüm 7, 1. iş). |
 | İzin cümlesinin hukuki onayı | Uygulama 14 Kasım kararınla şu cümleyi gösterir: "Bu videoyu yükleme hakkım var. Sahadaki oyuncular çekimi biliyor ve analiz için izin verdi." Hiçbir KVKK uzmanı bu cümleyi okumadı. Cümle kişisel veri konusudur ve son hâlini bir uzman onaylar. |
 | Geri bildirim adresi | Uygulama içinden geri bildirim için bir e-posta adresi gerekir. Adresi yalnız sen verebilirsin. |
