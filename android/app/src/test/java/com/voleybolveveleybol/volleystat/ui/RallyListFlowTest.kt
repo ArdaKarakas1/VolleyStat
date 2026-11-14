@@ -77,6 +77,10 @@ class RallyListFlowTest {
     @Volatile private var thirdEndMs = 56_000L
     /** The rule the stand-in server counts the sets with. */
     @Volatile private var rules = MatchRules.FIVB
+    /** While this is set, the server holds back its answer to a new rule. */
+    @Volatile private var holdRules: java.util.concurrent.CountDownLatch? = null
+    /** The server refuses the next rule, as a server that does not accept it would. */
+    @Volatile private var refuseRules = false
     /** While this is set, the server holds back its answer to a winner decision, as a slow network would. */
     @Volatile private var holdDecision: java.util.concurrent.CountDownLatch? = null
     /** The next read of the cards fails, as it does when the connection drops for a moment. */
@@ -164,11 +168,18 @@ class RallyListFlowTest {
                         "GET /analyses/j1/rallies" -> ok(rallies())
                         "GET /analyses/j1/review-cards" -> if (failNextCardRead) MockResponse().setResponseCode(500).also { failNextCardRead = false } else ok(cards())
                         "PUT /matches/server-1/rules" -> {
-                            // As on the real server: a new rule recounts the list and moves it on, so the confirmation lapses.
-                            rules = MatchRules(body.getInt("setsToWin"), body.getInt("setTarget"), body.getInt("decidingSetTarget"))
-                            version++
-                            confirmed = false
-                            ok(JSONObject().put("id", "server-1"))
+                            holdRules?.await(15, java.util.concurrent.TimeUnit.SECONDS)
+                            if (refuseRules) {
+                                MockResponse().setResponseCode(422).setHeader("Content-Type", "application/json").setBody(
+                                    JSONObject().put("error", JSONObject().put("code", "VALIDATION_ERROR").put("message", "invalid").put("details", JSONObject())).toString()
+                                )
+                            } else {
+                                // As on the real server: a new rule recounts the list and moves it on, so the confirmation lapses.
+                                rules = MatchRules(body.getInt("setsToWin"), body.getInt("setTarget"), body.getInt("decidingSetTarget"))
+                                version++
+                                confirmed = false
+                                ok(JSONObject().put("id", "server-1"))
+                            }
                         }
                         "POST /analyses/j1/rally-list/confirm" -> {
                             confirmed = true
@@ -476,5 +487,28 @@ class RallyListFlowTest {
         back()
         waitFor(text(R.string.report_rules, text(R.string.rule_counting, 21, 3, 15)))
         app.onNodeWithText("0+ - 0+").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun aRuleOnItsWayKeepsItsScreenAndARefusalStaysNextToTheButton() {
+        openTheRallyList()
+        app.onNodeWithText(text(R.string.rule_card_change)).performScrollTo().performClick()
+        waitFor(text(R.string.rule_title))
+        holdRules = java.util.concurrent.CountDownLatch(1)
+        refuseRules = true
+        app.onNodeWithText(text(R.string.rule_sets_option, 2)).performScrollTo().performClick()
+        tap(R.string.action_save_rule)
+
+        // The answer is on its way: the screen says so and holds the back press.
+        waitFor(text(R.string.rule_sending))
+        back()
+        app.onNodeWithText(text(R.string.rule_title)).assertIsDisplayed()
+
+        // The server refuses. The screen stays, and the refusal stands where the user tapped.
+        holdRules!!.countDown()
+        waitFor(text(R.string.rule_refused))
+        app.onNodeWithText(text(R.string.rule_title)).assertIsDisplayed()
+        assertTrue(app.onAllNodesWithText(text(R.string.rule_sending)).fetchSemanticsNodes().isEmpty())
+        assertEquals(1, requests.count { it == "PUT /matches/server-1/rules" })
+        assertEquals("the list did not move on", MatchRules.FIVB, rules)
     }
 }

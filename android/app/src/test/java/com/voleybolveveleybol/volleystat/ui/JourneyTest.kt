@@ -4,6 +4,7 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
@@ -148,6 +149,12 @@ class JourneyTest {
         app.onNodeWithText(text(R.string.action_save_rule)).performClick()
         app.onNodeWithText(text(R.string.rule_name_custom)).performScrollTo().assertIsDisplayed()
         app.onNodeWithText(text(R.string.rule_detail, 2, 21, 3, 15)).assertIsDisplayed()
+        // Opened again, the screen starts from the rule of the draft and has nothing to save yet.
+        app.onNodeWithText(text(R.string.rule_card_change)).performScrollTo().performClick()
+        app.onNodeWithText(text(R.string.rule_sets_option, 2)).performScrollTo().assertIsSelected()
+        app.onAllNodesWithText(text(R.string.rule_points_option, 21))[0].assertIsSelected()
+        app.onNodeWithText(text(R.string.action_save_rule)).assertIsNotEnabled()
+        app.onNodeWithContentDescription(text(R.string.action_back)).performClick()
 
         // The rule stays with the draft on the way to the team step and back, and through a restart.
         tap(R.string.action_continue)
