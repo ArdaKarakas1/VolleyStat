@@ -879,6 +879,58 @@ class AppViewModelTest {
         assertEquals(listOf("new"), vm.analysis.value.rallies!!.rallies.map { it.id })
     }
 
+    @Test fun aVideoTheServerNoLongerHoldsTakesItsListAndItsCardsOffTheScreen() {
+        val vm = withRallyList { rallies(3, rally("r1", 1, 2_000, 9_000), rally("r2", 2, 15_000, 24_000)) }
+        vm.loadReview()
+        await("the cards") { vm.analysis.value.deck != null }
+
+        // Somebody deleted the video on the server, and its job went with it. A list without a job can not be
+        // corrected: a tap on it would do nothing and say nothing.
+        on("GET /videos/video-A/analyses/latest") { refuse(404, "VIDEO_NOT_FOUND") }
+        vm.watchAnalysis("A", startIfMissing = false)
+        await("the refusal") { vm.analysis.value.jobLoad == JobLoad.VIDEO_MISSING }
+        assertNull(vm.analysis.value.job)
+        assertNull(vm.analysis.value.rallies)
+        assertNull(vm.analysis.value.deck)
+    }
+
+    @Test fun aCorrectionThatIsOnItsWayWhenTheMatchGetsAnotherJobDoesNotHoldUpTheNewJob() {
+        val held = java.util.concurrent.CountDownLatch(1)
+        val vm = withRallyList { rallies(3, rally("r1", 1, 2_000, 9_000)) }
+        on("POST /rallies/r1/move") {
+            held.await(15, java.util.concurrent.TimeUnit.SECONDS)
+            ok(corrected(job("J", "video-A", "NEEDS_REVIEW"), rally("r1", 1, 2_000, 10_000)))
+        }
+        on("GET /analyses/J2/rallies") { ok(rallies(0, rally("n1", 1, 5_000, 8_000))) }
+        on("GET /analyses/J2/review-cards") { ok(deck(card("d1", 1))) }
+        on("POST /rallies/n1/move") { ok(corrected(job("J2", "video-A", "NEEDS_REVIEW").put("rallyListVersion", 1), rally("n1", 1, 5_000, 9_000))) }
+
+        var oldDone = false
+        vm.moveRally("r1", 2_000, 10_000) { oldDone = true }
+        await("the first correction at the server") { requests.contains("POST /rallies/r1/move") }
+        assertTrue(vm.analysis.value.correcting)
+
+        // The video was analysed again while that answer was still on its way.
+        on("GET /videos/video-A/analyses/latest") { ok(job("J2", "video-A", "NEEDS_REVIEW")) }
+        vm.watchAnalysis("A", startIfMissing = false)
+        await("the new job") { vm.analysis.value.job?.id == "J2" }
+        assertFalse("the new job waits for no correction of the old one", vm.analysis.value.correcting)
+
+        // The late answer belongs to the old job: it changes nothing on screen and closes no editor.
+        held.countDown()
+        settle()
+        assertFalse(oldDone)
+        assertEquals("J2", vm.analysis.value.job!!.id)
+        assertNull(vm.analysis.value.rallies)
+
+        vm.loadRallies("A")
+        await("the list of the new job") { vm.analysis.value.rallies != null }
+        var newDone = false
+        vm.moveRally("n1", 5_000, 9_000) { newDone = true }
+        await("the correction of the new job") { newDone }
+        assertEquals(1, requests.count { it == "POST /rallies/n1/move" })
+    }
+
     @Test fun anAnswerThatIsNotAListOfThisVersionIsToldApartFromNoAnswer() {
         var answer: () -> MockResponse = { ok(JSONObject().put("rallies", JSONArray())) }
         on("GET /videos/video-A/analyses/latest") { ok(job("J", "video-A", "NEEDS_REVIEW")) }

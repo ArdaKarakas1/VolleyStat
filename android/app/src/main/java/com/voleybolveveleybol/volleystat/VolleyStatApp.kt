@@ -189,10 +189,12 @@ fun VolleyStatApp(
         }
         // Opening the screen goes to the card it was opened for. Coming back to it, from the range
         // editor or the rally list, stays on the card it shows, which a correction may have chosen.
+        // After the system ended the app, the screen comes back as opened and without its cards: the
+        // user may have answered the rally it was opened for long ago, so it goes to the first open card.
         var opened by rememberSaveable { mutableStateOf(false) }
         LaunchedEffect(shown.job?.id) {
             if (shown.job != null) {
-                if (opened && shown.deck != null) viewModel.loadReview(keepCursor = true) else viewModel.loadReview(atRally = atRally)
+                if (opened) viewModel.loadReview(keepCursor = true) else viewModel.loadReview(atRally = atRally)
                 opened = true
             }
         }
@@ -227,8 +229,8 @@ fun VolleyStatApp(
             LaunchedEffect(Unit) { leave(route) }
             return
         }
-        // Closes this editor and no other one. The answer to a correction can arrive after the user has left
-        // and opened the editor of another rally, and that editor must stay.
+        // Closes this editor, once. An applied correction closes it, and so does a list that no longer holds what
+        // it was opened on. After an added rally both happen, and the second one must not close the screen below.
         val done: () -> Unit = { if (nav.currentBackStackEntry?.id == entry.id) nav.popBackStack() }
         val shown = rallyState(match)
         // Opened from the review, the list in memory is older than the answers the user just gave. It can also

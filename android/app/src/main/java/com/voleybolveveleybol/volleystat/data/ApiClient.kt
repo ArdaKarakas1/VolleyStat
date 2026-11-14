@@ -39,6 +39,14 @@ data class UploadStatus(val nextOffset: Long, val status: String, val videoId: S
 
 /** Blocking client for the local development API. Call it off the main thread. */
 class ApiClient(private val baseUrl: String) {
+    companion object {
+        /**
+         * How long the app waits for the answer to a correction, and for the list it reads right
+         * after one. The screen that sent the correction keeps the user until both are there, so
+         * the wait is short: the server applies a correction in one small transaction.
+         */
+        const val CORRECTION_TIMEOUT_MS = 15_000
+    }
 
     fun health(): Health {
         val json = request("GET", "/health", timeoutMs = 5_000)
@@ -122,8 +130,8 @@ class ApiClient(private val baseUrl: String) {
     // Every correction names the version of the list the user was looking at. The server refuses a
     // correction of a list that has moved on with code RALLY_LIST_STALE, so none applies twice.
 
-    fun rallies(jobId: String): RallyList {
-        val json = request("GET", "/analyses/$jobId/rallies")
+    fun rallies(jobId: String, timeoutMs: Int = 60_000): RallyList {
+        val json = request("GET", "/analyses/$jobId/rallies", timeoutMs = timeoutMs)
         return RallyList(
             json.getJSONArray("rallies").objects().map(::parseRally), json.getInt("rallyListVersion"),
             json.getBoolean("listConfirmed"), json.getLong("videoDurationMs"), json.getJSONArray("sets").objects().map(::parseSet),
@@ -144,10 +152,13 @@ class ApiClient(private val baseUrl: String) {
 
     /** Records the user's statement that the list holds every rally of the video. */
     fun confirmRallyList(jobId: String, listVersion: Int): AnalysisJob =
-        parseJob(request("POST", "/analyses/$jobId/rally-list/confirm", JSONObject().put("expectedListVersion", listVersion).toString().toByteArray()).getJSONObject("job"))
+        parseJob(
+            request("POST", "/analyses/$jobId/rally-list/confirm", JSONObject().put("expectedListVersion", listVersion).toString().toByteArray(), timeoutMs = CORRECTION_TIMEOUT_MS)
+                .getJSONObject("job")
+        )
 
     private fun correction(path: String, body: JSONObject, listVersion: Int): Correction {
-        val json = request("POST", path, body.put("expectedListVersion", listVersion).toString().toByteArray())
+        val json = request("POST", path, body.put("expectedListVersion", listVersion).toString().toByteArray(), timeoutMs = CORRECTION_TIMEOUT_MS)
         val removed = json.getJSONArray("removed")
         return Correction(json.getJSONArray("affected").objects().map(::parseRally), List(removed.length()) { removed.getString(it) }, parseJob(json.getJSONObject("job")))
     }

@@ -472,7 +472,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 when {
                     refusal != null -> {
-                        _analysis.update { if (it.matchId == matchId) it.copy(jobLoad = refusal, job = null) else it }
+                        // The job is gone, and with it what belonged to it: a list without a job can not be corrected.
+                        _analysis.update { if (it.matchId == matchId) it.withJob(null).copy(jobLoad = refusal) else it }
                         return@launch
                     }
                     error != null -> _analysis.update { if (it.matchId == matchId) it.copy(jobLoad = JobLoad.UNREACHABLE) else it }
@@ -688,7 +689,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     Result.failure(error)
                 }
             }
-            val reloaded = withContext(Dispatchers.IO) { runCatching { api().rallies(jobId) }.getOrNull() }
+            val reloaded = withContext(Dispatchers.IO) { runCatching { api().rallies(jobId, ApiClient.CORRECTION_TIMEOUT_MS) }.getOrNull() }
             val error = sent.exceptionOrNull()
             val refusal = (error as? ApiException)?.code
             val onList = if (sent.isFailure && (refusal == null || refusal == "RALLY_LIST_STALE")) reloaded?.let(found) else null

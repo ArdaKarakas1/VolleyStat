@@ -32,7 +32,7 @@ Mevcut koddan korunanlar: veri katmanı (API istemcisi, kaldığı yerden süren
 | "Oyuncular tespit edildi", "İstatistikler oluşturuluyor" adımları | Yalnız sunucunun bildirdiği aşamalar | Olmayan modelin adımı gösterilmez. |
 | "Bu pozisyon hangi aksiyon?" ilk soru | İlk soru rallinin kazananı, aksiyon sorusu isteğe bağlı ikinci kart | V4: skoru etkileyen karar önce gelir, bir ekranda tek karar. |
 | Oyuncu tablosunda dolu Sav. sütunu | Ölçülmeyen sütun "Ölçüm yok" yazar | Eksik veri 0 gösterilmez. |
-| "Merhaba Arda" | Ad Profil'de girildiyse görünür | Uygulama hesap ya da ad bilgisi tutmuyor. |
+| "Merhaba" ve kullanıcının adı | Ad Profil'de girildiyse görünür | Uygulama hesap ya da ad bilgisi tutmuyor. |
 | Örnek kulüp adları | Testlerde "A Takımı", "B Takımı" | V4: başka topluluk adı örnek olarak kullanılmaz. |
 | Maç adı, salon zorunlu görünümü | İsteğe bağlı | En az giriş ilkesi. |
 
@@ -165,7 +165,7 @@ Ekip bu bölümü 13 Kasım 2026'da, kodu yazdıktan sonra ekledi. Üstteki böl
 | Profil | "Bu sürümde neler var" listesi | "Çalışıyor" etiketi cihazda denenmemiş özellik için fazla iddialıydı. |
 | Rapor | Kararsız ralli uyarısı | Sunucu set skorunu kazananı belli olmayan ilk rallide durdurur. Ekran bunu söyler. |
 | Rapor | "Sayılar alt sınırdır" uyarısı | Analizör ralli kaçırabilir. Sunucu kullanıcı ralli listesini onaylayana kadar raporu `ralliesMayBeMissing` ile işaretler ve ekran bunu yazar. |
-| Ralli listesi ve ralli düzenleyici | UI Tasarım V1 paketinde olmayan iki ekran | Arda 14 Kasım 2026'da kullanıcının ralli listesini düzeltmesine izin verdi (ADR-0114). Oturum ekranları mevcut bileşenlerle kurdu. |
+| Ralli listesi ve ralli düzenleyici | UI Tasarım V1 paketinde olmayan iki ekran | Ürün sahibi 14 Kasım 2026'da kullanıcının ralli listesini düzeltmesine izin verdi (ADR-0114). Oturum ekranları mevcut bileşenlerle kurdu. |
 | Ralli düzenleyici | İşaret düğmeleri sabit durur, birleştirme düğmesi kayan bölümdedir | 320 dp telefonda dört sabit düğme konum çubuğunu ve adım düğmelerini ekranın dışına itiyordu. |
 | Ralli düzenleyici | Adım düğmesinin birimi büyük yazıda alt satıra iner | 1,5 kat yazıda "+0,2 sn" yazısı düğmeden taşıyordu. |
 | Yükleme sonrası gezinme | Uygulama analiz ekranında kalır | Cihaz testi şunu buldu: Kontrol ekranı yükleme başlayınca kullanıcıyı ana ekrana atıyordu ve analiz izlenmiyordu. |

@@ -101,7 +101,7 @@ Depo herkese açıktır. Maç videoları, oyuncu verileri, API anahtarları, ver
 
 - [docs/GAP_ANALYSIS.md](docs/GAP_ANALYSIS.md): Gereksinim ve kod farkı, sıradaki işler
 - [docs/AI_PLAN.md](docs/AI_PLAN.md): Maçı analiz edecek yapay zekâ için plan
-- [docs/API_V1.md](docs/API_V1.md): Analiz, doğrulama ve rapor sözleşmesi (API 0.4)
+- [docs/API_V1.md](docs/API_V1.md): Analiz, doğrulama, ralli düzeltme ve rapor sözleşmesi (API 0.5)
 - [docs/API.md](docs/API.md): Yükleme ve dosya doğrulama uçları
 - [docs/UI_V1_PLAN.md](docs/UI_V1_PLAN.md): UI Tasarım V1 uygulama planı
 - [docs/design.md](docs/design.md): Tasarım sistemi

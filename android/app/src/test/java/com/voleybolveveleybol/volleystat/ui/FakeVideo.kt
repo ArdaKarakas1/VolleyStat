@@ -20,6 +20,7 @@ class FakeControl(startMs: Long = 0, picture: @Composable () -> Unit = { Box(Mod
     override var playing by mutableStateOf(false)
     override var failed by mutableStateOf(false)
     override var ended by mutableStateOf(false)
+    override var ready by mutableStateOf(true)
     var fast = false
     var retries = 0
     /** How far the picture has moved on since the screen last looked at the player. */
@@ -39,9 +40,11 @@ class FakeControl(startMs: Long = 0, picture: @Composable () -> Unit = { Box(Mod
         ended = false
     }
 
+    /** As with the real player, the picture is not back at once. A test says when it is. */
     override fun retry() {
         retries++
         failed = false
+        ready = false
     }
 
     override fun play() {

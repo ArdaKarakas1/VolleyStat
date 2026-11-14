@@ -1,8 +1,14 @@
 package com.voleybolveveleybol.volleystat.ui
 
 import android.content.Context
+import androidx.activity.OnBackPressedDispatcher
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
@@ -119,6 +125,9 @@ class RallyScreensTest {
         return taps
     }
 
+    /** The hint as the screen shows it: with the labels of the button and of the answer it sends the user to. */
+    private val hint get() = text(R.string.rallies_no_hint, text(R.string.action_choose_winner), text(R.string.review_not_a_rally))
+
     /** The list builds only the rows on screen, so a row further down has to be scrolled to before it exists. */
     private fun reach(text: String) = compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasText(text, substring = true))
 
@@ -170,17 +179,17 @@ class RallyScreensTest {
         compose.onNode(isDialog()).captureRoboImage("build/outputs/roborazzi/11_ralli_listesi_skor_denetimi.png")
         compose.onNodeWithText(text(R.string.score_check_unknown)).performClick()
         assertFalse(shown(text(R.string.score_check_question)))
-        assertFalse("not knowing is no reason to search the list", shown(text(R.string.rallies_no_hint)))
+        assertFalse("not knowing is no reason to search the list", shown(hint))
 
         compose.onNodeWithText(check).performClick()
         compose.onNodeWithText(text(R.string.score_check_no)).performClick()
-        compose.onNodeWithText(text(R.string.rallies_no_hint)).assertIsDisplayed()
+        compose.onNodeWithText(hint).assertIsDisplayed()
         assertEquals(0, taps.confirms)
 
         compose.onNodeWithText(check).performClick()
         compose.onNodeWithText(text(R.string.score_check_yes)).performClick()
         assertEquals(1, taps.confirms)
-        assertFalse(shown(text(R.string.rallies_no_hint)))
+        assertFalse(shown(hint))
     }
 
     @Test fun aListWithoutACountedRallyHasNoScoreToCheck() {
@@ -194,6 +203,8 @@ class RallyScreensTest {
         compose.onNodeWithText(text(R.string.rallies_demo)).assertIsDisplayed()
         compose.onNodeWithText(text(R.string.demo_title), substring = true).assertIsDisplayed()
         assertFalse(shown(text(R.string.action_check_score)))
+        // The list of a demo is never confirmed, so the screen must not say that a confirmation ends the lower bounds.
+        assertFalse(shown(text(R.string.rallies_scores_lower)))
     }
 
     @Test fun aConfirmedListSaysSoAndNamesWhatTakesTheConfirmationAway() {
@@ -237,6 +248,23 @@ class RallyScreensTest {
         compose.onNodeWithText(text(R.string.correction_stale)).assertIsDisplayed()
     }
 
+    @Test fun theListStaysOpenUntilTheAnswerOfTheConfirmationIsThere() {
+        var correcting by mutableStateOf(true)
+        val leaves = leavesBy { RalliesScreen(match, state(decided, correcting = correcting), onOpenRally = {}, onOpenGap = {}, onConfirm = {}, onOpenReview = {}, onRetry = {}, onBack = {}) }
+        compose.onNodeWithText(text(R.string.rallies_confirm_sending)).assertIsDisplayed()
+        compose.onNodeWithContentDescription(text(R.string.action_back)).assertIsNotEnabled()
+        pressBack()
+        assertEquals("a refusal of the confirmation would be shown to nobody", 0, leaves())
+
+        // With the answer on screen the user may leave.
+        correcting = false
+        compose.waitForIdle()
+        assertFalse(shown(text(R.string.rallies_confirm_sending)))
+        compose.onNodeWithContentDescription(text(R.string.action_back)).assertIsEnabled()
+        pressBack()
+        assertEquals(1, leaves())
+    }
+
     // ----- the range editor -----
 
     private val four = RallyList(listOf(rally(1, 2_000, 9_000), rally(2, 15_000, 24_000), rally(3, 30_000, 41_000), rally(4, 48_000, 56_000)), 7, false, 60_000)
@@ -261,6 +289,27 @@ class RallyScreensTest {
 
     private fun button(id: Int) = compose.onNodeWithText(text(id))
 
+    private var backDispatcher: OnBackPressedDispatcher? = null
+
+    /**
+     * Shows a screen above a stand-in for the app's navigation, and returns how often a back press got through
+     * to that navigation. A screen that keeps the user holds the press back before it gets there.
+     */
+    private fun leavesBy(screen: @Composable () -> Unit): () -> Int {
+        var leaves = 0
+        show {
+            backDispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
+            BackHandler { leaves++ }
+            screen()
+        }
+        return { leaves }
+    }
+
+    private fun pressBack() {
+        compose.runOnUiThread { backDispatcher!!.onBackPressed() }
+        compose.waitForIdle()
+    }
+
     /** Puts the picture somewhere, as playback or a drag would. */
     private fun FakeControl.standAt(positionMs: Long) {
         this.positionMs = positionMs
@@ -272,6 +321,8 @@ class RallyScreensTest {
         val control = FakeControl(15_000)
         val marks = editor(rallyTarget(four, "r2")!!, control)
         compose.onNodeWithText(text(R.string.editor_rally_now, 2, "00:15,0", "00:24,0")).assertIsDisplayed()
+        // The user reads what a moved end costs before moving it.
+        compose.onNodeWithText(text(R.string.editor_end_note)).assertIsDisplayed()
 
         // At its own start nothing would change, and nothing can be cut off.
         listOf(R.string.action_end_here, R.string.action_start_here, R.string.action_split_here).forEach { button(it).assertIsNotEnabled() }
@@ -429,7 +480,106 @@ class RallyScreensTest {
         compose.onNodeWithText(text(R.string.action_retry)).performClick()
         assertEquals(1, control.retries)
         assertFalse(shown(text(R.string.editor_video_failed)))
+        // The video is on its way again. Until its picture is there, a mark would name a moment nobody saw.
+        button(R.string.action_end_here).assertIsNotEnabled()
+        control.ready = true
+        compose.waitForIdle()
         button(R.string.action_end_here).assertIsEnabled()
+    }
+
+    @Test fun nothingIsMarkedBeforeThePictureOfThePositionIsOnScreen() {
+        // The player is still fetching the frame of 20,4: after a step, a drag, or when the editor has just opened.
+        val control = FakeControl(20_400).apply { ready = false }
+        val marks = editor(rallyTarget(four, "r2")!!, control)
+        listOf(R.string.action_end_here, R.string.action_start_here, R.string.action_split_here).forEach { button(it).assertIsNotEnabled() }
+        // Moving on is allowed: the user is looking for a picture, not marking one.
+        button(R.string.editor_forward_1).assertIsEnabled()
+        compose.onNodeWithContentDescription(text(R.string.editor_play)).assertIsEnabled()
+
+        control.ready = true
+        compose.waitForIdle()
+        button(R.string.action_end_here).performClick()
+        assertEquals(listOf(15_000L to 20_400L), marks.moves)
+    }
+
+    @Test fun aPauseIsNotMarkedBeforeItsPictureIsOnScreenEither() {
+        val control = FakeControl(10_000).apply { ready = false }
+        editor(gapTarget(four, 9_000)!!, control)
+        button(R.string.action_rally_started).assertIsNotEnabled()
+        control.ready = true
+        compose.waitForIdle()
+        button(R.string.action_rally_started).assertIsEnabled()
+    }
+
+    @Test fun aMarkTappedAsThePictureLeavesItsRangeIsNotSent() {
+        // Rally 2 ends at 24,0. The screen last saw the picture just before that, so the buttons are still
+        // offered, and the picture has run on since.
+        val control = FakeControl(23_970).apply { playing = true }
+        val marks = editor(rallyTarget(four, "r2")!!, control)
+        control.movedOnMs = 100
+        button(R.string.action_split_here).performClick()
+        assertEquals("a cut at 24,07 lies outside the rally", emptyList<Long>(), marks.splits)
+        assertFalse("the picture stands where the tap found it", control.playing)
+        // The screen now shows where the picture stands, and offers what is possible there.
+        compose.onNodeWithText(text(R.string.editor_position, "00:24,0")).assertIsDisplayed()
+        button(R.string.action_split_here).assertIsNotEnabled()
+
+        control.standAt(23_970)
+        control.movedOnMs = 100
+        button(R.string.action_start_here).performClick()
+        assertEquals("a start after the end is no rally", emptyList<Pair<Long, Long>>(), marks.moves)
+
+        // The picture reaches the end the rally already has: nothing would change, so nothing is sent.
+        control.standAt(23_950)
+        control.movedOnMs = 50
+        button(R.string.action_end_here).performClick()
+        assertEquals(emptyList<Pair<Long, Long>>(), marks.moves)
+    }
+
+    @Test fun aStartTappedAsThePictureReachesTheEndOfThePauseKeepsTheStartThatWasMarked() {
+        // The pause between rally 1 and rally 2 runs from 9,0 to 15,0.
+        val control = FakeControl(10_000)
+        val marks = editor(gapTarget(four, 9_000)!!, control)
+        button(R.string.action_rally_started).performClick()
+        compose.onNodeWithText(text(R.string.editor_marked_start, "00:10,0")).assertIsDisplayed()
+
+        // At the very end of the pause no rally can start. The start from before stays.
+        control.standAt(14_980)
+        control.movedOnMs = 100
+        button(R.string.action_rally_started).performClick()
+        compose.onNodeWithText(text(R.string.editor_marked_start, "00:10,0")).assertIsDisplayed()
+
+        button(R.string.action_rally_ended).performClick()
+        assertEquals(listOf(10_000L to 15_000L), marks.adds)
+    }
+
+    @Test fun playbackThatReachesTheEndOfTheWindowExactlyStopsThereAndIsNotMoved() {
+        val control = FakeControl(29_000).apply { playing = true }
+        editor(rallyTarget(four, "r2")!!, control)
+        control.standAt(30_000)
+        assertFalse(control.playing)
+        assertEquals("the picture already stands at the end", emptyList<Pair<Long, Boolean>>(), control.seeks)
+    }
+
+    @Test fun theEditorStaysOpenUntilTheAnswerOfACorrectionIsThere() {
+        val control = FakeControl(20_000)
+        val leaves = leavesBy { RallyEditorScreen(rallyTarget(four, "r2")!!, state(four, correcting = true), control.video, { _, _ -> }, {}, {}, { _, _ -> }, onBack = {}) }
+        // The user sees that something is on its way, and can not walk away from how it ends: a refusal
+        // would otherwise be shown to nobody.
+        compose.onNodeWithText(text(R.string.correction_sending)).assertIsDisplayed()
+        compose.onNodeWithContentDescription(text(R.string.action_back)).assertIsNotEnabled()
+        pressBack()
+        assertEquals(0, leaves())
+    }
+
+    @Test fun theEditorLetsTheUserLeaveWhenNothingIsOnItsWay() {
+        var arrow = 0
+        val leaves = leavesBy { RallyEditorScreen(rallyTarget(four, "r2")!!, state(four), FakeControl(20_000).video, { _, _ -> }, {}, {}, { _, _ -> }, onBack = { arrow++ }) }
+        assertFalse(shown(text(R.string.correction_sending)))
+        compose.onNodeWithContentDescription(text(R.string.action_back)).performClick()
+        assertEquals(1, arrow)
+        pressBack()
+        assertEquals(1, leaves())
     }
 
     @Test fun aPlayerThatIsBuiltAnewTakesOverTheSpeedTheUserChose() {
@@ -467,6 +617,8 @@ class RallyScreensTest {
     @Test fun aPauseHasNoWinnerToChoose() {
         editor(gapTarget(four, 9_000)!!, FakeControl(9_000), onChooseWinner = {})
         assertFalse(shown(text(R.string.action_choose_winner)))
+        // A pause has no answers either, so nothing warns about losing them.
+        assertFalse(shown(text(R.string.editor_end_note)))
     }
 
     @Test fun theFirstRallyHasNoneBeforeItToMergeWith() {

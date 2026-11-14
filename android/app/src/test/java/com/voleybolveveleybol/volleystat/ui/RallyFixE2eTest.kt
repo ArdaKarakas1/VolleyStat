@@ -115,7 +115,8 @@ class RallyFixE2eTest {
 
     private fun openEditorOfTheCard(): Long {
         tap(R.string.review_fix_rally)
-        waitFor(text(R.string.editor_title_rally))
+        // The button and the screen it opens carry the same words, so the wait is for a button only the editor has.
+        waitFor(text(R.string.action_end_here))
         return control.positionMs
     }
 
@@ -183,7 +184,9 @@ class RallyFixE2eTest {
         app.onAllNodesWithText(text(R.string.rallies_gap_add)).onFirst().performClick()
         waitFor(text(R.string.editor_title_gap))
         assertEquals("the editor opens at the start of the pause", pause.windowStartMs, control.positionMs)
-        standAt(pause.windowStartMs + 500)
+        // The rally starts where the pause starts. Once the server has added it, the moment this editor was opened
+        // on lies inside a rally, so the editor has nothing left to show. It closes once, and the list is on screen:
+        // a second step back would leave the list as well.
         tap(R.string.action_rally_started)
         standAt(pause.windowStartMs + 2_500)
         tap(R.string.action_rally_ended)
@@ -191,7 +194,7 @@ class RallyFixE2eTest {
         api.rallies(job.id).rallies.first().let { added ->
             assertFalse(added.fromAnalyzer)
             assertEquals(Rally.PROPOSED, added.status)
-            assertEquals(pause.windowStartMs + 500 to pause.windowStartMs + 2_500, added.startMs to added.endMs)
+            assertEquals(pause.windowStartMs to pause.windowStartMs + 2_500, added.startMs to added.endMs)
         }
 
         // Back in the review the added rally asks who won it.

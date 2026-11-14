@@ -8,6 +8,8 @@ import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isEnabled
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
@@ -159,12 +161,15 @@ class DeviceFlowE2eTest {
         val rally = list.rallies.first()
         val window = rallyTarget(list, rally.id)!!
         app.onNodeWithText(text(R.string.review_fix_rally)).performClick()
-        waitForText(text(R.string.editor_title_rally))
+        // The button and the screen it opens carry the same words, so the wait is for a button only the editor has.
+        waitForText(text(R.string.action_end_here))
         waitFor("Playback in the range editor", 30_000) { shownPositionMs()?.let { it > rally.startMs } == true }
         assertEquals("The player could not play the video from the server. ${evidence()}", 0, app.onAllNodesWithText(text(R.string.editor_video_failed)).fetchSemanticsNodes().size)
         val mark = (rally.startMs + rally.endMs) / 2 + 300
         app.onNodeWithContentDescription(text(R.string.editor_seek)).performSemanticsAction(SemanticsActions.SetProgress) { it((mark - window.windowStartMs).toFloat()) }
         waitFor("The picture to stand at the mark") { shownPositionMs() == mark / 100 * 100 }
+        // The editor offers the mark once the player has the picture of that moment on screen.
+        waitFor("The picture of the mark", 30_000) { app.onAllNodes(hasText(text(R.string.action_end_here)) and isEnabled()).fetchSemanticsNodes().isNotEmpty() }
         app.onNodeWithText(text(R.string.action_end_here)).performClick()
         // One applied correction closes the editor. The rally asks for its winner on the new clip.
         waitForText(text(R.string.review_position, 1, job.rallies))

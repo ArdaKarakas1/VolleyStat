@@ -1,5 +1,7 @@
 package com.voleybolveveleybol.volleystat.ui.screens
 
+import androidx.activity.compose.BackHandler
+import androidx.annotation.StringRes
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -117,6 +119,16 @@ fun CorrectionProblemNotice(analysis: AnalysisUi) {
     correctionProblemText(analysis)?.let { Notice(it, if (analysis.correctionProblem == CorrectionProblem.STALE) Tone.CAUTION else Tone.NEGATIVE) }
 }
 
+/** Says that a correction is on its way. The screen that sent it keeps the user until the answer is there. */
+@Composable
+fun CorrectionProgress(analysis: AnalysisUi, @StringRes text: Int) {
+    if (!analysis.correcting) return
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+        Text(stringResource(text), style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
 /**
  * The rally list of a match: where the user finds a rally to correct and a gap that hides a
  * missed one, and where the list is declared complete after the set scores were compared with
@@ -140,13 +152,17 @@ fun RalliesScreen(
     var checking by rememberSaveable { mutableStateOf(false) }
     // An answer about one version of the list says nothing about the next one.
     var scoresDiffer by rememberSaveable(list?.version) { mutableStateOf(false) }
+    // The confirmation is sent from here. Until its answer is there the user stays, so a refusal is not lost.
+    BackHandler(enabled = analysis.correcting) {}
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             CenterAlignedTopAppBar(
                 title = { Text(stringResource(R.string.rallies_title), style = MaterialTheme.typography.titleLarge) },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(painterResource(R.drawable.ic_arrow_back), contentDescription = stringResource(R.string.action_back)) } },
+                navigationIcon = {
+                    IconButton(onClick = onBack, enabled = !analysis.correcting) { Icon(painterResource(R.drawable.ic_arrow_back), contentDescription = stringResource(R.string.action_back)) }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
             )
         },
@@ -221,6 +237,7 @@ private fun ListState(list: RallyList, analysis: AnalysisUi, scoresDiffer: Boole
     // An interval the user called "not a rally" stays on the list, and it is not counted as a rally anywhere.
     val rejected = list.rallies.count { it.status == Rally.REJECTED }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        CorrectionProgress(analysis, R.string.rallies_confirm_sending)
         CorrectionProblemNotice(analysis)
         Text(
             if (rejected == 0) stringResource(R.string.rallies_count, list.rallies.size)
@@ -229,8 +246,9 @@ private fun ListState(list: RallyList, analysis: AnalysisUi, scoresDiffer: Boole
         )
         Text(stringResource(R.string.rallies_help), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         // The scores next to the rallies are counts of this list. Until the user has confirmed the list they
-        // are lower bounds like every number of the report, and the list says so where it shows them.
-        if (!list.confirmed && list.sets.isNotEmpty()) {
+        // are lower bounds like every number of the report, and the list says so where it shows them. The
+        // list of a demo is never confirmed, so it gets no promise about a confirmation: its notice speaks for it.
+        if (!list.confirmed && list.sets.isNotEmpty() && analysis.job?.mock != true) {
             Text(stringResource(R.string.rallies_scores_lower), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         when {
@@ -242,7 +260,8 @@ private fun ListState(list: RallyList, analysis: AnalysisUi, scoresDiffer: Boole
                 SecondaryButton(stringResource(R.string.action_go_review), onClick = { onOpenReview(waiting.first()) }, icon = R.drawable.ic_fact_check)
             }
             else -> {
-                if (scoresDiffer) Notice(stringResource(R.string.rallies_no_hint), Tone.NEUTRAL)
+                // The hint sends the user to a button and to an answer. It quotes both by their own labels.
+                if (scoresDiffer) Notice(stringResource(R.string.rallies_no_hint, stringResource(R.string.action_choose_winner), stringResource(R.string.review_not_a_rally)), Tone.NEUTRAL)
                 // Without one counted rally the server has no set score to show, and it would refuse the confirmation.
                 PrimaryButton(stringResource(R.string.action_check_score), onCheck, enabled = !analysis.correcting && list.sets.isNotEmpty(), icon = R.drawable.ic_task_alt)
             }

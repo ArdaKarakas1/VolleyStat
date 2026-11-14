@@ -91,8 +91,11 @@ fun ClipPlayer(url: String, startMs: Long, endMs: Long, modifier: Modifier = Mod
     }
 }
 
-/** The range editor's hold on a player: the whole video, prepared once and then only moved through. */
-private class PlayerControl(val player: ExoPlayer) : VideoControl {
+/**
+ * The range editor's hold on a player: the whole video, prepared once and then only moved through.
+ * It takes any player, so a test can put one in whose state it sets by hand.
+ */
+internal class PlayerControl(val player: Player) : VideoControl {
     override var positionMs by mutableLongStateOf(0L)
         private set
     override var playing by mutableStateOf(false)
@@ -100,6 +103,19 @@ private class PlayerControl(val player: ExoPlayer) : VideoControl {
     override var ended by mutableStateOf(false)
         private set
     override var failed by mutableStateOf(false)
+        private set
+    override var ready by mutableStateOf(false)
+        private set
+
+    init {
+        player.addListener(object : Player.Listener {
+            // A player that failed stands idle and shows no picture.
+            override fun onPlayerError(error: PlaybackException) {
+                failed = true
+                ready = false
+            }
+        })
+    }
 
     override fun positionNow(): Long = player.currentPosition.also { positionMs = it }
 
@@ -107,10 +123,12 @@ private class PlayerControl(val player: ExoPlayer) : VideoControl {
     @OptIn(UnstableApi::class)
     override fun seekTo(positionMs: Long, exact: Boolean) {
         // A key frame can be shown at once. The exact frame has to be decoded from the key frame before it.
-        player.setSeekParameters(if (exact) SeekParameters.EXACT else SeekParameters.CLOSEST_SYNC)
+        (player as? ExoPlayer)?.setSeekParameters(if (exact) SeekParameters.EXACT else SeekParameters.CLOSEST_SYNC)
         player.seekTo(positionMs)
         this.positionMs = positionMs
         ended = false
+        // The picture of the new place is not there yet. The next look that finds it says so.
+        ready = false
     }
 
     override fun play() {
@@ -135,13 +153,20 @@ private class PlayerControl(val player: ExoPlayer) : VideoControl {
     fun look() {
         positionMs = player.currentPosition
         ended = player.playbackState == Player.STATE_ENDED
+        // A player that is ready has the frame of its position on its surface, and one that ended keeps its last frame.
+        ready = player.playbackState == Player.STATE_READY || ended
     }
+
+    /** A released player drops its listeners itself. */
+    fun release() = player.release()
 }
 
 /**
  * The video of the range editor, without sound, playing from [startMs]. It is prepared once for
  * the whole file, so moving through it asks the server only for the bytes of the new position.
  */
+// The loading sign of the player view is a part of Media3 that may change between releases. The library version is pinned.
+@OptIn(UnstableApi::class)
 @Composable
 fun rememberEditorVideo(url: String, startMs: Long): EditorVideo {
     val context = LocalContext.current
@@ -153,18 +178,7 @@ fun rememberEditorVideo(url: String, startMs: Long): EditorVideo {
             play()
         }
     }
-    DisposableEffect(control) {
-        val listener = object : Player.Listener {
-            override fun onPlayerError(error: PlaybackException) {
-                control.failed = true
-            }
-        }
-        control.player.addListener(listener)
-        onDispose {
-            control.player.removeListener(listener)
-            control.player.release()
-        }
-    }
+    DisposableEffect(control) { onDispose { control.release() } }
     LaunchedEffect(control) {
         while (true) {
             control.look()
@@ -176,7 +190,9 @@ fun rememberEditorVideo(url: String, startMs: Long): EditorVideo {
     return remember(control) {
         EditorVideo(control) {
             AndroidView(
-                factory = { PlayerView(it).apply { useController = false; player = control.player } },
+                // While a playing video waits for its data, the view shows its own loading sign over the picture.
+                // A standing picture gets none: the sign would flash at every step.
+                factory = { PlayerView(it).apply { useController = false; setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING); player = control.player } },
                 modifier = Modifier.fillMaxSize().semantics { contentDescription = description },
             )
         }

@@ -1,5 +1,6 @@
 package com.voleybolveveleybol.volleystat.ui
 
+import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -7,6 +8,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.test.core.app.ApplicationProvider
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.voleybolveveleybol.volleystat.AnalysisUi
 import com.voleybolveveleybol.volleystat.CorrectionProblem
@@ -64,6 +66,7 @@ import com.voleybolveveleybol.volleystat.ui.screens.VideoCheckScreen
 import com.voleybolveveleybol.volleystat.ui.screens.VideoSourceScreen
 import com.voleybolveveleybol.volleystat.ui.screens.WelcomeScreen
 import com.voleybolveveleybol.volleystat.ui.theme.VolleyStatTheme
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -81,6 +84,16 @@ import org.robolectric.annotation.GraphicsMode
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], qualifiers = "w411dp-h891dp-xxhdpi")
 class ScreenshotTest {
+    /**
+     * A screenshot is a still. With animations on, a screen that shows a spinner asks for a new frame
+     * after every frame, and the test runtime, which serves every frame at once, never comes to rest.
+     * Whether that happens depended on which test ran before, so the screenshots turn animations off.
+     */
+    @Before fun noAnimations() {
+        val global = android.provider.Settings.Global.ANIMATOR_DURATION_SCALE
+        android.provider.Settings.Global.putFloat(ApplicationProvider.getApplicationContext<Context>().contentResolver, global, 0f)
+    }
+
     private val video = LocalVideo("/data/kayit.mp4", VideoSource.CAMERA, "kayit-1731400000.mp4", 1_240_000_000, "video/mp4", 4_980_000, 1920, 1080, null)
     private val accepted = VideoCheck("v1", VideoCheck.READY, null, 1920, 1080, 30.0, 4_980_000, "h264", emptyList())
     private val players = listOf(Player("p1", "Birinci Oyuncu", 4), Player("p2", "İkinci Oyuncu", 7), Player("p3", "", 9), Player("p4", "Dördüncü Oyuncu", 12))
@@ -255,7 +268,10 @@ class ScreenshotTest {
         shot("12_ralli_duzelt_video_yok", content = screen(second, 92_400, failed = true))
         shot("12_ralli_duzelt_koyu", dark = true, content = screen(second, 92_400))
         shot("12_ralli_ekle", content = screen(pause, 151_200))
+        shot("12_ralli_duzelt_gonderiliyor", content = screen(second, 92_400, listState(waitingList).copy(correcting = true)))
         shotOn("kucuk_12_ralli_duzelt", "+w320dp-h568dp-port", content = screen(second, 92_400))
+        shotOn("kucuk_12_ralli_duzelt_cakisma", "+w320dp-h568dp-port", content = screen(second, 92_400, listState(waitingList).copy(correctionProblem = CorrectionProblem.OVERLAP, overlapsRally = 3)))
+        shotOn("kucuk_12_ralli_duzelt_gonderiliyor", "+w320dp-h568dp-port", content = screen(second, 92_400, listState(waitingList).copy(correcting = true)))
         shotOn("kucuk_12_ralli_ekle", "+w320dp-h568dp-port", content = screen(pause, 151_200))
         shotOn("buyuk_yazi_12_ralli_duzelt", "+w411dp-h891dp-port", fontScale = 1.5f, content = screen(second, 92_400))
     }

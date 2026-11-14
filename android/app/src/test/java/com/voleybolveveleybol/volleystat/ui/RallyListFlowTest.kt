@@ -2,10 +2,14 @@ package com.voleybolveveleybol.volleystat.ui
 
 import android.content.Context
 import androidx.activity.ComponentActivity
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasScrollToNodeAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
@@ -72,6 +76,8 @@ class RallyListFlowTest {
     @Volatile private var thirdEndMs = 56_000L
     /** While this is set, the server holds back its answer to a winner decision, as a slow network would. */
     @Volatile private var holdDecision: java.util.concurrent.CountDownLatch? = null
+    /** While this is set, the server holds back its answer to a moved end, and then refuses the move. */
+    @Volatile private var holdAndRefuseMove: java.util.concurrent.CountDownLatch? = null
 
     private fun ok(json: JSONObject) = MockResponse().setResponseCode(200).setHeader("Content-Type", "application/json").setBody(json.toString())
     private val open get() = winners.indices.count { winners[it] == null && it !in unsure }
@@ -160,7 +166,12 @@ class RallyListFlowTest {
                             version++
                             ok(JSONObject().put("job", job()).put("reportRevision", 9))
                         }
-                        "POST /rallies/r3/move" -> {
+                        "POST /rallies/r3/move" -> holdAndRefuseMove?.let { held ->
+                            held.await(15, java.util.concurrent.TimeUnit.SECONDS)
+                            MockResponse().setResponseCode(409).setHeader("Content-Type", "application/json").setBody(
+                                JSONObject().put("error", JSONObject().put("code", "RALLY_OVERLAP").put("message", "overlap").put("details", JSONObject().put("rallyId", "r2"))).toString()
+                            )
+                        } ?: run {
                             thirdEndMs = body.getLong("endMs")
                             version++
                             ok(JSONObject().put("correctionId", "k1").put("affected", JSONArray(listOf(rallies().getJSONArray("rallies").getJSONObject(2))))
@@ -230,7 +241,8 @@ class RallyListFlowTest {
 
         back()
         waitFor(text(R.string.report_list_confirmed))
-        app.onNodeWithText("0 - 0").assertIsDisplayed()
+        // The report comes back where the user left it, scrolled down to the button of the list.
+        app.onNodeWithText("0 - 0").performScrollTo().assertIsDisplayed()
         assertTrue(app.onAllNodesWithText(text(R.string.report_may_miss)).fetchSemanticsNodes().isEmpty())
     }
 
@@ -326,7 +338,6 @@ class RallyListFlowTest {
         // The list in memory is the one from before that answer. The editor reads the new one before it lets the user mark.
         val readsBefore = requests.count { it == "GET /analyses/j1/rallies" }
         tap(R.string.review_fix_rally)
-        waitFor(text(R.string.editor_title_rally))
         waitFor(text(R.string.action_end_here))
         assertEquals(readsBefore + 1, requests.count { it == "GET /analyses/j1/rallies" })
         assertEquals("the editor opens at the start of the rally", 48_000L, control.positionMs)
@@ -347,5 +358,60 @@ class RallyListFlowTest {
         // The list builds only the rows on screen, so the last rally has to be scrolled to.
         app.onNode(hasScrollToNodeAction()).performScrollToNode(hasText("00:48 · 4 sn"))
         app.onNodeWithText("00:48 · 4 sn").assertIsDisplayed()
+    }
+
+    @Test fun theEditorWaitsForTheAnswerOfItsCorrectionSoARefusalReachesTheUser() {
+        val held = java.util.concurrent.CountDownLatch(1)
+        holdAndRefuseMove = held
+        openTheRallyList()
+        app.onNode(hasScrollToNodeAction()).performScrollToNode(hasText("00:48 · 8 sn"))
+        app.onNodeWithText("00:48 · 8 sn").performClick()
+        waitFor(text(R.string.action_end_here))
+        app.runOnUiThread { control.positionMs = 52_000 }
+        app.waitForIdle()
+        tap(R.string.action_end_here)
+        waitFor(text(R.string.correction_sending))
+
+        // The answer is slow, and the user presses back. The editor stays: on any other screen nobody would
+        // learn that the server refused the move.
+        back()
+        app.onNodeWithText(text(R.string.action_end_here)).assertIsDisplayed()
+
+        held.countDown()
+        waitFor(text(R.string.correction_overlap, 2))
+        app.onNodeWithText(text(R.string.action_end_here)).assertIsDisplayed()
+
+        // With the answer on screen the way back is open again.
+        back()
+        waitFor(text(R.string.rallies_count, 3))
+    }
+
+    @Test fun afterTheSystemEndedTheAppTheReviewOpensOnTheFirstOpenQuestionAndNotOnTheRallyItWasOpenedFor() {
+        winners = listOf("HOME", null, null)
+        val url = server.url("/v1").toString()
+        var viewModel by mutableStateOf(ViewModelProvider(app.activity)[AppViewModel::class.java].also { it.baseUrlOverride = url })
+        val restoration = StateRestorationTester(app)
+        restoration.setContent {
+            VolleyStatTheme { VolleyStatApp(viewModel = viewModel, editorVideo = { _, startMs -> remember { control.positionMs = startMs; control.video } }) }
+        }
+        app.onAllNodesWithText("$HOME_TEAM - $AWAY_TEAM", substring = true).onFirst().performClick()
+        waitFor(text(R.string.rallies_title))
+        app.onNodeWithText(text(R.string.rallies_title)).performScrollTo().performClick()
+        waitFor(text(R.string.rallies_not_ready, 2))
+
+        // The list sends the user to the first rally that waits, which is rally 2. The user answers it and is on rally 3.
+        tap(R.string.action_go_review)
+        waitFor(text(R.string.review_position, 2, 3))
+        app.onNodeWithText(HOME_TEAM).performClick()
+        waitFor(text(R.string.review_position, 3, 3))
+
+        // The system ends the app in the background. What comes back is the screen with what it saved, and a
+        // view model that has read nothing yet.
+        viewModel = AppViewModel(ApplicationProvider.getApplicationContext()).also { it.baseUrlOverride = url }
+        restoration.emulateSavedInstanceStateRestore()
+
+        // Rally 2 is answered. Going back to it would show the user a question they are done with.
+        waitFor(text(R.string.review_position, 3, 3))
+        assertTrue(app.onAllNodesWithText(text(R.string.review_position, 2, 3)).fetchSemanticsNodes().isEmpty())
     }
 }

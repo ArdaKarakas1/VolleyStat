@@ -1,5 +1,6 @@
 package com.voleybolveveleybol.volleystat.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -77,6 +78,9 @@ interface VideoControl {
     /** The video has played to its own end. That can lie a little before the length the server reports. */
     val ended: Boolean
 
+    /** The picture of the position is on screen. False while the player still fetches or decodes it. */
+    val ready: Boolean
+
     /** Where the picture stands at this instant. A mark is made with this, not with the last look. */
     fun positionNow(): Long
 
@@ -145,11 +149,18 @@ fun RallyEditorScreen(
     val markedStart = marked?.takeIf { it >= window.first && it < window.last }
     val rally = (target as? EditTarget.OfRally)?.rally
     val previous = (target as? EditTarget.OfRally)?.previous
-    // Nothing is marked while the video does not play at all, and nothing is sent while a correction is on its way.
-    val usable = !analysis.correcting && !control.failed
+    // Nothing is marked before the picture of the position is on screen, and nothing is sent while a correction is on its way.
+    val usable = !analysis.correcting && !control.failed && control.ready
 
     /** The moment a mark is made at. The picture may have moved on since the screen last looked at the player. */
     fun here() = (scrub ?: control.positionNow()).coerceIn(window)
+
+    // What each mark needs from its moment. A button is offered by the position the screen last saw, and the
+    // tap asks the same rule again for the moment itself: a picture that plays has moved on in between.
+    fun endsRally(at: Long) = rally != null && at > rally.startMs && at != rally.endMs
+    fun startsRally(at: Long) = rally != null && at < rally.endMs && at != rally.startMs
+    fun cutsRally(at: Long) = rally != null && at > rally.startMs && at < rally.endMs
+    fun startsInPause(at: Long) = at < window.last && at != markedStart
 
     fun stand(atMs: Long) {
         control.pause()
@@ -168,37 +179,47 @@ fun RallyEditorScreen(
     }
     // The speed belongs to the screen. A player that was built anew, after the theme changed for example, takes it over.
     LaunchedEffect(control, fast) { control.speed(fast) }
+    // The screen that sent a correction stays until the answer is there. On any other screen nobody would
+    // learn that the server refused it, or that it never arrived.
+    BackHandler(enabled = analysis.correcting) {}
 
     FlowScaffold(
         title = stringResource(if (rally != null) R.string.editor_title_rally else R.string.editor_title_gap), onBack = onBack,
+        backEnabled = !analysis.correcting,
         actions = {
+            // What became of a tap stands next to the button that was tapped. Further up it would lie below the
+            // edge of a small screen, and a refused correction would look like a tap that did nothing.
+            CorrectionProgress(analysis, R.string.correction_sending)
+            CorrectionProblemNotice(analysis)
             if (rally != null) {
                 // The end comes first: the winner is judged on what the clip shows at the end of a rally.
                 PrimaryButton(
-                    stringResource(R.string.action_end_here), onClick = { control.pause(); onMove(rally.startMs, here()) },
-                    enabled = usable && position > rally.startMs && position != rally.endMs,
+                    stringResource(R.string.action_end_here), onClick = { control.pause(); here().let { at -> if (endsRally(at)) onMove(rally.startMs, at) } },
+                    enabled = usable && endsRally(position),
                 )
                 Row(Modifier.height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     SecondaryButton(
-                        stringResource(R.string.action_start_here), onClick = { control.pause(); onMove(here(), rally.endMs) },
-                        enabled = usable && position < rally.endMs && position != rally.startMs, modifier = Modifier.weight(1f).fillMaxHeight(),
+                        stringResource(R.string.action_start_here), onClick = { control.pause(); here().let { at -> if (startsRally(at)) onMove(at, rally.endMs) } },
+                        enabled = usable && startsRally(position), modifier = Modifier.weight(1f).fillMaxHeight(),
                     )
                     SecondaryButton(
-                        stringResource(R.string.action_split_here), onClick = { control.pause(); onSplit(here()) },
-                        enabled = usable && position > rally.startMs && position < rally.endMs, modifier = Modifier.weight(1f).fillMaxHeight(),
+                        stringResource(R.string.action_split_here), onClick = { control.pause(); here().let { at -> if (cutsRally(at)) onSplit(at) } },
+                        enabled = usable && cutsRally(position), modifier = Modifier.weight(1f).fillMaxHeight(),
                     )
                 }
             } else {
                 // The two marks keep their places. The one the user needs next is the filled button.
                 val start = stringResource(R.string.action_rally_started)
                 val end = stringResource(R.string.action_rally_ended)
-                val canStart = usable && position < window.last && position != markedStart
+                val canStart = usable && startsInPause(position)
+                // The video keeps running after the start mark, so the end can be marked as the rally ends.
+                val markStart = { here().let { at -> if (startsInPause(at)) marked = at } }
                 if (markedStart == null) {
-                    PrimaryButton(start, onClick = { marked = here() }, enabled = canStart)
+                    PrimaryButton(start, onClick = markStart, enabled = canStart)
                     SecondaryButton(end, onClick = {}, enabled = false)
                 } else {
-                    // The video keeps running after the start mark, so the end can be marked as the rally ends.
-                    SecondaryButton(start, onClick = { marked = here() }, enabled = canStart)
+                    SecondaryButton(start, onClick = markStart, enabled = canStart)
+                    // The picture only moves forward while it plays, so an end that was offered still lies after the start.
                     PrimaryButton(end, onClick = { control.pause(); onAdd(markedStart, here()) }, enabled = usable && position > markedStart)
                 }
             }
@@ -310,7 +331,6 @@ fun RallyEditorScreen(
             }
         }
 
-        CorrectionProblemNotice(analysis)
         if (rally != null) {
             Text(stringResource(R.string.editor_end_note), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (previous != null) {

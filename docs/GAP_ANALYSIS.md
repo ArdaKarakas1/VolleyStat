@@ -12,7 +12,7 @@ Durum etiketleri:
 
 Depoda eğitilmiş model yok. Kimse hiçbir yapay zekâ bileşeninin doğruluğunu ölçmedi. G0–G8 kapılarının hepsi `NOT_MEASURED` durumundadır. Uygulama bugün gerçek maç istatistiğini kendiliğinden çıkarmaz: Kullanıcı her rallinin kazananını kendisi seçer ve rapor bu kararlardan oluşur.
 
-**En önemli sınır:** Kullanıcı ralli listesini sürüm 0.5.0 ile düzeltebilir: Kaçan ralliyi ekler, birleşmiş ralliyi böler, iki parçayı birleştirir ve sınırı taşır. Rapordaki her sayı yine de kullanıcı listeyi onaylayana kadar alt sınırdır. Onay kullanıcının beyanıdır ve sunucu listenin eksiksiz olduğunu doğrulayamaz. Kimse bu akışı gerçek bir maçta denemedi ve kimse bir maçı düzeltmenin kaç dakika sürdüğünü ölçmedi. Set kuralı sabittir (25 sayı, beşinci set 15 sayı, iki fark), bu yüzden uygulama başka kuralla oynanan maçın set sayısını yanlış yazar (ADR-0114).
+**En önemli sınır:** Kullanıcı ralli listesini sürüm 0.5.0 ile düzeltebilir: Kaçan ralliyi ekler, birleşmiş ralliyi böler, iki parçayı birleştirir ve sınırı taşır. Rapordaki her sayı yine de kullanıcı listeyi onaylayana kadar alt sınırdır. Onay kullanıcının beyanıdır ve sunucu listenin eksiksiz olduğunu doğrulayamaz. Kimse bu akışı gerçek bir maçta denemedi ve kimse bir maçı düzeltmenin kaç dakika sürdüğünü ölçmedi. Set kuralı sabittir (25 sayı, beşinci set 15 sayı, iki fark), bu yüzden sunucu takımların başka bir kuralla oynadığı maçın set sayısını yanlış hesaplar (ADR-0114).
 
 ## 1. Fonksiyonel gereksinimler (FR-01 … FR-20)
 
@@ -29,7 +29,7 @@ Depoda eğitilmiş model yok. Kimse hiçbir yapay zekâ bileşeninin doğruluğu
 | FR-09 | Ralli tahmini | P0 | KISMEN + DIŞ BAĞIMLILIK | Hareket enerjisi baseline'ı var ve sentetik kliplerle testli. Gerçek maçta ölçüm izinli video ve gold etiket ister. |
 | FR-10 | Olası takım kazananı | P0 | DIŞ BAĞIMLILIK | Hiçbir analizör kazanan önermiyor. Plan `docs/AI_PLAN.md` 2.7 bölümünde. |
 | FR-11 | Doğrulama kuyruğu | P0 | KISMEN | Kartlar, sürüm denetimli karar, geri alma ve denetim kaydı TEST EDİLDİ. Ekran: klip, tek soru, tek dokunuş. Kullanıcı ralli listesini düzeltir: ekleme, taşıma, bölme ve birleştirme TEST EDİLDİ (JVM, gerçek sunucu). Kullanıcı listeyi skor denetimiyle onaylar. Testler akışı yalnız DEMO analizörle ve betikli sunucuyla denedi. Kimse düzeltmenin süresini ölçmedi. |
-| FR-12 | İki takım raporu | P0 | KISMEN | Sunucu raporu yalnız kullanıcı kararlarından hesaplar (TEST EDİLDİ). Her değer `MEASURED`, `PARTIAL` ya da `UNKNOWN` durumu taşır. Bir değer ancak kullanıcı ralli listesini onayladıktan sonra `MEASURED` olur. Set sayımı kazananı belli olmayan ilk rallide durur. Set kuralı sabittir: Uygulama üç setlik maçın 15 sayılık karar setini ve 21 sayılık seti tanımaz. |
+| FR-12 | İki takım raporu | P0 | KISMEN | Sunucu raporu yalnız kullanıcı kararlarından hesaplar (TEST EDİLDİ). Her değer `MEASURED`, `PARTIAL` ya da `UNKNOWN` durumu taşır. Bir değer ancak kullanıcı ralli listesini onayladıktan sonra `MEASURED` olur. Set sayımı kazananı belli olmayan ilk rallide durur. Set kuralı sabittir: Sunucu üç setlik maçın 15 sayılık karar setini ve 21 sayılık seti tanımaz. |
 | FR-13 | Ralli bazında video oynatma | P0 | KISMEN | Sunucu videoyu `Range` isteğiyle sunar (TEST EDİLDİ). Media3 oynatıcı CI emülatöründe klibi sunucudan parça parça istedi ve hata vermeden oynattı. Test görüntünün doğru kareyi gösterdiğini denetlemez. |
 | FR-14 | Oyuncu eşlemesi | P1 | KISMEN | Kullanıcı sayıyı alan oyuncuyu forma numarasıyla seçer. Otomatik eşleme DIŞ BAĞIMLILIK'tır. |
 | FR-15 | Tam aksiyon çıkarımı | P1 | DIŞ BAĞIMLILIK | Kullanıcı yalnız ralliyi bitiren aksiyonu seçebilir. |
@@ -115,10 +115,10 @@ Sayılar son yerel koşudan gelir. CI aynı testleri her PR'da çalıştırır.
 |---|---|
 | Arka uç `pytest` | 460 test geçti (yerelde Python 3.13, CI'da Python 3.12) |
 | `ml` `pytest` | 239 test geçti (yerel ve CI) |
-| Android JVM testleri (`:core:test`, `:app:testDebugUnitTest`) | 167 test geçti, hiçbiri atlanmadı (yerel): `:core` 5, `:app` 162. Testler 63 ekran görüntüsü üretti. |
-| Uygulama gerçek sunucuya karşı (JVM) | 9 test geçti (yerel): `BackendE2eTest` 6, `AppFlowE2eTest` 1, `AppUploadFlowE2eTest` 1, `RallyFixE2eTest` 1. Bu dokuz test yukarıdaki 167 testin içindedir. İkisi ralli düzeltmeyi dener: biri API istemcisinden, öbürü ekranlardan. |
+| Android JVM testleri (`:core:test`, `:app:testDebugUnitTest`) | 187 test geçti, hiçbiri atlanmadı (yerel): `:core` 5, `:app` 182. Testler 65 ekran görüntüsü üretti. |
+| Uygulama gerçek sunucuya karşı (JVM) | 9 test geçti (yerel): `BackendE2eTest` 6, `AppFlowE2eTest` 1, `AppUploadFlowE2eTest` 1, `RallyFixE2eTest` 1. Bu dokuz test yukarıdaki 187 testin içindedir. İkisi ralli düzeltmeyi dener: biri API istemcisinden, öbürü ekranlardan. |
 | Lint | 0 hata |
-| Mutasyon sınaması (sürüm 0.5.0) | Oturum ralli düzeltmenin uygulamadaki 104 kuralını ve sunucudaki 9 kuralını tek tek bozdu. Testler bozmaların hepsini yakaladı. İlk turda iki bozma yakalanmadı ve iki test boşluğunu gösterdi. Oturum o iki boşluğu kapattı. |
+| Mutasyon sınaması (sürüm 0.5.0) | Oturum ralli düzeltmenin uygulamadaki 140 kuralını ve sunucudaki 9 kuralını tek tek bozdu. Testler son kodda bozmaların hepsini yakalar. Beş bozma ilk koşusunda yakalanmadı ve test boşluklarını gösterdi. Oturum o boşlukları kapattı. |
 | Emülatörde cihaz testleri (CI, API 34) | 2 test: kamera kaydı ve baştan sona akış (yeni maç, kayıt, yükleme, dosya kontrolü, deneme analizi, sunucudan klip, ralli düzenleyicide gerçek oynatıcıyla bitiş taşıma, karar, rapor). İlk iki koşu kırmızıydı ve uygulamada gerçek bir gezinme hatasını gösterdi. Düzenleyici adımı sürüm 0.5.0 ile geldi. |
 | Gerçek telefonda deneme | **Yok.** |
 | Model doğruluğu | **Yok.** Kimse ölçmedi. |
@@ -136,6 +136,7 @@ Ayrı inceleyiciler üç parçayı ve yapay zekâ planını okudu. Ayrı bir do�
 | Yapay zekâ planı | 11 | 11 bulgu belgeye işlendi. |
 | Android uygulaması (sürüm 0.4.0) | 21 | Doğrulayıcı 19 bulguyu doğruladı ve 2 bulguyu reddetti. Doğrulanan 19 bulgu sürüm 0.4.1 ile düzeldi. Reddedilen bulgulardan biri metin kuralıydı ve o metinler de düzeldi. Öbürü uygulanmadı: "Oyuncusu belli olmayan sayı" alt sınır değildir, çünkü kullanıcı oyuncu seçtikçe bu sayı azalır. |
 | Maç silme, gizlilik satırları ve sayı türü tanımları (sürüm 0.4.2) | 19 | Doğrulayıcılar 11 bulguyu doğruladı, 5 bulguyu kısmen doğruladı ve 3 bulguyu reddetti. Tekrarlar ayıklanınca dokuz ayrı kusur kaldı ve dokuzu da düzeldi. Oturum her düzeltmeyi geri alıp ilgili testin kırıldığını gördü. Reddedilen 3 bulgu sözcük tercihiydi. |
+| Ralli düzeltme (sürüm 0.5.0) | 36 | Dört inceleyici 31 bulgu yazdı. Doğrulayıcılar 16 bulguyu doğruladı, 11 bulguyu kısmen doğruladı ve 4 bulguyu reddetti. Eksiklik denetçisi 5 bulgu daha ekledi. Oturum 32 bulguyu düzeltti. İkinci bir tur bu düzeltmeleri koda karşı yeniden denedi: 21 düzeltme tam, 11 düzeltme yarım çıktı ve tur 22 yeni nokta buldu. Oturum yarım kalan düzeltmeleri tamamladı ve yeni noktaları kapattı. Açık kalan iki konu bu bölümün sonundadır. |
 
 Android incelemesinin bulduğu en ağır hatalar şunlardı:
 
@@ -146,7 +147,7 @@ Android incelemesinin bulduğu en ağır hatalar şunlardı:
 - Kartların yenilenmesi başarısız olunca uygulama sunucunun kaydettiği kararı "kaydedemedi" diye gösteriyordu.
 - Uygulama iptal edilen işi hata olarak ve sunucunun hata kodlarını ekranda gösteriyordu.
 
-Son incelemenin (sürüm 0.4.2) bulduğu kusurlar şunlardı:
+Sürüm 0.4.2 incelemesinin bulduğu kusurlar şunlardı:
 
 - Sunucunun sildiği maçın takım adları veritabanı dosyasında okunabilir kalıyordu.
 - Maç açma yanıtı kaybolursa telefon o maçı sunucudan silemiyordu.
@@ -157,11 +158,36 @@ Son incelemenin (sürüm 0.4.2) bulduğu kusurlar şunlardı:
 
 Üç düzeltmenin otomatik testi yoktur: kamera izninin ayarlardan dönüşte yeniden okunması (cihaz ister), çift dokunmada aynı ekranın iki kez açılmaması ve video okunurken ekrandan ayrılan kullanıcıya kontrol ekranının kendiliğinden açılmaması. Bir bulgu yarım kapandı: Uygulama yerel kayıt dosyasını hâlâ çağıran iş parçacığında yazar. Yazma hatası artık uygulamayı kapatmaz ve ana ekran hatayı bildirir.
 
+Ralli düzeltme incelemesinin (sürüm 0.5.0) bulduğu en ağır kusurlar şunlardı:
+
+- Yanıtı kaybolan bir düzeltmeyi kullanıcı yeniden deneyince uygulama "düzeltmeyi yeniden yap" diyordu. Sunucu ilk denemeyi uygulamıştı ve ikinci bir birleştirme başka bir ralliyi silerdi.
+- Uygulama maçın işi değişince eski işin ralli listesini bırakmıyordu ve yeni işin listesi yerine eskisini gösteriyordu.
+- Sunucu bir düzeltmeyi uyguladıktan sonra uygulama listeyi okuyamazsa ekran eski listeyi güncel liste gibi gösteriyordu.
+- Oynatma hatasından sonra düzenleyici kilitli kalıyordu ve videoyu yeniden isteyen bir düğme yoktu.
+- Kullanıcı aynı kazananı ikinci kez seçince sunucu liste onayını sessizce düşürüyordu.
+- Sunucu sonu taşınan rallide analizörün eski kazanan önerisini tutuyordu. O öneriyi yeni klibi görmeyen bir analizör vermişti.
+- Rapor analizörün önerdiği aralık sayısını ralli sayısı diye gösteriyordu ve "Listede N ralli var" cümlesi kullanıcının ralli saymadığı aralıkları da sayıyordu.
+
+İkinci turun bulduğu kusurlar şunlardı:
+
+- Kullanıcı düzeltme yoldayken düzenleyiciden çıkarsa sunucunun reddini hiçbir ekran göstermiyordu. Düzenleyici ve ralli listesi artık yanıt gelene kadar açık kalır.
+- Küçük telefonda sunucunun reddi ekranın görünmeyen bölümünde kalıyordu ve dokunuş boşa gitmiş gibi görünüyordu. Düzenleyici reddi artık işaret düğmelerinin hemen üstünde gösterir.
+- Oynayan görüntü rallinin sonunu geçerken kullanıcı "Burada Böl" düğmesine dokunursa uygulama sunucunun reddettiği bir konum gönderiyordu. Ekran artık düğmeyi açan kuralı dokunma anındaki konuma yeniden sorar.
+- Ekran ilk açıldığında ve "Yeniden Dene" düğmesinden sonra görüntü gelmeden işaret düğmeleri açıktı. Düzenleyici artık işaret düğmelerini oynatıcı o konumun görüntüsünü ekrana getirdiğinde açar.
+- Sunucu videoyu artık tanımayınca uygulama eski listeyi ekranda tutuyordu ve düzeltme düğmeleri hiçbir şey yapmıyordu.
+- Deneme analizinin listesi, kullanıcının hiç veremeyeceği bir onaydan sonra kesin skor vaat ediyordu.
+- Rapor onaydan sonra bütün takım sayılarının artı işaretinin kalkacağını söylüyordu. Sayı türü satırları, kullanıcı her sayının türünü seçene kadar artı işaretini korur.
+- Belgeler set kuralını uygulamaya mal ediyordu. Kuralı sunucu uygular.
+
+Mutasyon sınaması bu turda iki test boşluğu daha gösterdi: Hiçbir test geri tuşunun gerçekten tutulduğunu ve düzenleyicinin yalnız bir kez kapandığını ölçmüyordu. Oturum iki boşluğu kapattı. Ekran görüntüsü testleri de test sırasına bağlıydı: Bir düzenleyici testinin hemen ardından koşan ve dönen bir yükleme işareti içeren ekran görüntüsü hiç bitmiyordu. Ekran görüntüsü testleri artık animasyonları kapatır.
+
+Bu incelemeden iki konu açık kaldı. Hiçbir test gerçek oynatıcının bir hatadan sonra videoyu yeniden açtığını ve uygulama arka plana geçince durduğunu denemez. JVM testleri oynatıcıyı tutan sınıfı durumunu testin elle kurduğu bir oynatıcıyla dener ve bu iki davranış gerçek telefon denemesini bekler. Hiçbir test de uygulamanın bir düzeltme için beklediği 15 saniyeyi denemez.
+
 ## 7. Sıradaki dilimler
 
 Sıra bağımlılığa göredir. İlk dört iş gerçek video beklemez.
 
-1. **Set sonu ve düzeltme süresi:** Ralli düzeltme sürüm 0.5.0 ile geldi (ADR-0114). İki eksik kaldı. Set kuralı sabit olduğu için uygulama başka kuralla oynanan maçın set sayısını yanlış yazar. Çözüm adayı kullanıcının her setin son rallisini işaretlemesidir ve Arda'nın kararını bekler (bölüm 8). Kimse düzeltmenin gerçek bir maçta kaç dakika sürdüğünü de ölçmedi. Ekip bu süreyi ilk gerçek maçta ölçer.
+1. **Set sonu ve düzeltme süresi:** Ralli düzeltme sürüm 0.5.0 ile geldi (ADR-0114). İki eksik kaldı. Set kuralı sabit olduğu için sunucu takımların başka bir kuralla oynadığı maçın set sayısını yanlış hesaplar. Çözüm adayı kullanıcının her setin son rallisini işaretlemesidir ve ürün sahibinin kararını bekler (bölüm 8). Kimse düzeltmenin gerçek bir maçta kaç dakika sürdüğünü de ölçmedi. Ekip bu süreyi ilk gerçek maçta ölçer.
 2. **Saha yarısı ve taraf değişimi:** Maç kaydı hangi takımın hangi yarıda başladığını ve takımların ne zaman yer değiştirdiğini taşımıyor. Kazanan önerisi ve oyuncu tarafı bu bilgiyi ister.
 3. **Saha bölgesi seçimi:** Kullanıcı bir karede sahanın köşelerine dokunur. Sunucu homografiyi saklar. Baseline hareketi saha içiyle sınırlar (deney B2'nin ön koşulu).
 4. **Arka plan yükleme:** WorkManager ve ön plan hizmeti. Gerçek telefonda deneme ister.
@@ -173,11 +199,11 @@ Benzer bir ürünün herkese açık sayfalarını inceleyen çalışma şu adayl
 
 8. **Çekim öncesi kadraj denetimi:** Saha bölgesi seçimiyle (3) aynı işaretleme ekranını kullanır. Kullanıcı yanlış kadrajı maçtan önce görür (`docs/AI_PLAN.md` 2.3).
 9. **Oyuncu başına ralli klipleri:** Kullanıcı oyuncu tablosundan o oyuncuya yazdığı sayıların kliplerini açar. Sunucu klip aralıklarını zaten tutuyor. Sıra ilk gerçek maçtan sonradır, çünkü bu ekranın değerini yalnız gerçek bir maç gösterir.
-10. **Oyuncu adı taşımayan paylaşım görseli (FR-20):** Görsel skoru ve takım sayımlarını taşır, alt sınır ve DEMO etiketini de taşır. Ralli düzeltme geldiği için bu iş artık başlayabilir.
+10. **Oyuncu adı taşımayan paylaşım görseli (FR-20):** Görsel skoru ve takım sayımlarını taşır, alt sınır ve DEMO etiketini de taşır. Ralli düzeltme geldiği için ekip bu işe artık başlayabilir.
 
 Doğrulayıcılar iki adayı reddetti. Önceki rallinin kazananından çıkarılan side-out ve break sayımı, bölümleme bir ralliyi kaçırdığında sonraki bütün rallileri yanlış sınıfa koyar. "Kullanıcı yalnız emin olunmayan ralliyi doğrular" diyen bir tanıtım metni de bugün doğru değildir, çünkü kullanıcı her ralliyi kendisi doğruluyor.
 
-## 8. Arda'dan beklenenler
+## 8. Ürün sahibinden beklenenler
 
 | Konu | Neden gerekli |
 |---|---|
@@ -188,6 +214,6 @@ Doğrulayıcılar iki adayı reddetti. Önceki rallinin kazananından çıkarıl
 | Uygulama simgesi kararı | Suluboya logo küçük boyda zor okunur ve mor arayüzle aynı paleti paylaşmaz. |
 | Bulut ve GPU kararı | Ücretli hizmet onayı sende. O zamana kadar her şey yerelde çalışır. |
 | Depo görünürlüğü | Depo herkese açık. Kapalı olmasını istersen GitHub ayarından değiştirirsin. |
-| Set sonu işareti | Uygulama seti 25 sayıda, beşinci seti 15 sayıda bitirir. Üç setlik maçın 15 sayılık karar setinde kazanılan set sayısı yanlış çıkar. 21 sayılık sette set skorları da yanlış çıkar ve kullanıcı listeyi onaylayamaz. Öneri: Kullanıcı her setin son rallisini işaretler (maç başına üç ile beş dokunuş). Bu yeni bir elle giriştir ve senin kararını ister (bölüm 7, 1. iş). |
+| Set sonu işareti | Sunucu seti 25 sayıda, beşinci seti 15 sayıda bitirir. Sunucu üç setlik maçın 15 sayılık karar setinde takımların kazandığı set sayısını yanlış hesaplar. Sunucu 21 sayılık sette set skorlarını da yanlış hesaplar ve kullanıcı listeyi onaylayamaz. Öneri: Kullanıcı her setin son rallisini işaretler (maç başına üç ile beş dokunuş). Bu yeni bir elle giriştir ve senin kararını ister (bölüm 7, 1. iş). |
 | İzin cümlesinin hukuki onayı | Uygulama 14 Kasım kararınla şu cümleyi gösterir: "Bu videoyu yükleme hakkım var. Sahadaki oyuncular çekimi biliyor ve analiz için izin verdi." Hiçbir KVKK uzmanı bu cümleyi okumadı. Cümle kişisel veri konusudur ve son hâlini bir uzman onaylar. |
 | Geri bildirim adresi | Uygulama içinden geri bildirim için bir e-posta adresi gerekir. Adresi yalnız sen verebilirsin. |

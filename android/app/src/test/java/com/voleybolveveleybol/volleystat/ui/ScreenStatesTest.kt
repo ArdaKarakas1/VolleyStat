@@ -49,6 +49,7 @@ import com.voleybolveveleybol.volleystat.ui.screens.StatusScreen
 import com.voleybolveveleybol.volleystat.ui.screens.WelcomeScreen
 import com.voleybolveveleybol.volleystat.ui.theme.VolleyStatTheme
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -185,6 +186,22 @@ class ScreenStatesTest {
         show { ReportScreen(match, ReportLoad.READY, report("MEASURED").copy(listConfirmed = true), {}, {}, {}, {}, {}) }
         compose.onNodeWithText(text(R.string.report_list_confirmed)).assertIsDisplayed()
         assertEquals(false, shown(text(R.string.report_may_miss)))
+    }
+
+    @Test fun aConfirmedListMakesThePointsExactAndLeavesThePlusOnTheCountsThatStillWaitForAnAnswer() {
+        // The list is confirmed, so every point is counted. Only some points have a type yet.
+        val confirmed = report("MEASURED").copy(
+            listConfirmed = true,
+            home = TeamStats(StatValue(28, "MEASURED"), StatValue(11, "PARTIAL"), StatValue(null, "UNKNOWN"), StatValue(null, "UNKNOWN"), StatValue(null, "UNKNOWN")),
+            away = TeamStats(StatValue(25, "MEASURED"), StatValue(9, "PARTIAL"), StatValue(null, "UNKNOWN"), StatValue(null, "UNKNOWN"), StatValue(null, "UNKNOWN")),
+        )
+        show { ReportScreen(match, ReportLoad.READY, confirmed, {}, {}, {}, {}, {}) }
+        compose.onNodeWithText("28").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("25").assertIsDisplayed()
+        compose.onNodeWithText("11+").assertIsDisplayed()
+        compose.onNodeWithText("9+").assertIsDisplayed()
+        // The report promised exactly that before the confirmation: the set score and the row of the points.
+        assertTrue(text(R.string.report_may_miss).contains(text(R.string.report_points)))
     }
 
     @Test fun theReportNamesTheUsersCorrectionsAsASourceOfItsIntervalsOnlyWhenThereAreSome() {
