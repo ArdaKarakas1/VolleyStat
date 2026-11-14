@@ -153,7 +153,13 @@ data class Draft(
     /** Every new match starts with the FIVB rule, so a standard match needs no touch. */
     val rules: MatchRules = MatchRules.FIVB,
 ) {
-    val started: Boolean get() = name.isNotBlank() || venue.isNotBlank() || homeTeam.isNotBlank() || awayTeam.isNotBlank() || video != null
+    /**
+     * True when the draft holds something the user did and Home offers to return to it. A chosen rule
+     * counts: it changes every set the server counts, so a rule left over from an abandoned setup must
+     * not slip unseen into the next match.
+     */
+    val started: Boolean get() = name.isNotBlank() || venue.isNotBlank() || homeTeam.isNotBlank() || awayTeam.isNotBlank() || video != null ||
+        rules != MatchRules.FIVB
 }
 
 enum class ServerTarget { EMULATOR, USB_DEVICE }

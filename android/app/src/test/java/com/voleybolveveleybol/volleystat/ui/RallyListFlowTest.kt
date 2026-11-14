@@ -7,6 +7,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasScrollToNodeAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.StateRestorationTester
@@ -231,6 +232,20 @@ class RallyListFlowTest {
     private fun text(id: Int, vararg arguments: Any) = app.activity.getString(id, *arguments)
     private fun waitFor(text: String) = app.waitUntil(20_000) { app.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty() }
     private fun tap(id: Int) = app.onNodeWithText(text(id)).performClick()
+    /**
+     * Waits for the view model. A condition that reads only memory does not run the main looper, so the
+     * answers that are on their way would never land: each round lets the screen and the looper run first.
+     */
+    private fun idleUntil(what: String, condition: () -> Boolean) {
+        val end = System.currentTimeMillis() + 15_000
+        while (true) {
+            app.waitForIdle()
+            if (condition()) return
+            check(System.currentTimeMillis() < end) { "timed out waiting for $what" }
+            Thread.sleep(10)
+        }
+    }
+
     private fun back() {
         app.runOnUiThread { app.activity.onBackPressedDispatcher.onBackPressed() }
         app.waitForIdle()
@@ -510,5 +525,57 @@ class RallyListFlowTest {
         assertTrue(app.onAllNodesWithText(text(R.string.rule_sending)).fetchSemanticsNodes().isEmpty())
         assertEquals(1, requests.count { it == "PUT /matches/server-1/rules" })
         assertEquals("the list did not move on", MatchRules.FIVB, rules)
+    }
+
+    @Test fun aWinnerAnswerThatLandsWhileTheRuleIsOnItsWayLeavesTheRuleScreenAsItWas() {
+        // Rally 2 waits for its winner. The user answers it on a slow network and goes on without waiting.
+        winners = listOf("HOME", null, "HOME")
+        val decision = java.util.concurrent.CountDownLatch(1)
+        holdDecision = decision
+        openTheRallyList()
+        tap(R.string.action_go_review)
+        waitFor(text(R.string.review_position, 2, 3))
+        app.onNodeWithText(HOME_TEAM).performClick()
+        back()
+        app.onNodeWithText(text(R.string.rule_card_change)).performScrollTo().performClick()
+        waitFor(text(R.string.rule_title))
+        holdRules = java.util.concurrent.CountDownLatch(1)
+        app.onNodeWithText(text(R.string.rule_sets_option, 2)).performScrollTo().performClick()
+        tap(R.string.action_save_rule)
+        waitFor(text(R.string.rule_sending))
+
+        // The winner answer lands and moves the list on while the rule is still on its way.
+        val vm = ViewModelProvider(app.activity)[AppViewModel::class.java]
+        decision.countDown()
+        idleUntil("the answer of the decision") { vm.analysis.value.job?.rallyListVersion == 8 }
+
+        // The screen that sent the rule still holds the user, says what is on its way and keeps the choice.
+        app.onNodeWithText(text(R.string.rule_sending)).assertIsDisplayed()
+        back()
+        app.onNodeWithText(text(R.string.rule_sending)).assertIsDisplayed()
+        app.onNodeWithText(text(R.string.rule_sets_option, 2)).performScrollTo().assertIsSelected()
+
+        holdRules!!.countDown()
+        waitFor(text(R.string.rule_name_custom))
+        assertEquals(MatchRules(2, 25, 15), rules)
+    }
+
+    @Test fun aNoGivenBeforeTheRuleChangedDoesNotSpeakForTheRecountedList() {
+        openTheRallyList()
+        tap(R.string.action_check_score)
+        tap(R.string.score_check_no)
+        val hint = text(R.string.rallies_no_hint, text(R.string.rule_card_change), text(R.string.action_choose_winner), text(R.string.review_not_a_rally))
+        app.onNodeWithText(hint).performScrollTo().assertIsDisplayed()
+
+        // The hint sends the user to the rule. The server recounts the list with the new one.
+        app.onNodeWithText(text(R.string.rule_card_change)).performScrollTo().performClick()
+        waitFor(text(R.string.rule_title))
+        app.onAllNodesWithText(text(R.string.rule_points_option, 21))[0].performScrollTo().performClick()
+        tap(R.string.action_save_rule)
+        waitFor(text(R.string.rule_name_custom))
+
+        // The user has not compared the recounted scores yet, so nothing on the list says they differ.
+        assertTrue(app.onAllNodesWithText(hint).fetchSemanticsNodes().isEmpty())
+        app.onNodeWithText(text(R.string.action_check_score)).performScrollTo().assertIsDisplayed()
     }
 }

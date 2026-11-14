@@ -129,3 +129,17 @@ def test_an_invalid_rule_is_refused_and_names_its_field(client, storage, rules):
         assert any("rules" in entry["location"] for entry in refused.json()["error"]["details"]["fields"])
     with sqlite3.connect(storage / "volleystat.sqlite3") as db:
         assert db.execute("SELECT COUNT(*) FROM matches").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("body", [
+    {**TEAMS, "setsToWin": 2, "setTarget": 21, "decidingSetTarget": 15},
+    {**TEAMS, "rule": BEST_OF_THREE_TO_21},
+    {**TEAMS, "matchRules": BEST_OF_THREE_TO_21},
+], ids=["flat", "rule", "matchRules"])
+def test_a_rule_outside_its_object_or_under_another_name_is_refused(client, storage, body):
+    # Dropped in silence, the rule would leave a FIVB match that the idempotent PUT then keeps for good.
+    for refused in (client.post("/v1/matches", json=body), client.put(f"/v1/matches/{uuid.uuid4()}", json=body)):
+        assert refused.status_code == 422, refused.text
+        assert refused.json()["error"]["code"] == "VALIDATION_ERROR"
+    with sqlite3.connect(storage / "volleystat.sqlite3") as db:
+        assert db.execute("SELECT COUNT(*) FROM matches").fetchone()[0] == 0

@@ -195,6 +195,10 @@ Kararlar:
 - Kullanıcı kuralı ralli listesinden de değiştirir. Kural değişince sunucu aynı işlemde maçın incelenen her işinde liste sürümünü artırır. Kullanıcı listeyi eski kuralın set skorlarıyla onayladı, bu yüzden onay düşer. Kararlar, kartlar ve düzeltmeler kalır. Aynı kural yeniden gelirse sunucu hiçbir şey yazmaz.
 - Ekranlar kuralı sunucunun yanıtından okur: ralli listesinin ve raporun kuralından. Telefon set sınırı hesaplamaz ve kuralı yalnız maçı sunucuda açan istekle gönderir.
 - Kural ekranı ralli listesinden açıldıysa sunucunun yanıtı gelene kadar açık kalır. Ret ve bağlantı hatası Kaydet düğmesinin hemen üstünde durur. Liste onaylıysa ekran, kullanıcı Kaydet düğmesine basmadan önce onayın düşeceğini yazar.
+- Bir kural ya da düzeltme yoldayken onu gönderen ekran, değişikliğin yapıldığı listeyi tutar. Bu sırada gelen bir kazanan yanıtı işi ilerletir, ama ekranı değiştirmez ve kullanıcının seçimini silmez. Değişikliğin ardından okunan liste o listenin yerini alır.
+- Kullanıcının seçtiği kural taslağı yarım kalmış bir kurulum yapar ve ana ekran o taslağı "Yarım kalan maç kurulumu" olarak gösterir. Kural maçın bütün sayımını değiştirir, bu yüzden yarım bırakılan bir kurulumun kuralı sonraki maça görünmeden geçmez.
+- Skor denetimindeki "Hayır" yanıtı, kullanıcının o yanıtı verdiği liste sürümüne aittir. Sunucu listeyi yeni kuralla yeniden sayınca ipucu kalkar, çünkü kullanıcı yeni skorları henüz karşılaştırmadı.
+- Sunucu maç isteğindeki bilinmeyen alanı reddeder. Kural `rules` nesnesinin dışında ya da başka bir adla gelseydi sunucu onu sessizce düşürür ve aynı kimlikle gelen sonraki istek FIVB kuralını korurdu.
 - Skor denetimi ve rapor sayımın kuralını bir cümleyle söyler: "Sunucu seti 21 sayıda, 3. seti 15 sayıda ve iki farkla bitirir."
 
 Ekip şunları bilerek yapmadı: maçı bitiren kural, süreyle biten set, sayı tavanı, iki farktan başka bir fark, sete göre ayrı hedef, serbest sayı girişi, tek setlik ya da dört set kazanılan maç, kuralı skordan tahmin etmek, kural geçmişi tablosu, raporda ya da maç kartında kural değiştirme.

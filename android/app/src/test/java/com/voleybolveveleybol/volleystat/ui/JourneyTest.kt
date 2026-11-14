@@ -156,6 +156,13 @@ class JourneyTest {
         app.onNodeWithText(text(R.string.action_save_rule)).assertIsNotEnabled()
         app.onNodeWithContentDescription(text(R.string.action_back)).performClick()
 
+        // Left on Home, a setup with nothing but a chosen rule is an unfinished setup: the rule must not slip
+        // unseen into the next match.
+        app.onNodeWithContentDescription(text(R.string.action_back)).performClick()
+        app.onNodeWithText(text(R.string.home_draft_title)).performScrollTo().assertIsDisplayed()
+        app.onNodeWithText(text(R.string.home_draft_title)).performClick()
+        app.onNodeWithText(text(R.string.rule_name_custom)).performScrollTo().assertIsDisplayed()
+
         // The rule stays with the draft on the way to the team step and back, and through a restart.
         tap(R.string.action_continue)
         app.onNodeWithText(text(R.string.match_teams_title)).assertIsDisplayed()

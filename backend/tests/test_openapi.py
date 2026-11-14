@@ -49,3 +49,10 @@ def test_the_app_is_version_0_6_0_and_serves_every_route_of_the_contract(storage
     assert spec["info"]["version"] == "0.6.0"
     missing = [(path, method) for path, method in CONTRACT_ROUTES if method not in spec["paths"].get(path, {})]
     assert missing == []
+
+
+def test_the_contract_lists_the_rule_values_the_server_accepts(storage):
+    schema = create_app(storage, analyzer="none").openapi()["components"]["schemas"]["MatchRulesInput"]
+    assert {name: field["enum"] for name, field in schema["properties"].items()} == {
+        "setsToWin": [2, 3], "setTarget": [25, 21, 15], "decidingSetTarget": [25, 21, 15]}
+    assert schema["additionalProperties"] is False

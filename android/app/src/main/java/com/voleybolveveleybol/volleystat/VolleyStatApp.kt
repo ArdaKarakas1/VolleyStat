@@ -177,7 +177,9 @@ fun VolleyStatApp(
             if (analysis.matchId != match.localId || analysis.job == null) viewModel.watchAnalysis(match.localId, startIfMissing = false)
         }
         // Without a job there is no list to wait for. The screens read the reason from the job itself (jobProblem).
-        return own.copy(rallies = own.currentRallies)
+        // While a correction or a rule is on its way, the screen that sent it keeps the list it was made on: a
+        // winner answer that lands meanwhile moves the job on, and the list read after the answer replaces it.
+        return own.copy(rallies = own.currentRallies ?: own.rallies.takeIf { own.correcting })
     }
 
     @Composable

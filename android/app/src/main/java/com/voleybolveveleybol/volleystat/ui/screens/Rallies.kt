@@ -175,8 +175,10 @@ fun RalliesScreen(
 ) {
     val list = analysis.rallies
     var checking by rememberSaveable { mutableStateOf(false) }
-    // An answer about one version of the list says nothing about the next one.
-    var scoresDiffer by rememberSaveable(list?.version) { mutableStateOf(false) }
+    // An answer about one version of the list says nothing about the next one. The version is kept with the
+    // answer: a screen that comes back from the back stack gets its saved state back whatever the list is now.
+    var noAt by rememberSaveable { mutableStateOf<Int?>(null) }
+    val scoresDiffer = list != null && noAt == list.version
     // The confirmation is sent from here. Until its answer is there the user stays, so a refusal is not lost.
     BackHandler(enabled = analysis.correcting) {}
     Scaffold(
@@ -246,8 +248,8 @@ fun RalliesScreen(
     if (checking && list != null) {
         ScoreCheckDialog(
             list.sets, list.rules,
-            onYes = { checking = false; scoresDiffer = false; onConfirm() },
-            onNo = { checking = false; scoresDiffer = true },
+            onYes = { checking = false; noAt = null; onConfirm() },
+            onNo = { checking = false; noAt = list.version },
             onUnknown = { checking = false },
         )
     }

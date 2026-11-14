@@ -1404,6 +1404,7 @@
             ]
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "homeTeamName",
@@ -1415,14 +1416,28 @@
         "properties": {
           "setsToWin": {
             "type": "integer",
+            "enum": [
+              2,
+              3
+            ],
             "title": "Setstowin"
           },
           "setTarget": {
             "type": "integer",
+            "enum": [
+              25,
+              21,
+              15
+            ],
             "title": "Settarget"
           },
           "decidingSetTarget": {
             "type": "integer",
+            "enum": [
+              25,
+              21,
+              15
+            ],
             "title": "Decidingsettarget"
           }
         },

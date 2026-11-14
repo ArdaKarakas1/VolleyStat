@@ -38,9 +38,10 @@ class MatchRulesInput(BaseModel):
     """The rule the user chose: the app offers exactly these values, so the server accepts nothing else."""
     model_config = ConfigDict(extra="forbid")
 
-    setsToWin: int = Field(strict=True)
-    setTarget: int = Field(strict=True)
-    decidingSetTarget: int = Field(strict=True)
+    # The enum is for the OpenAPI document. The validators below are what refuses another value.
+    setsToWin: int = Field(strict=True, json_schema_extra={"enum": list(report.SETS_TO_WIN)})
+    setTarget: int = Field(strict=True, json_schema_extra={"enum": list(report.TARGETS)})
+    decidingSetTarget: int = Field(strict=True, json_schema_extra={"enum": list(report.TARGETS)})
 
     @field_validator("setsToWin")
     @classmethod
@@ -61,7 +62,9 @@ class MatchRulesInput(BaseModel):
 
 
 class MatchInput(BaseModel):
-    model_config = ConfigDict(str_strip_whitespace=True)
+    # An unknown key is refused: a rule written beside "rules" or under another name would otherwise be
+    # dropped in silence, and the idempotent PUT would then keep the FIVB rule for good.
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
     homeTeamName: str = Field(min_length=2, max_length=80)
     awayTeamName: str = Field(min_length=2, max_length=80)

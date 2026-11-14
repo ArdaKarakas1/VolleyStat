@@ -30,8 +30,11 @@ class MatchRulesTest {
             .forEach { assertFalse("$it is not offered", it.isOffered) }
     }
 
-    @Test fun aDraftWithOnlyAChosenRuleIsNotStarted() {
-        // A rule alone is no reason to ask whether the user wants to keep the draft, the same as the kind of match.
-        assertFalse(Draft(rules = MatchRules(2, 21, 15)).started)
+    @Test fun aDraftWithAChosenRuleIsAnUnfinishedSetup() {
+        // A rule changes every set the server counts. Left over from an abandoned setup, it must show on Home
+        // instead of slipping unseen into the next match.
+        assertTrue(Draft(rules = MatchRules(2, 21, 15)).started)
+        assertFalse("the FIVB rule is no choice of the user's", Draft().started)
+        assertFalse("the kind of match is only a label", Draft(kind = MatchKind.OFFICIAL).started)
     }
 }
