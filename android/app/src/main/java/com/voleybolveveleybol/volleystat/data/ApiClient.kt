@@ -1,11 +1,15 @@
 package com.voleybolveveleybol.volleystat.data
 
 import com.voleybolveveleybol.volleystat.model.AnalysisJob
+import com.voleybolveveleybol.volleystat.model.Correction
 import com.voleybolveveleybol.volleystat.model.Coverage
 import com.voleybolveveleybol.volleystat.model.MatchReport
 import com.voleybolveveleybol.volleystat.model.PlayerLine
+import com.voleybolveveleybol.volleystat.model.Rally
+import com.voleybolveveleybol.volleystat.model.RallyList
 import com.voleybolveveleybol.volleystat.model.ReviewCard
 import com.voleybolveveleybol.volleystat.model.ReviewDeck
+import com.voleybolveveleybol.volleystat.model.SetPoint
 import com.voleybolveveleybol.volleystat.model.SetScore
 import com.voleybolveveleybol.volleystat.model.StatValue
 import com.voleybolveveleybol.volleystat.model.TeamStats
@@ -34,7 +38,18 @@ data class UploadTicket(val uploadId: String, val nextOffset: Long, val chunkSiz
 data class UploadStatus(val nextOffset: Long, val status: String, val videoId: String?)
 
 /** Blocking client for the local development API. Call it off the main thread. */
-class ApiClient(private val baseUrl: String) {
+class ApiClient(
+    private val baseUrl: String,
+    /**
+     * How long the app waits for the answer to a correction, and for the list and the cards it
+     * reads right after one. The screen that sent the correction keeps the user until all three
+     * are there, so the wait is short: the server applies a correction in one small transaction.
+     */
+    val correctionTimeoutMs: Int = CORRECTION_TIMEOUT_MS,
+) {
+    companion object {
+        const val CORRECTION_TIMEOUT_MS = 15_000
+    }
 
     fun health(): Health {
         val json = request("GET", "/health", timeoutMs = 5_000)
@@ -102,8 +117,8 @@ class ApiClient(private val baseUrl: String) {
         null
     }
 
-    fun reviewCards(jobId: String, scope: String): ReviewDeck {
-        val json = request("GET", "/analyses/$jobId/review-cards?scope=$scope")
+    fun reviewCards(jobId: String, scope: String, timeoutMs: Int = 60_000): ReviewDeck {
+        val json = request("GET", "/analyses/$jobId/review-cards?scope=$scope", timeoutMs = timeoutMs)
         val position = json.getJSONObject("position")
         return ReviewDeck(json.getJSONArray("cards").objects().map(::parseCard), position.getInt("answered"), position.getInt("total"))
     }
@@ -113,6 +128,51 @@ class ApiClient(private val baseUrl: String) {
         val body = JSONObject().put("selection", selection).put("expectedVersion", expectedVersion).put("idempotencyKey", idempotencyKey)
         return parseJob(request("POST", "/review-cards/$cardId/decisions", body.toString().toByteArray()).getJSONObject("job"))
     }
+
+    // ----- Corrections of the rally list (docs/API_V1.md, section 9) -----
+    // Every correction names the version of the list the user was looking at. The server refuses a
+    // correction of a list that has moved on with code RALLY_LIST_STALE, so none applies twice.
+
+    fun rallies(jobId: String, timeoutMs: Int = 60_000): RallyList {
+        val json = request("GET", "/analyses/$jobId/rallies", timeoutMs = timeoutMs)
+        return RallyList(
+            json.getJSONArray("rallies").objects().map(::parseRally), json.getInt("rallyListVersion"),
+            json.getBoolean("listConfirmed"), json.getLong("videoDurationMs"), json.getJSONArray("sets").objects().map(::parseSet),
+        )
+    }
+
+    fun addRally(jobId: String, startMs: Long, endMs: Long, listVersion: Int): Correction =
+        correction("/analyses/$jobId/rallies", JSONObject().put("startMs", startMs).put("endMs", endMs), listVersion)
+
+    fun moveRally(rallyId: String, startMs: Long, endMs: Long, listVersion: Int): Correction =
+        correction("/rallies/$rallyId/move", JSONObject().put("startMs", startMs).put("endMs", endMs), listVersion)
+
+    fun splitRally(rallyId: String, atMs: Long, listVersion: Int): Correction =
+        correction("/rallies/$rallyId/split", JSONObject().put("atMs", atMs), listVersion)
+
+    fun mergeWithPrevious(rallyId: String, listVersion: Int): Correction =
+        correction("/rallies/$rallyId/merge-previous", JSONObject(), listVersion)
+
+    /** Records the user's statement that the list holds every rally of the video. */
+    fun confirmRallyList(jobId: String, listVersion: Int): AnalysisJob =
+        parseJob(
+            request("POST", "/analyses/$jobId/rally-list/confirm", JSONObject().put("expectedListVersion", listVersion).toString().toByteArray(), timeoutMs = correctionTimeoutMs)
+                .getJSONObject("job")
+        )
+
+    private fun correction(path: String, body: JSONObject, listVersion: Int): Correction {
+        val json = request("POST", path, body.put("expectedListVersion", listVersion).toString().toByteArray(), timeoutMs = correctionTimeoutMs)
+        val removed = json.getJSONArray("removed")
+        return Correction(json.getJSONArray("affected").objects().map(::parseRally), List(removed.length()) { removed.getString(it) }, parseJob(json.getJSONObject("job")))
+    }
+
+    private fun parseSet(json: JSONObject) = SetScore(json.getInt("number"), json.getInt("home"), json.getInt("away"), json.getBoolean("complete"))
+
+    private fun parseRally(json: JSONObject) = Rally(
+        id = json.getString("id"), sequence = json.getInt("sequence"), startMs = json.getLong("startMs"), endMs = json.getLong("endMs"),
+        fromAnalyzer = json.getString("origin") == "ANALYZER", status = json.getString("status"), winner = json.optStringOrNull("winner"),
+        scoreAfter = json.optJSONObject("scoreAfter")?.let { SetPoint(it.getInt("set"), it.getInt("home"), it.getInt("away")) },
+    )
 
     /** The report of a match, or null when the match has no analysis job. */
     fun report(matchId: String): MatchReport? = try {
@@ -134,6 +194,8 @@ class ApiClient(private val baseUrl: String) {
             mock = json.getBoolean("mock"),
             failureCode = json.optJSONObject("failure")?.getString("code"),
             rallies = counts.getInt("rallies"), reviewOpen = counts.getInt("reviewOpen"), reviewTotal = counts.getInt("reviewTotal"),
+            proposed = counts.optInt("proposed", counts.getInt("rallies")),
+            rallyListVersion = json.optInt("rallyListVersion", 0), listConfirmed = json.optBoolean("listConfirmed", false),
         )
     }
 
@@ -159,14 +221,18 @@ class ApiClient(private val baseUrl: String) {
         return MatchReport(
             jobId = json.getString("jobId"), analyzerId = analyzer.getString("id"), analyzerKind = analyzer.getString("kind"),
             mock = json.getBoolean("mock"), verificationStatus = json.getString("verificationStatus"),
-            ralliesProposed = rallies.getInt("proposed"), ralliesVerified = rallies.getInt("verified"), ralliesRejected = rallies.getInt("rejected"),
+            ralliesProposed = rallies.getInt("proposed"), ralliesTotal = rallies.optInt("total", rallies.getInt("proposed")),
+            ralliesVerified = rallies.getInt("verified"), ralliesRejected = rallies.getInt("rejected"),
             ralliesUnresolved = rallies.getInt("unresolved"), ralliesOpen = rallies.getInt("open"),
             scoreStatus = score.getString("status"),
             setsWonHome = if (setsWon.isNull("home")) null else setsWon.getInt("home"),
             setsWonAway = if (setsWon.isNull("away")) null else setsWon.getInt("away"),
-            sets = score.getJSONArray("sets").objects().map { SetScore(it.getInt("number"), it.getInt("home"), it.getInt("away"), it.getBoolean("complete")) },
+            sets = score.getJSONArray("sets").objects().map(::parseSet),
             scoreStoppedAtRally = if (score.isNull("stoppedAtRally")) null else score.getInt("stoppedAtRally"),
             ralliesMayBeMissing = json.optBoolean("ralliesMayBeMissing", false),
+            listConfirmed = json.optJSONObject("rallyList")?.optBoolean("confirmed", false) ?: false,
+            corrections = json.optJSONObject("rallyList")?.optInt("corrections", 0) ?: 0,
+            ralliesUserCreated = rallies.optInt("userCreated", 0),
             home = team("home"), away = team("away"),
             players = json.getJSONArray("players").objects().map {
                 PlayerLine(it.getString("side") == "HOME", it.getInt("jersey"), it.getInt("points"), it.getInt("attackPoints"), it.getInt("blockPoints"), it.getInt("aces"))

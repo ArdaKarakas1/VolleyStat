@@ -7,12 +7,14 @@
 - Kapsam amatör kapalı saha 6 × 6 maçıdır. Uygulama iki takımı da izler.
 - İlk analiz sunucuda, kayıtlı video üzerinde çalışır. Canlı analiz sonraki iştir.
 - Kullanıcı yalnız sistemin emin olamadığı kararları verir. Bugün eğitilmiş model yoktur, bu yüzden kullanıcı her rallinin kazananını kendisi seçer (önce inceleme akışı).
+- Bu kuralın tek istisnası ralli listesidir: Kullanıcı kaçan ralliyi ekler, birleşmiş ralliyi böler, iki parçayı birleştirir ve bir rallinin sınırını taşır. Kullanıcı sonra listeyi onaylar. Rapor ancak o zaman set skorunu ve takım sayılarını alt sınır işareti olmadan verir. Sayı türü alanları, kullanıcı her sayının türünü seçene kadar alt sınır kalır. Bu kesinlik kullanıcının beyanına dayanır ve sunucu onu doğrulayamaz (ADR-0114).
 
 ## Akış
 
 ```
 Yeni maç → Takımlar → Video kaynağı → Kayıt ya da seçim → Dosya kontrolü → Yükleme
         → Analiz işi → Belirsiz ralliler için kartlar → Kullanıcı kararları → Rapor
+        → Ralli listesi düzeltmesi → Skor denetimi ve liste onayı → Onaylı listenin raporu
 ```
 
 Sunucu üç kaydı birbirinden ayrı tutar:
@@ -48,6 +50,7 @@ Uygulama kamera kaydı için CameraX, klip oynatma için Media3 kullanır. Uygul
 | `jobs.py` | Analiz işi, işçi iş parçacığı, durum makinesi, iptal ve kurtarma |
 | `analyzers/` | Analizör arayüzü ve kayıt defteri: `demo` (`MOCK`), `motion-baseline` (`BASELINE`) |
 | `review.py` | Ralliler, inceleme kartları, kararlar, geri alma, denetim kaydı |
+| `corrections.py` | Ralli listesinin düzeltmeleri (ekleme, taşıma, bölme, birleştirme) ve liste onayı |
 | `report.py` | Kararlardan rapor üreten saf fonksiyon |
 | `content.py` | Videoyu `Range` isteğiyle sunma |
 

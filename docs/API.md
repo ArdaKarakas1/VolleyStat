@@ -1,4 +1,4 @@
-# Yerel geliştirme API'si (v0.4)
+# Yerel geliştirme API'si (v0.5)
 
 **Kök:** `http://127.0.0.1:8000/v1`. Android emülatöründen `http://10.0.2.2:8000/v1`.
 **Kapsam:** Yalnızca yerel geliştirme. Hesap sistemi ve TLS yoktur.
@@ -8,6 +8,8 @@ Makinece okunur sözleşme: [openapi-local-dev.json](openapi-local-dev.json). Do
 Sürüm 0.4 analiz işlerini, rallileri, inceleme kartlarını, kanıt videosunu ve maç raporunu ekler. Bu uçların sözleşmesi [API_V1.md](API_V1.md) belgesindedir. Bu belge maç, yükleme ve video uçlarını anlatır.
 
 Sürüm 0.4.1 `PUT /matches/{id}` ve `DELETE /matches/{id}` uçlarını ekler. Daha eski bir sunucu bu iki çağrıya `405 METHOD_NOT_ALLOWED` döner. Android uygulamasının 0.4.2 sürümü bu iki ucu kullanır ve bu yüzden sunucunun 0.4.1 sürümünü ister.
+
+Sürüm 0.5.0 ralli düzeltme uçlarını ve liste onayını ekler ([API_V1.md](API_V1.md), bölüm 9). Ralli listesi yanıtı o sürümün set skorlarını, rapor da kullanıcının düzeltme sayısını taşır. Android uygulamasının 0.5.0 sürümü bu uçları kullanır ve bu yüzden sunucunun 0.5.0 sürümünü ister.
 
 | Uç | Görev | Başarı | Hatalar |
 |---|---|---|---|

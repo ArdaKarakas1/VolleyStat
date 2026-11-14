@@ -69,10 +69,10 @@ def test_rallies_are_listed_in_order_as_undecided_proposals(review):
     assert len(rallies) == len(SPANS)
     for sequence, (found, (start, end)) in enumerate(zip(rallies, SPANS), start=1):
         assert found == {
-            "id": found["id"], "sequence": sequence, "startMs": start, "endMs": end,
+            "id": found["id"], "sequence": sequence, "startMs": start, "endMs": end, "origin": "ANALYZER",
             "status": "PROPOSED", "proposedWinner": "UNKNOWN", "confidence": None,
             "winner": None, "terminalAction": None, "scorer": None,
-            "uncertaintyReasons": ["NO_WINNER_MODEL"],
+            "uncertaintyReasons": ["NO_WINNER_MODEL"], "scoreAfter": None,
         }
     assert len({found["id"] for found in rallies}) == len(SPANS)
 
@@ -154,7 +154,7 @@ def test_a_winner_decision_verifies_the_rally(review):
     assert result["card"] == {**card, "status": "ANSWERED", "answer": "AWAY", "version": 2}
     assert result["job"] == job_of(client, job_id)
     assert result["job"]["state"] == "NEEDS_REVIEW"
-    assert result["job"]["counts"] == {"rallies": 4, "reviewOpen": 3, "reviewTotal": 4}
+    assert result["job"]["counts"] == {"rallies": 4, "proposed": 4, "reviewOpen": 3, "reviewTotal": 4}
     assert result["reportRevision"] == 1 == revision(storage, job_id)
 
     decided = rally(client, job_id, 2)
@@ -181,7 +181,7 @@ def test_the_job_is_complete_when_the_last_score_card_is_answered(review):
     done = job_of(client, job_id)
     # Four detail cards are open. They are optional and do not hold the job back.
     assert [card["status"] for card in cards(client, job_id, "DETAIL")] == ["OPEN"] * 4
-    assert (done["state"], done["counts"]) == ("COMPLETE", {"rallies": 4, "reviewOpen": 0, "reviewTotal": 4})
+    assert (done["state"], done["counts"]) == ("COMPLETE", {"rallies": 4, "proposed": 4, "reviewOpen": 0, "reviewTotal": 4})
     refused = client.post(f"/v1/analyses/{job_id}/cancel")
     assert refused.status_code == 409 and refused.json()["error"]["details"] == {"state": "COMPLETE"}
 
@@ -303,7 +303,8 @@ def test_the_same_winner_again_keeps_the_detail_answers(review):
     answer_details(client, job_id, 1, winner="HOME", action="BLOCK", scorer="JERSEY:4")
     before = cards(client, job_id, "DETAIL")
     again = decide(client, card_of(client, job_id, 1), "HOME")
-    assert (again["card"]["version"], again["reportRevision"]) == (3, 4)
+    # The answer that is already there is no new decision: no version moves and nothing is recorded.
+    assert (again["card"]["version"], again["reportRevision"], again["decisionId"]) == (2, 3, None)
     assert cards(client, job_id, "DETAIL") == before
     assert rally(client, job_id, 1)["scorer"] == {"side": "HOME", "jersey": 4}
 

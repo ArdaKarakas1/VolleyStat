@@ -46,6 +46,7 @@ import com.voleybolveveleybol.volleystat.model.MatchReport
 import com.voleybolveveleybol.volleystat.model.Player
 import com.voleybolveveleybol.volleystat.model.StatValue
 import com.voleybolveveleybol.volleystat.ui.components.DemoBanner
+import com.voleybolveveleybol.volleystat.ui.components.DemoTag
 import com.voleybolveveleybol.volleystat.ui.components.FactRow
 import com.voleybolveveleybol.volleystat.ui.components.ListRow
 import com.voleybolveveleybol.volleystat.ui.components.NotYetCard
@@ -60,7 +61,6 @@ import com.voleybolveveleybol.volleystat.ui.components.Tone
 import com.voleybolveveleybol.volleystat.ui.components.VsCard
 import com.voleybolveveleybol.volleystat.ui.components.dashedOutline
 import com.voleybolveveleybol.volleystat.ui.theme.Dimens
-import com.voleybolveveleybol.volleystat.ui.theme.LocalVsColors
 
 /**
  * A reported number in one of its three honest forms: measured, a lower bound (marked with a
@@ -150,13 +150,7 @@ private fun SectionHeader(text: String, demo: Boolean = false) {
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text(text, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.weight(1f).semantics { heading() })
-        if (demo) {
-            val extra = LocalVsColors.current
-            Text(
-                stringResource(R.string.status_demo), style = MaterialTheme.typography.labelMedium, color = extra.onCautionContainer,
-                modifier = Modifier.background(extra.cautionContainer, MaterialTheme.shapes.small).padding(horizontal = 8.dp, vertical = 2.dp),
-            )
-        }
+        if (demo) DemoTag()
     }
 }
 
@@ -177,6 +171,7 @@ fun ReportScreen(
     onOpenStatus: () -> Unit,
     onRetry: () -> Unit,
     onBack: () -> Unit,
+    onOpenRallies: () -> Unit = {},
 ) {
     var pointTypesOpen by rememberSaveable { mutableStateOf(false) }
     FlowScaffold(title = stringResource(R.string.report_title), onBack = onBack) {
@@ -208,8 +203,12 @@ fun ReportScreen(
                     Notice(stringResource(R.string.report_score_stopped, report.scoreStoppedAtRally), Tone.CAUTION)
                 }
                 // Answering every card does not make the score complete: a rally the analyzer never
-                // proposed has no card. The report says so for as long as that can happen.
-                if (report.ralliesMayBeMissing) Notice(stringResource(R.string.report_may_miss), Tone.NEUTRAL)
+                // proposed has no card. The report says so until the user has confirmed the list, and
+                // for a demo job always, because invented intervals can not be confirmed.
+                when {
+                    report.ralliesMayBeMissing -> Notice(stringResource(if (report.mock) R.string.report_may_miss_demo else R.string.report_may_miss), Tone.NEUTRAL)
+                    report.listConfirmed -> Notice(stringResource(R.string.report_list_confirmed), Tone.POSITIVE)
+                }
                 if (report.ralliesOpen > 0) {
                     PrimaryButton(stringResource(R.string.report_open_review, report.ralliesOpen), onOpenReview, icon = R.drawable.ic_fact_check)
                 }
@@ -233,6 +232,8 @@ fun ReportScreen(
                     RowDivider()
                     ListRow(R.drawable.ic_smart_display, stringResource(R.string.report_review_video), null, onOpenReview)
                     RowDivider()
+                    ListRow(R.drawable.ic_sports_volleyball, stringResource(R.string.rallies_title), null, onOpenRallies)
+                    RowDivider()
                     ListRow(R.drawable.ic_info, stringResource(R.string.definitions_title), null, { pointTypesOpen = true })
                 }
 
@@ -250,13 +251,22 @@ fun ReportScreen(
                             )
                         }
                         Spacer(Modifier.height(4.dp))
+                        // The four rows below the gap add up to the first one. What the analyzer proposed is another
+                        // number once the user has merged or added rallies.
+                        FactRow(stringResource(R.string.report_rallies_listed), report.ralliesTotal.toString())
                         FactRow(stringResource(R.string.report_rallies_total), report.ralliesProposed.toString())
+                        FactRow(stringResource(R.string.report_rallies_user), report.ralliesUserCreated.toString())
+                        Spacer(Modifier.height(4.dp))
                         FactRow(stringResource(R.string.report_rallies_verified), report.ralliesVerified.toString())
                         FactRow(stringResource(R.string.report_rallies_open), report.ralliesOpen.toString())
                         FactRow(stringResource(R.string.report_rallies_unresolved), report.ralliesUnresolved.toString())
                         FactRow(stringResource(R.string.report_rallies_rejected), report.ralliesRejected.toString())
                         Spacer(Modifier.height(4.dp))
-                        Text(stringResource(R.string.report_source, report.analyzerId, report.analyzerKind), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        // Once the user has moved, added, split or merged, the intervals are not the analyzer's alone.
+                        Text(
+                            stringResource(if (report.corrections > 0) R.string.report_source_corrected else R.string.report_source, report.analyzerId, report.analyzerKind),
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                         Text(stringResource(R.string.report_rules), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
