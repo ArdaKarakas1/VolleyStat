@@ -115,10 +115,10 @@ Sayılar son yerel koşudan gelir. CI aynı testleri her PR'da çalıştırır.
 |---|---|
 | Arka uç `pytest` | 450 test geçti (yerelde Python 3.13, CI'da Python 3.12) |
 | `ml` `pytest` | 239 test geçti (yerel ve CI) |
-| Android JVM testleri (`:core:test`, `:app:testDebugUnitTest`) | 136 test geçti, hiçbiri atlanmadı (yerel). Testler 63 ekran görüntüsü üretti. |
-| Uygulama gerçek sunucuya karşı (JVM) | 9 test geçti (yerel): `BackendE2eTest` 6, `AppFlowE2eTest` 1, `AppUploadFlowE2eTest` 1, `RallyFixE2eTest` 1. Bu dokuz test yukarıdaki 136 testin içindedir. İkisi ralli düzeltmeyi dener: biri API istemcisinden, öbürü ekranlardan. |
+| Android JVM testleri (`:core:test`, `:app:testDebugUnitTest`) | 146 test geçti, hiçbiri atlanmadı (yerel): `:core` 5, `:app` 141. Testler 63 ekran görüntüsü üretti. |
+| Uygulama gerçek sunucuya karşı (JVM) | 9 test geçti (yerel): `BackendE2eTest` 6, `AppFlowE2eTest` 1, `AppUploadFlowE2eTest` 1, `RallyFixE2eTest` 1. Bu dokuz test yukarıdaki 146 testin içindedir. İkisi ralli düzeltmeyi dener: biri API istemcisinden, öbürü ekranlardan. |
 | Lint | 0 hata |
-| Mutasyon sınaması (sürüm 0.5.0, uygulama) | Oturum ralli düzeltmenin 61 kuralını tek tek bozdu ve testler 61 bozmayı da yakaladı. İlk koşuda iki bozma yakalanmadı ve iki test boşluğunu gösterdi. Oturum o iki boşluğu kapattı. |
+| Mutasyon sınaması (sürüm 0.5.0, uygulama) | Oturum ralli düzeltmenin 71 kuralını tek tek bozdu ve testler 71 bozmayı da yakaladı. İlk koşuda iki bozma yakalanmadı ve iki test boşluğunu gösterdi. Oturum o iki boşluğu kapattı. |
 | Emülatörde cihaz testleri (CI, API 34) | 2 test: kamera kaydı ve baştan sona akış (yeni maç, kayıt, yükleme, dosya kontrolü, deneme analizi, sunucudan klip, ralli düzenleyicide gerçek oynatıcıyla bitiş taşıma, karar, rapor). İlk iki koşu kırmızıydı ve uygulamada gerçek bir gezinme hatasını gösterdi. Düzenleyici adımı sürüm 0.5.0 ile geldi. |
 | Gerçek telefonda deneme | **Yok.** |
 | Model doğruluğu | **Yok.** Kimse ölçmedi. |

@@ -226,8 +226,10 @@ fun VolleyStatApp(
             return
         }
         val shown = rallyState(match)
-        // Opened from the review, the list in memory is older than the answers the user just gave.
-        LaunchedEffect(shown.job?.id) { if (shown.job != null && shown.rallies == null) viewModel.loadRallies(match.localId) }
+        // Opened from the review, the list in memory is older than the answers the user just gave. It can also
+        // turn old while this screen is open, when the answer to a winner decision arrives late.
+        val missing = shown.rallies == null
+        LaunchedEffect(shown.job?.id, missing) { if (shown.job != null && missing) viewModel.loadRallies(match.localId) }
         val list = shown.rallies
         val target = list?.let(resolve)
         when {
@@ -406,8 +408,17 @@ fun VolleyStatApp(
                     LaunchedEffect(Unit) { leave(Routes.RALLIES) }
                 } else {
                     val shown = rallyState(match)
-                    // Read again whenever the screen comes back: a decision made in review changes the scores of the list.
-                    LaunchedEffect(shown.job?.id) { if (shown.job != null) viewModel.loadRallies(match.localId) }
+                    // Read again whenever the screen comes back: a decision made in review changes the scores of the
+                    // list. Read once more when the list in memory turns out to be old: the answer to a winner
+                    // decision can arrive after this screen opened, and nothing else would fetch the list it moved on.
+                    var read by remember { mutableStateOf(false) }
+                    val missing = shown.rallies == null
+                    LaunchedEffect(shown.job?.id, missing) {
+                        if (shown.job != null && (!read || missing)) {
+                            read = true
+                            viewModel.loadRallies(match.localId)
+                        }
+                    }
                     RalliesScreen(
                         match, shown,
                         onOpenRally = { go(Routes.rally(match.localId, it.id)) }, onOpenGap = { go(Routes.gap(match.localId, it)) },

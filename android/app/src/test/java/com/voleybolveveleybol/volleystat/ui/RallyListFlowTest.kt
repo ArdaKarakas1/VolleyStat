@@ -70,6 +70,8 @@ class RallyListFlowTest {
     @Volatile private var winners = listOf<String?>("HOME", "AWAY", "HOME")
     @Volatile private var unsure = setOf<Int>()
     @Volatile private var thirdEndMs = 56_000L
+    /** While this is set, the server holds back its answer to a winner decision, as a slow network would. */
+    @Volatile private var holdDecision: java.util.concurrent.CountDownLatch? = null
 
     private fun ok(json: JSONObject) = MockResponse().setResponseCode(200).setHeader("Content-Type", "application/json").setBody(json.toString())
     private val open get() = winners.indices.count { winners[it] == null && it !in unsure }
@@ -151,6 +153,7 @@ class RallyListFlowTest {
                             ok(JSONObject().put("job", job()).put("reportRevision", 9))
                         }
                         "POST /review-cards/c2/decisions" -> {
+                            holdDecision?.await(15, java.util.concurrent.TimeUnit.SECONDS)
                             // A winner decision moves the list on, as on the real server.
                             winners = winners.toMutableList().also { it[1] = body.getString("selection") }
                             unsure = emptySet()
@@ -268,6 +271,25 @@ class RallyListFlowTest {
         assertEquals(readsBefore + 1, requests.count { it == "GET /matches/server-1/report" })
         back()
         app.onNodeWithText(text(R.string.home_new_match_body)).assertIsDisplayed()
+    }
+
+    @Test fun aDecisionThatLandsAfterTheListWasReadBringsTheListOfNowToTheScreen() {
+        winners = listOf("HOME", null, null)
+        val held = java.util.concurrent.CountDownLatch(1)
+        holdDecision = held
+        openTheRallyList()
+        tap(R.string.action_go_review)
+        waitFor(text(R.string.review_position, 2, 3))
+
+        // The answer is on its way and the network is slow. The user does not wait for it and goes back to the list.
+        app.onNodeWithText(HOME_TEAM).performClick()
+        back()
+        waitFor(text(R.string.rallies_not_ready, 2))
+
+        // The decision lands and moves the list on. The screen reads the list again instead of waiting for ever
+        // for a list that nothing would fetch.
+        held.countDown()
+        waitFor(text(R.string.rallies_not_ready, 1))
     }
 
     @Test fun aRallyThatWaitsIsOpenedFromTheListAndTheEditorWorksOnTheListAsItIsNow() {

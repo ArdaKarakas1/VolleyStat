@@ -430,7 +430,10 @@ class AppViewModelTest {
 
     @Test fun aCorrectionWhoseAnswerWasLostIsFoundOnTheListAndIsNotSentAgain() {
         var version = 3
-        val vm = withRallyList { rallies(version, rally("r1", 1, 2_000, 9_000), rally("r2", 2, 15_000, 24_000)) }
+        val vm = withRallyList {
+            if (version == 3) rallies(3, rally("r1", 1, 2_000, 9_000), rally("r2", 2, 15_000, 24_000))
+            else rallies(version, rally("r1", 1, 2_000, 9_000), rally("r-cut", 2, 15_000, 20_000), rally("r2", 3, 20_000, 24_000))
+        }
         on("POST /rallies/r2/split") {
             version = 4  // the server applied the split; only its answer never arrives
             MockResponse().setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AFTER_REQUEST)
@@ -441,6 +444,83 @@ class AppViewModelTest {
         assertNull(vm.analysis.value.correctionProblem)
         assertEquals(4, vm.analysis.value.rallies!!.version)
         assertEquals(1, requests.count { it == "POST /rallies/r2/split" })
+    }
+
+    @Test fun aListThatMovedOnForAnotherReasonIsNotTakenForAnAppliedCorrection() {
+        var version = 3
+        val vm = withRallyList { rallies(version, rally("r1", 1, 2_000, 9_000), rally("r2", 2, 15_000, 24_000)) }
+        on("POST /rallies/r2/split") {
+            // The split never reached the list. A winner decision that was still on its way moved the version on.
+            version = 4
+            MockResponse().setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AFTER_REQUEST)
+        }
+        vm.splitRally("r2", 20_000) { fail("the rally is still in one piece, so nothing was done") }
+        await("the failure") { vm.analysis.value.correctionProblem != null }
+        assertEquals(CorrectionProblem.UNREACHABLE, vm.analysis.value.correctionProblem)
+        assertEquals("the screen still shows what the server holds", 4, vm.analysis.value.rallies!!.version)
+    }
+
+    @Test fun everyKindOfCorrectionIsRecognisedOnTheListWhenItsAnswerWasLost() {
+        fun user(json: JSONObject) = json.put("origin", "USER")
+        val before = listOf(rally("r1", 1, 2_000, 9_000), rally("r2", 2, 15_000, 24_000))
+        val lost = { MockResponse().setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AFTER_REQUEST) }
+        // What the server holds after each correction, and the call that asked for it.
+        val cases = listOf<Triple<String, List<JSONObject>, (AppViewModel, () -> Unit) -> Unit>>(
+            Triple("POST /analyses/J/rallies", listOf(before[0], user(rally("r-new", 2, 10_000, 13_000)), rally("r2", 3, 15_000, 24_000))) { vm, done -> vm.addRally(10_000, 13_000, done) },
+            Triple("POST /rallies/r2/move", listOf(before[0], rally("r2", 2, 15_000, 26_000))) { vm, done -> vm.moveRally("r2", 15_000, 26_000, done) },
+            Triple("POST /rallies/r2/merge-previous", listOf(rally("r2", 1, 2_000, 24_000))) { vm, done -> vm.mergeWithPrevious("r2", done) },
+        )
+        cases.forEach { (request, after, call) ->
+            var applied = false
+            val vm = withRallyList { if (applied) rallies(4, *after.toTypedArray()) else rallies(3, *before.toTypedArray()) }
+            on(request) { applied = true; lost() }
+            var done = false
+            call(vm) { done = true }
+            await("$request to be found on the list") { done }
+            assertNull(request, vm.analysis.value.correctionProblem)
+            assertEquals(request, 1, requests.count { it == request })
+        }
+    }
+
+    @Test fun aConfirmationWhoseAnswerWasLostIsFoundOnTheList() {
+        var confirmed = false
+        val vm = withRallyList { rallies(7, rally("r1", 1, 2_000, 9_000, "VERIFIED"), confirmed = confirmed) }
+        on("POST /analyses/J/rally-list/confirm") {
+            confirmed = true  // a confirmation does not move the list version, so only the list itself can tell
+            MockResponse().setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AFTER_REQUEST)
+        }
+        var done = false
+        vm.confirmRallyList { done = true }
+        await("the confirmation") { done }
+        assertNull(vm.analysis.value.correctionProblem)
+        assertTrue(vm.analysis.value.rallies!!.confirmed)
+    }
+
+    @Test fun aListThatIsNewerThanTheJobTheAppKnowsIsStillTheListToWorkOn() {
+        var version = 3
+        val vm = withRallyList(job("J", "video-A", "NEEDS_REVIEW").put("rallyListVersion", 3)) { rallies(version, rally("r1", 1, 2_000, 9_000)) }
+        // A winner decision whose answer was lost: the server moved on, the job in memory did not.
+        version = 4
+        vm.loadRallies("A")
+        await("the list of now") { vm.analysis.value.rallies!!.version == 4 }
+        assertEquals(3, vm.analysis.value.job!!.rallyListVersion)
+        assertEquals("a screen that waited for the job to catch up would wait for ever", 4, vm.analysis.value.currentRallies!!.version)
+    }
+
+    @Test fun anOlderListThatArrivesLateDoesNotReplaceANewerOne() {
+        val vm = withRallyList { rallies(3, rally("r1", 1, 2_000, 9_000)) }
+        val calls = java.util.concurrent.atomic.AtomicInteger()
+        on("GET /analyses/J/rallies") {
+            // The first read is slow and still shows version 4. The second one is fast and shows version 5.
+            if (calls.incrementAndGet() == 1) ok(rallies(4, rally("r1", 1, 2_000, 9_000))).setBodyDelay(600, java.util.concurrent.TimeUnit.MILLISECONDS)
+            else ok(rallies(5, rally("r1", 1, 2_000, 9_000)))
+        }
+        vm.loadRallies("A")
+        vm.loadRallies("A")
+        await("the newer list") { vm.analysis.value.rallies!!.version == 5 }
+        // Long enough for the slow answer to arrive and be looked at.
+        repeat(2) { settle() }
+        assertEquals(5, vm.analysis.value.rallies!!.version)
     }
 
     @Test fun aCorrectionThatNeverReachedTheServerSaysSoAndIsNotCalledDone() {

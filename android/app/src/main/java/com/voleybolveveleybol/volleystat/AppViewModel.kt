@@ -138,11 +138,13 @@ data class AnalysisUi(
     val card: ReviewCard? get() = deck?.cards?.getOrNull(cursor)
 
     /**
-     * The rally list, when it is the list of the job as the app last heard of it. Every winner
+     * The rally list, unless the app knows that the server has moved on from it. Every winner
      * decision moves the list on, so a list that was read before a decision is no longer the one
-     * the server holds, and a correction made on it would be refused.
+     * the server holds, and a correction made on it would be refused. A list that is newer than
+     * the job in memory is fine: the answer to a decision can get lost, and then the job stays
+     * behind while the list that is read next does not.
      */
-    val currentRallies: RallyList? get() = rallies?.takeIf { it.version == job?.rallyListVersion }
+    val currentRallies: RallyList? get() = rallies?.takeIf { it.version >= (job?.rallyListVersion ?: 0) }
 }
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
@@ -581,7 +583,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val list = withContext(Dispatchers.IO) { runCatching { api().rallies(jobId) }.getOrNull() }
             _analysis.update { current ->
                 if (current.matchId != matchId || current.job?.id != jobId) return@update current
-                if (list == null) current.copy(ralliesLoad = RalliesLoad.UNREACHABLE) else current.copy(rallies = list, ralliesLoad = RalliesLoad.READY)
+                if (list == null) current.copy(ralliesLoad = RalliesLoad.UNREACHABLE) else current.copy(rallies = newer(list, current.rallies), ralliesLoad = RalliesLoad.READY)
             }
         }
     }
@@ -592,27 +594,49 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         if (ui.matchId != matchId || ui.job == null) watchAnalysis(matchId, startIfMissing = false) else loadRallies(matchId)
     }
 
-    fun addRally(startMs: Long, endMs: Long, onDone: () -> Unit) = correct(onDone) { api, jobId, version -> api.addRally(jobId, startMs, endMs, version) }
+    /** Two reads of the list can answer in the wrong order. The list never goes back to an older version. */
+    private fun newer(read: RallyList, held: RallyList?) = if (held != null && held.version > read.version) held else read
+
+    // Each correction says what it leaves on the list. That is how the app recognises a
+    // correction whose answer was lost.
+
+    fun addRally(startMs: Long, endMs: Long, onDone: () -> Unit) =
+        correct(onDone, landed = { list -> list.rallies.any { !it.fromAnalyzer && it.startMs == startMs && it.endMs == endMs } }) { api, jobId, version ->
+            api.addRally(jobId, startMs, endMs, version)
+        }
 
     fun moveRally(rallyId: String, startMs: Long, endMs: Long, onDone: () -> Unit) =
-        correct(onDone) { api, _, version -> api.moveRally(rallyId, startMs, endMs, version) }
+        correct(onDone, landed = { list -> list.rallies.any { it.id == rallyId && it.startMs == startMs && it.endMs == endMs } }) { api, _, version ->
+            api.moveRally(rallyId, startMs, endMs, version)
+        }
 
-    fun splitRally(rallyId: String, atMs: Long, onDone: () -> Unit) = correct(onDone) { api, _, version -> api.splitRally(rallyId, atMs, version) }
+    /** The later part keeps the id of the rally, and it starts where the cut was made. */
+    fun splitRally(rallyId: String, atMs: Long, onDone: () -> Unit) =
+        correct(onDone, landed = { list -> list.rallies.any { it.id == rallyId && it.startMs == atMs } }) { api, _, version -> api.splitRally(rallyId, atMs, version) }
 
-    fun mergeWithPrevious(rallyId: String, onDone: () -> Unit) = correct(onDone) { api, _, version -> api.mergeWithPrevious(rallyId, version) }
+    /** The rally stays and starts where the rally before it started. */
+    fun mergeWithPrevious(rallyId: String, onDone: () -> Unit) {
+        val before = _analysis.value.rallies?.rallies.orEmpty()
+        val startOfPrevious = before.firstOrNull { it.id == rallyId }?.let { rally -> before.firstOrNull { it.sequence == rally.sequence - 1 } }?.startMs
+        correct(onDone, landed = { list -> startOfPrevious != null && list.rallies.any { it.id == rallyId && it.startMs == startOfPrevious } }) { api, _, version ->
+            api.mergeWithPrevious(rallyId, version)
+        }
+    }
 
     /** The user's statement that the list holds every rally of the video, for the list that is on screen. */
-    fun confirmRallyList(onDone: () -> Unit) = correct(onDone) { api, jobId, version -> Correction(emptyList(), emptyList(), api.confirmRallyList(jobId, version)) }
+    fun confirmRallyList(onDone: () -> Unit) =
+        correct(onDone, landed = { it.confirmed }) { api, jobId, version -> Correction(emptyList(), emptyList(), api.confirmRallyList(jobId, version)) }
 
     fun clearCorrectionProblem() = _analysis.update { it.copy(correctionProblem = null, overlapsRally = null) }
 
     /**
      * Sends one correction made on the list that is on screen. Whatever the outcome, the list is
      * read again afterwards, so the screen shows what the server holds. A correction is never
-     * sent a second time by the app: when no answer came, the reloaded list tells whether the
-     * server applied it, because every applied correction moves the list version on.
+     * sent a second time by the app. When no answer came, the app looks for the correction on
+     * the list it reads next ([landed]). A list version that moved on would not tell: a winner
+     * decision that was still on its way moves it too.
      */
-    private fun correct(onDone: () -> Unit, send: (ApiClient, String, Int) -> Correction) {
+    private fun correct(onDone: () -> Unit, landed: (RallyList) -> Boolean, send: (ApiClient, String, Int) -> Correction) {
         val ui = _analysis.value
         val matchId = ui.matchId ?: return
         val jobId = ui.job?.id ?: return
@@ -630,8 +654,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             sent.getOrNull()?.let { publish(matchId, it.job) }
             val reloaded = withContext(Dispatchers.IO) { runCatching { api().rallies(jobId) }.getOrNull() }
             val error = sent.exceptionOrNull()
-            // No answer and a list that moved on: this phone is the only one that corrects, so the correction went through.
-            val applied = sent.isSuccess || (error !is ApiException && reloaded != null && reloaded.version > list.version)
+            // No answer, and the list shows what this correction would have left there: the server applied it.
+            val applied = sent.isSuccess || (error !is ApiException && reloaded != null && landed(reloaded))
             val problem = when {
                 applied -> null
                 error !is ApiException -> CorrectionProblem.UNREACHABLE
@@ -651,7 +675,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             _analysis.update { current ->
                 if (current.matchId != matchId || current.job?.id != jobId) return@update current
                 shown = true
-                val rallies = reloaded ?: current.rallies
+                val rallies = reloaded?.let { newer(it, current.rallies) } ?: current.rallies
                 val cursor = deck?.cards?.let { cards ->
                     fun indexOf(found: (ReviewCard) -> Boolean) = cards.indexOfFirst(found).takeIf { it >= 0 }
                     // The corrected rally asks its question first. When it has nothing to ask, the
