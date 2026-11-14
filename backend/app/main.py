@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import content, corrections, jobs, media, review
+from . import content, corrections, jobs, media, report, review
 from .analyzers import load_analyzer, require_known_kind
 from .analyzers.base import MODEL, Analyzer
 from .bodylimit import BodyLimit
@@ -34,6 +34,32 @@ ALLOWED_MIMES = {"video/mp4", "video/quicktime", "video/webm", "video/x-matroska
 FINALIZE_STALE_SECONDS = 15 * 60
 
 
+class MatchRulesInput(BaseModel):
+    """The rule the user chose: the app offers exactly these values, so the server accepts nothing else."""
+    model_config = ConfigDict(extra="forbid")
+
+    setsToWin: int = Field(strict=True)
+    setTarget: int = Field(strict=True)
+    decidingSetTarget: int = Field(strict=True)
+
+    @field_validator("setsToWin")
+    @classmethod
+    def offered_sets_to_win(cls, value):
+        if value not in report.SETS_TO_WIN:
+            raise ValueError(f"setsToWin must be one of {report.SETS_TO_WIN}")
+        return value
+
+    @field_validator("setTarget", "decidingSetTarget")
+    @classmethod
+    def offered_target(cls, value):
+        if value not in report.TARGETS:
+            raise ValueError(f"A set target must be one of {report.TARGETS}")
+        return value
+
+    def rules(self) -> report.MatchRules:
+        return report.MatchRules(self.setsToWin, self.setTarget, self.decidingSetTarget)
+
+
 class MatchInput(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -44,6 +70,8 @@ class MatchInput(BaseModel):
     venue: str | None = Field(default=None, max_length=80)
     # A label chosen by the user. The server never claims that a match was official.
     kind: Literal["TRAINING", "OFFICIAL"] = "TRAINING"
+    # Missing or null: the FIVB rule, which is how every match was counted before the user could choose.
+    rules: MatchRulesInput | None = None
 
     @field_validator("name", "playedOn", "venue", mode="before")
     @classmethod
@@ -99,6 +127,7 @@ def match_payload(match) -> dict[str, Any]:
     return {
         "id": match["id"], "homeTeamName": match["home_team"], "awayTeamName": match["away_team"],
         "name": match["name"], "playedOn": match["played_on"], "venue": match["venue"], "kind": match["kind"],
+        "rules": report.MatchRules.of(match).payload(),
         "status": "DRAFT",
     }
 
@@ -177,7 +206,7 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
                 # Joining the thread can wait for a running analyzer to notice the stop signal.
                 await run_in_threadpool(worker.stop)
 
-    app = FastAPI(title="VolleyStat Local Development API", version="0.5.0", lifespan=lifespan,
+    app = FastAPI(title="VolleyStat Local Development API", version="0.6.0", lifespan=lifespan,
                   description="LOCAL TEST DATA ONLY. No authentication, no trained AI. Never expose to the internet.")
     app.state.worker = worker
     app.add_middleware(BodyLimit, exempt=is_chunk_upload)
@@ -206,9 +235,12 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
                 "maxVideoBytes": MAX_VIDEO_BYTES, "chunkSizeBytes": CHUNK_SIZE}
 
     def insert_match(db, match_id: str, payload: MatchInput):
+        rules = payload.rules.rules() if payload.rules is not None else report.FIVB
         db.execute(
-            "INSERT INTO matches(id, home_team, away_team, name, played_on, venue, kind) VALUES(?,?,?,?,?,?,?)",
-            (match_id, payload.homeTeamName, payload.awayTeamName, payload.name, payload.playedOn, payload.venue, payload.kind),
+            "INSERT INTO matches(id, home_team, away_team, name, played_on, venue, kind, sets_to_win, set_target,"
+            " deciding_set_target) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (match_id, payload.homeTeamName, payload.awayTeamName, payload.name, payload.playedOn, payload.venue, payload.kind,
+             rules.sets_to_win, rules.set_target, rules.deciding_set_target),
         )
         return db.execute("SELECT * FROM matches WHERE id=?", (match_id,)).fetchone()
 
@@ -233,6 +265,30 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
             if match is None:
                 match = insert_match(db, match_id, payload)
                 response.status_code = 201
+            return match_payload(match)
+
+    @app.put("/v1/matches/{match_id}/rules")
+    def put_match_rules(match_id: str, payload: MatchRulesInput):
+        """Set the rule the server counts the sets of this match with.
+
+        A rule that differs from the stored one moves the rally list of every analysis of the match
+        that has rallies one version on, in the same transaction. The user confirmed those lists
+        while looking at set scores of the old rule, so each confirmation lapses, and a confirmation
+        or a correction still on its way with the old version is refused as stale. Answers, cards and
+        corrections stay as they are. The rule the match already has changes nothing.
+        """
+        with connect(write=True) as db:
+            match = db.execute("SELECT * FROM matches WHERE id=?", (match_id,)).fetchone()
+            if not match:
+                fail("MATCH_NOT_FOUND", "Match does not exist", 404)
+            wanted = payload.rules()
+            if report.MatchRules.of(match) != wanted:
+                db.execute("UPDATE matches SET sets_to_win=?, set_target=?, deciding_set_target=? WHERE id=?",
+                           (wanted.sets_to_win, wanted.set_target, wanted.deciding_set_target, match_id))
+                db.execute(
+                    "UPDATE analysis_jobs SET rally_list_version=rally_list_version+1, revision=revision+1"
+                    " WHERE match_id=? AND state IN (?,?)", (match_id, jobs.NEEDS_REVIEW, jobs.COMPLETE))
+                match = db.execute("SELECT * FROM matches WHERE id=?", (match_id,)).fetchone()
             return match_payload(match)
 
     @app.get("/v1/matches/{match_id}")

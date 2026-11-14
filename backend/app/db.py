@@ -16,7 +16,10 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS matches (
   id TEXT PRIMARY KEY, home_team TEXT NOT NULL, away_team TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  name TEXT, played_on TEXT, venue TEXT, kind TEXT NOT NULL DEFAULT 'TRAINING'
+  name TEXT, played_on TEXT, venue TEXT, kind TEXT NOT NULL DEFAULT 'TRAINING',
+  -- The rule the sets of this match are counted with (report.MatchRules). The defaults are FIVB.
+  sets_to_win INTEGER NOT NULL DEFAULT 3, set_target INTEGER NOT NULL DEFAULT 25,
+  deciding_set_target INTEGER NOT NULL DEFAULT 15
 );
 CREATE TABLE IF NOT EXISTS uploads (
   id TEXT PRIMARY KEY, match_id TEXT NOT NULL REFERENCES matches(id),
@@ -48,8 +51,8 @@ CREATE TABLE IF NOT EXISTS analysis_jobs (
   run_token TEXT, heartbeat_at REAL, recoveries INTEGER NOT NULL DEFAULT 0,
   revision INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT,
-  -- rally_list_version moves with every correction of the rally list and every winner decision.
-  -- The list counts as complete only while list_confirmed_version equals it.
+  -- rally_list_version moves with every correction of the rally list, every winner decision and
+  -- every change of the match rule. The list counts as complete only while list_confirmed_version equals it.
   rally_list_version INTEGER NOT NULL DEFAULT 0,
   list_confirmed_version INTEGER, list_confirmed_at TEXT
 );
@@ -154,7 +157,10 @@ BEGIN SELECT RAISE(ABORT, 'rally_corrections is append-only'); END;
 # Storage folders created by earlier previews lack the newer columns.
 ADDED_COLUMNS = (
     ("matches", (("name", "TEXT"), ("played_on", "TEXT"), ("venue", "TEXT"),
-                 ("kind", "TEXT NOT NULL DEFAULT 'TRAINING'"))),
+                 ("kind", "TEXT NOT NULL DEFAULT 'TRAINING'"),
+                 # Version 0.5 counted every match with the FIVB rule, so the defaults keep its counts.
+                 ("sets_to_win", "INTEGER NOT NULL DEFAULT 3"), ("set_target", "INTEGER NOT NULL DEFAULT 25"),
+                 ("deciding_set_target", "INTEGER NOT NULL DEFAULT 15"))),
     ("uploads", (("client_sha256", "TEXT"), ("finalize_started_at", "REAL"))),
     ("videos", (("reject_code", "TEXT"), ("media_json", "TEXT"), ("warnings_json", "TEXT"),
                 ("probe_version", "TEXT"), ("storage_key", "TEXT"))),

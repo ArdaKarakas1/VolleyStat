@@ -3,7 +3,7 @@
   "info": {
     "title": "VolleyStat Local Development API",
     "description": "LOCAL TEST DATA ONLY. No authentication, no trained AI. Never expose to the internet.",
-    "version": "0.5.0"
+    "version": "0.6.0"
   },
   "paths": {
     "/v1/health": {
@@ -161,6 +161,54 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/matches/{match_id}/rules": {
+      "put": {
+        "summary": "Put Match Rules",
+        "description": "Set the rule the server counts the sets of this match with.\n\nA rule that differs from the stored one moves the rally list of every analysis of the match\nthat has rallies one version on, in the same transaction. The user confirmed those lists\nwhile looking at set scores of the old rule, so each confirmation lapses, and a confirmation\nor a correction still on its way with the old version is refused as stale. Answers, cards and\ncorrections stay as they are. The rule the match already has changes nothing.",
+        "operationId": "put_match_rules_v1_matches__match_id__rules_put",
+        "parameters": [
+          {
+            "name": "match_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Match Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MatchRulesInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -1344,6 +1392,16 @@
             ],
             "title": "Kind",
             "default": "TRAINING"
+          },
+          "rules": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MatchRulesInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -1352,6 +1410,31 @@
           "awayTeamName"
         ],
         "title": "MatchInput"
+      },
+      "MatchRulesInput": {
+        "properties": {
+          "setsToWin": {
+            "type": "integer",
+            "title": "Setstowin"
+          },
+          "setTarget": {
+            "type": "integer",
+            "title": "Settarget"
+          },
+          "decidingSetTarget": {
+            "type": "integer",
+            "title": "Decidingsettarget"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "setsToWin",
+          "setTarget",
+          "decidingSetTarget"
+        ],
+        "title": "MatchRulesInput",
+        "description": "The rule the user chose: the app offers exactly these values, so the server accepts nothing else."
       },
       "ReopenInput": {
         "properties": {

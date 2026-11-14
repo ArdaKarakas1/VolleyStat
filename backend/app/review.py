@@ -67,15 +67,23 @@ def rally_payload(rally, after: dict[str, int] | None) -> dict[str, Any]:
     }
 
 
-def scored_rallies(db, job_id: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Every rally of a job in match order, each with the set score after it where the count reaches it, and the sets of that count."""
-    rallies = db.execute("SELECT * FROM rallies WHERE job_id=? ORDER BY sequence", (job_id,)).fetchall()
-    sets, after = report.running_score([dict(rally) for rally in rallies])
-    return [rally_payload(rally, after.get(rally["sequence"])) for rally in rallies], sets
+def match_rules(db, match_id: str) -> report.MatchRules:
+    """The rule the sets of a match are counted with, read in the caller's transaction."""
+    return report.MatchRules.of(db.execute(
+        "SELECT sets_to_win, set_target, deciding_set_target FROM matches WHERE id=?", (match_id,)).fetchone())
 
 
-def rally_payloads(db, job_id: str) -> list[dict[str, Any]]:
-    return scored_rallies(db, job_id)[0]
+def scored_rallies(db, job) -> tuple[list[dict[str, Any]], list[dict[str, Any]], report.MatchRules]:
+    """Every rally of a job in match order, each with the set score after it where the count reaches it,
+    the sets of that count, and the rule of the match it was counted with."""
+    rules = match_rules(db, job["match_id"])
+    rallies = db.execute("SELECT * FROM rallies WHERE job_id=? ORDER BY sequence", (job["id"],)).fetchall()
+    sets, after = report.running_score([dict(rally) for rally in rallies], rules=rules)
+    return [rally_payload(rally, after.get(rally["sequence"])) for rally in rallies], sets, rules
+
+
+def rally_payloads(db, job) -> list[dict[str, Any]]:
+    return scored_rallies(db, job)[0]
 
 
 def card_payload(card, mock: bool) -> dict[str, Any]:
@@ -208,7 +216,7 @@ def router(connect) -> APIRouter:
         with connect() as db:
             job = find_job(db, job_id)
             media = db.execute("SELECT media_json FROM videos WHERE id=?", (job["video_id"],)).fetchone()
-            rallies, sets = scored_rallies(db, job_id)
+            rallies, sets, rules = scored_rallies(db, job)
             return {
                 "rallies": rallies,
                 "rallyListVersion": job["rally_list_version"], "listConfirmed": list_confirmed(job),
@@ -216,6 +224,8 @@ def router(connect) -> APIRouter:
                 "videoDurationMs": int(json.loads(media["media_json"])["durationMs"]),
                 # The set scores of this version of the list: what the user compares with the match before confirming.
                 "sets": sets,
+                # The rule those sets were counted with, read in the same transaction.
+                "rules": rules.payload(),
             }
 
     @api.get("/v1/analyses/{job_id}/review-cards")
@@ -277,8 +287,11 @@ def router(connect) -> APIRouter:
     @api.get("/v1/matches/{match_id}/report")
     def match_report(match_id: str):
         with connect() as db:
-            if not db.execute("SELECT 1 FROM matches WHERE id=?", (match_id,)).fetchone():
+            match = db.execute("SELECT * FROM matches WHERE id=?", (match_id,)).fetchone()
+            if not match:
                 fail("MATCH_NOT_FOUND", "Match does not exist", 404)
+            # Read with the rallies: a rule changed after this transaction belongs to the next report.
+            rules = report.MatchRules.of(match)
             # A newer job that is still running, failed or was cancelled does not hide an earlier result.
             job = db.execute(
                 "SELECT * FROM analysis_jobs WHERE match_id=? AND state IN (?,?) ORDER BY rowid DESC LIMIT 1",
@@ -305,7 +318,7 @@ def router(connect) -> APIRouter:
                           "corrections": corrections},
             # No analyzer finds every rally, whatever its kind. The list is complete only by the
             # user's own confirmation, and the invented intervals of a demo job can not be confirmed.
-            **report.build_report(rallies, rallies_may_be_missing=is_mock(job) or not confirmed, proposed=proposed),
+            **report.build_report(rallies, rules=rules, rallies_may_be_missing=is_mock(job) or not confirmed, proposed=proposed),
         }
 
     return api

@@ -125,7 +125,7 @@ def revision(storage, job_id):
 def test_the_rally_list_carries_its_version_the_video_length_and_where_each_rally_came_from(match):
     client, job_id, _ = match
     found = listing(client, job_id)
-    assert set(found) == {"rallies", "rallyListVersion", "listConfirmed", "videoDurationMs", "sets"}
+    assert set(found) == {"rallies", "rallyListVersion", "listConfirmed", "videoDurationMs", "sets", "rules"}
     assert (found["rallyListVersion"], found["listConfirmed"], found["videoDurationMs"]) == (0, False, VIDEO_MS)
     assert [(item["sequence"], item["origin"], item["scoreAfter"]) for item in found["rallies"]] == [
         (1, "ANALYZER", None), (2, "ANALYZER", None), (3, "ANALYZER", None), (4, "ANALYZER", None)]

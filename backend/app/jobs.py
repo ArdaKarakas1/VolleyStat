@@ -148,7 +148,10 @@ def find_job(db, job_id: str):
 
 
 def list_confirmed(job) -> bool:
-    """True while the user's confirmation still names the current rally list. Any later change of the list moves the version on."""
+    """True while the user's confirmation still names the current rally list.
+
+    Any later change of the list, and any change of the rule its sets are counted with, moves the version on.
+    """
     return job["list_confirmed_version"] is not None and job["list_confirmed_version"] == job["rally_list_version"]
 
 

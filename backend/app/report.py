@@ -15,6 +15,7 @@ however many cards the user answered.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 HOME = "HOME"
@@ -22,9 +23,46 @@ AWAY = "AWAY"
 SIDES = (HOME, AWAY)
 STATUSES = ("PROPOSED", "VERIFIED", "UNRESOLVED", "REJECTED")
 
-# No rule ends the match: amateur and training matches often play a fixed number of sets, so
-# rallies keep opening sets. Only the set with the deciding number is played to the short target.
-RULES = {"setTarget": 25, "decidingSetTarget": 15, "winBy": 2, "decidingSetNumber": 5}
+WIN_BY = 2
+# What the app offers and the server accepts: a match of best of three or of five, and three set lengths.
+SETS_TO_WIN = (2, 3)
+TARGETS = (25, 21, 15)
+
+
+@dataclass(frozen=True)
+class MatchRules:
+    """The rule the user chose for a match. The server counts the sets of its rallies with it.
+
+    The deciding set is set number 2 * sets_to_win - 1 and ends at `deciding_set_target`; every
+    other set ends at `set_target`, and every set needs a lead of WIN_BY points. No rule ends the
+    match: amateur and training matches often play a fixed number of sets, so rallies keep opening
+    sets, and a set after the deciding one is played to `set_target` again.
+    """
+    sets_to_win: int = 3
+    set_target: int = 25
+    deciding_set_target: int = 15
+
+    @property
+    def deciding_set_number(self) -> int:
+        return 2 * self.sets_to_win - 1
+
+    @classmethod
+    def of(cls, match) -> "MatchRules":
+        """The rule stored on a row of the matches table."""
+        return cls(match["sets_to_win"], match["set_target"], match["deciding_set_target"])
+
+    def target(self, set_number: int) -> int:
+        return self.deciding_set_target if set_number == self.deciding_set_number else self.set_target
+
+    def payload(self) -> dict[str, int]:
+        """A new dict on every call, so a caller that edits its copy changes no other answer."""
+        return {"setsToWin": self.sets_to_win, "setTarget": self.set_target,
+                "decidingSetTarget": self.deciding_set_target, "winBy": WIN_BY,
+                "decidingSetNumber": self.deciding_set_number}
+
+
+# The rule of every match that was stored before the user could choose one.
+FIVB = MatchRules()
 
 SCORING_FIELDS = {"ATTACK": "attackPoints", "BLOCK": "blockPoints", "ACE": "aces"}
 ACTION_FIELDS = {**SCORING_FIELDS, "OPPONENT_ERROR": "opponentErrors"}
@@ -46,9 +84,9 @@ def _coverage(metric: str, eligible: int, observed: int, verified: int) -> dict[
     return {"metricId": metric, "eligibleN": eligible, "observedN": observed, "verifiedN": verified, "status": status}
 
 
-def _score(numbered: Sequence[tuple[int, Mapping[str, Any]]], may_be_missing: bool,
+def _score(numbered: Sequence[tuple[int, Mapping[str, Any]]], may_be_missing: bool, *, rules: MatchRules,
            after: dict[int, dict[str, int]] | None = None) -> dict[str, Any]:
-    """Count sets over (sequence number, rally) pairs in match order, up to the first rally without a winner.
+    """Count sets over (sequence number, rally) pairs in match order with `rules`, up to the first rally without a winner.
 
     `after`, when given, receives the score of the running set after each counted rally.
     """
@@ -65,9 +103,9 @@ def _score(numbered: Sequence[tuple[int, Mapping[str, Any]]], may_be_missing: bo
         current[rally["winner"].lower()] += 1
         if after is not None:
             after[sequence] = {"set": current["number"], "home": current["home"], "away": current["away"]}
-        target = RULES["decidingSetTarget"] if current["number"] == RULES["decidingSetNumber"] else RULES["setTarget"]
+        target = rules.target(current["number"])
         lead = abs(current["home"] - current["away"])
-        if max(current["home"], current["away"]) >= target and lead >= RULES["winBy"]:
+        if max(current["home"], current["away"]) >= target and lead >= WIN_BY:
             current["complete"] = True
             won[rally["winner"]] += 1
             sets.append(current)
@@ -85,14 +123,15 @@ def _score(numbered: Sequence[tuple[int, Mapping[str, Any]]], may_be_missing: bo
     }
 
 
-def running_score(rallies: Sequence[Mapping[str, Any]]) -> tuple[list[dict[str, Any]], dict[int, dict[str, int]]]:
-    """The sets of a rally list, and the score of the running set after each counted rally by sequence number.
+def running_score(rallies: Sequence[Mapping[str, Any]], *, rules: MatchRules
+                  ) -> tuple[list[dict[str, Any]], dict[int, dict[str, int]]]:
+    """The sets of a rally list counted with `rules`, and the score of the running set after each counted rally by sequence number.
 
     The same walk as the score of the report: a rejected rally has no entry, and neither has the
     first rally without a winner nor any rally after it.
     """
     after: dict[int, dict[str, int]] = {}
-    sets = _score(_numbered(rallies), True, after)["sets"]
+    sets = _score(_numbered(rallies), True, rules=rules, after=after)["sets"]
     return sets, after
 
 
@@ -103,9 +142,9 @@ def _numbered(rallies: Sequence[Mapping[str, Any]]) -> list[tuple[int, Mapping[s
             if rally["status"] != "REJECTED"]
 
 
-def build_report(rallies: Sequence[Mapping[str, Any]], *, rallies_may_be_missing: bool = False,
+def build_report(rallies: Sequence[Mapping[str, Any]], *, rules: MatchRules, rallies_may_be_missing: bool = False,
                  proposed: int | None = None) -> dict[str, Any]:
-    """Build the computed part of the report from the rallies of one job, given in match order.
+    """Build the computed part of the report from the rallies of one job, given in match order, with the rule of its match.
 
     `rallies_may_be_missing` is true until the user confirmed that the list holds every rally of
     the video. Then no count is reported as MEASURED. `proposed` is the number of rallies the
@@ -181,8 +220,8 @@ def build_report(rallies: Sequence[Mapping[str, Any]], *, rallies_may_be_missing
             "unresolved": count["UNRESOLVED"], "open": count["PROPOSED"],
         },
         "ralliesMayBeMissing": rallies_may_be_missing,
-        "rules": dict(RULES),
-        "score": _score(numbered, rallies_may_be_missing),
+        "rules": rules.payload(),
+        "score": _score(numbered, rallies_may_be_missing, rules=rules),
         "teams": teams,
         "players": [players[key] for key in sorted(players)],
         "unattributed": unattributed,

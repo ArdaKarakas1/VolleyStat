@@ -11,9 +11,9 @@ from app.bodylimit import MAX_JSON_BODY_BYTES, BodyLimit
 from app.main import CHUNK_SIZE
 
 
-def create_match(c):
-    resp = c.post("/v1/matches", json={"homeTeamName": "Takım A", "awayTeamName": "Takım B"})
-    assert resp.status_code == 201
+def create_match(c, **fields):
+    resp = c.post("/v1/matches", json={"homeTeamName": "Takım A", "awayTeamName": "Takım B", **fields})
+    assert resp.status_code == 201, resp.text
     return resp.json()["id"]
 
 
