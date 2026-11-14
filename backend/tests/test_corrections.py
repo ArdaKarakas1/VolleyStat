@@ -813,6 +813,15 @@ def test_storage_written_by_version_0_4_gets_its_new_columns_and_its_proposals_a
         assert (counts["proposed"], counts["userCreated"]) == (4, 1)
 
 
+def test_no_comment_inside_a_table_definition_holds_a_comma():
+    """The storage tests drop columns to rebuild the storage of earlier versions. An older SQLite
+    (the one of Python 3.12 in CI) cuts a dropped last column back to the previous comma, and a
+    comma inside a comment there leaves the table definition unclosed. A newer SQLite hides this."""
+    from app.db import SCHEMA
+    for body in re.findall(r"CREATE TABLE IF NOT EXISTS \w+ \((.*?)\n\);", SCHEMA, re.S):
+        assert [line for line in body.splitlines() if line.strip().startswith("--") and "," in line] == []
+
+
 def test_an_analyzer_whose_rallies_overlap_fails_its_job(storage, make_clip):
     overlapping = ScriptedAnalyzer(result=proposals(((2_000, 9_000), (8_999, 12_000))))
     with serve(storage, overlapping) as client:

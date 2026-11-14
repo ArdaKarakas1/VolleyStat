@@ -12,6 +12,9 @@ from .errors import fail
 
 log = logging.getLogger(__name__)
 
+# No comment inside a CREATE TABLE below may hold a comma. An older SQLite that drops a column
+# walks back from that column to the previous comma, and a comma inside a comment cuts the table
+# definition there. The tests drop columns to rebuild the storage of earlier versions.
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS matches (
   id TEXT PRIMARY KEY, home_team TEXT NOT NULL, away_team TEXT NOT NULL,
@@ -51,8 +54,9 @@ CREATE TABLE IF NOT EXISTS analysis_jobs (
   run_token TEXT, heartbeat_at REAL, recoveries INTEGER NOT NULL DEFAULT 0,
   revision INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT,
-  -- rally_list_version moves with every correction of the rally list, every winner decision and
-  -- every change of the match rule. The list counts as complete only while list_confirmed_version equals it.
+  -- rally_list_version moves with every correction of the rally list and every winner decision
+  -- and with every change of the match rule. The list counts as complete only while
+  -- list_confirmed_version equals it.
   rally_list_version INTEGER NOT NULL DEFAULT 0,
   list_confirmed_version INTEGER, list_confirmed_at TEXT
 );
