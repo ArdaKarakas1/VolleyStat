@@ -73,6 +73,24 @@ data class AnalysisSummary(
     }
 }
 
+/**
+ * The rule the user chose for a match: how many sets win it, how many points end a set and how many
+ * end the deciding set. The server counts the sets with it; the phone counts nothing (ADR-0115).
+ */
+data class MatchRules(val setsToWin: Int = 3, val setTarget: Int = 25, val decidingSetTarget: Int = 15) {
+    /** The deciding set: set 3 of a best of three, set 5 of a best of five. */
+    val decidingSetNumber: Int get() = 2 * setsToWin - 1
+
+    /** True for a rule the app offers, which is exactly what the server accepts. */
+    val isOffered: Boolean get() = setsToWin in SETS_TO_WIN && setTarget in TARGETS && decidingSetTarget in TARGETS
+
+    companion object {
+        val FIVB = MatchRules()
+        val SETS_TO_WIN = listOf(2, 3)
+        val TARGETS = listOf(25, 21, 15)
+    }
+}
+
 data class MatchRecord(
     val localId: String,
     val homeTeam: String,
@@ -90,6 +108,8 @@ data class MatchRecord(
     val check: VideoCheck? = null,
     val checkedAtMs: Long? = null,
     val analysis: AnalysisSummary? = null,
+    /** Sent with the request that creates the match on the server, and only there. Screens show the rule the server answers with. */
+    val rules: MatchRules = MatchRules.FIVB,
 ) {
     val title: String get() = name?.takeIf { it.isNotBlank() } ?: "$homeTeam - $awayTeam"
 }
@@ -130,6 +150,8 @@ data class Draft(
     val video: LocalVideo? = null,
     /** Camera target handed to the recorder; kept so a recreated activity can still claim it. */
     val pendingCapturePath: String? = null,
+    /** Every new match starts with the FIVB rule, so a standard match needs no touch. */
+    val rules: MatchRules = MatchRules.FIVB,
 ) {
     val started: Boolean get() = name.isNotBlank() || venue.isNotBlank() || homeTeam.isNotBlank() || awayTeam.isNotBlank() || video != null
 }

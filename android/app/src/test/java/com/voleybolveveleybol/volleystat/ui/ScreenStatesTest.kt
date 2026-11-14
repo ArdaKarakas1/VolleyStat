@@ -32,6 +32,7 @@ import com.voleybolveveleybol.volleystat.model.Coverage
 import com.voleybolveveleybol.volleystat.model.Draft
 import com.voleybolveveleybol.volleystat.model.LocalVideo
 import com.voleybolveveleybol.volleystat.model.MatchRecord
+import com.voleybolveveleybol.volleystat.model.MatchRules
 import com.voleybolveveleybol.volleystat.model.MatchReport
 import com.voleybolveveleybol.volleystat.model.ReviewCard
 import com.voleybolveveleybol.volleystat.model.ReviewDeck
@@ -41,6 +42,7 @@ import com.voleybolveveleybol.volleystat.model.TeamStats
 import com.voleybolveveleybol.volleystat.model.VideoCheck
 import com.voleybolveveleybol.volleystat.model.VideoSource
 import com.voleybolveveleybol.volleystat.ui.screens.ClipPlaceholder
+import com.voleybolveveleybol.volleystat.ui.screens.MatchCreateScreen
 import com.voleybolveveleybol.volleystat.ui.screens.PlayersScreen
 import com.voleybolveveleybol.volleystat.ui.screens.ProfileScreen
 import com.voleybolveveleybol.volleystat.ui.screens.ReportScreen
@@ -355,5 +357,38 @@ class ScreenStatesTest {
             RuntimeEnvironment.setFontScale(1f)
             RuntimeEnvironment.setQualifiers("+w411dp-h891dp-port")
         }
+    }
+
+    // ----- the match rule (ADR-0115) -----
+
+    @Test fun theNewMatchScreenNamesTheFivbRuleAndContinuesWithoutATouch() {
+        var continues = 0
+        var opens = 0
+        show { MatchCreateScreen(Draft(), "2026-11-14", {}, onContinue = { continues++ }, onBack = {}, onOpenRules = { opens++ }) }
+        compose.onNodeWithText(text(R.string.rule_name_fivb)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.rule_detail, 3, 25, 5, 15)).assertIsDisplayed()
+        // A standard match needs no touch on the rule.
+        compose.onNodeWithText(text(R.string.action_continue)).performClick()
+        assertEquals(1 to 0, continues to opens)
+    }
+
+    @Test fun aChosenRuleIsNamedOnTheNewMatchScreen() {
+        var opens = 0
+        show { MatchCreateScreen(Draft(rules = MatchRules(2, 21, 21)), "2026-11-14", {}, onContinue = {}, onBack = {}, onOpenRules = { opens++ }) }
+        compose.onNodeWithText(text(R.string.rule_name_custom)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.rule_detail_same, 2, 21)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.rule_card_change)).performClick()
+        assertEquals(1, opens)
+    }
+
+    @Test fun theReportNamesTheRuleTheServerCountedWith() {
+        show { ReportScreen(match, ReportLoad.READY, report("PARTIAL").copy(rules = MatchRules(2, 21, 15)), {}, {}, {}, {}, {}) }
+        compose.onNodeWithText(text(R.string.report_rules, text(R.string.rule_counting, 21, 3, 15))).performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun aReportWithoutARuleLeavesTheRuleLineOut() {
+        show { ReportScreen(match, ReportLoad.READY, report("PARTIAL"), {}, {}, {}, {}, {}) }
+        // "Skor kuralı:" with nothing after it would name no rule; the line is left out instead.
+        assertEquals(false, shown(text(R.string.report_rules, "").trim()))
     }
 }

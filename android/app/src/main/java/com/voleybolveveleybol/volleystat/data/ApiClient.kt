@@ -4,6 +4,7 @@ import com.voleybolveveleybol.volleystat.model.AnalysisJob
 import com.voleybolveveleybol.volleystat.model.Correction
 import com.voleybolveveleybol.volleystat.model.Coverage
 import com.voleybolveveleybol.volleystat.model.MatchReport
+import com.voleybolveveleybol.volleystat.model.MatchRules
 import com.voleybolveveleybol.volleystat.model.PlayerLine
 import com.voleybolveveleybol.volleystat.model.Rally
 import com.voleybolveveleybol.volleystat.model.RallyList
@@ -33,6 +34,8 @@ data class MatchInfo(
     val playedOn: String? = null,
     val venue: String? = null,
     val kind: String = "TRAINING",
+    /** The rule the server counts the sets with. Only the request that creates the match sets it. */
+    val rules: MatchRules = MatchRules.FIVB,
 )
 data class UploadTicket(val uploadId: String, val nextOffset: Long, val chunkSizeBytes: Int)
 data class UploadStatus(val nextOffset: Long, val status: String, val videoId: String?)
@@ -66,9 +69,23 @@ class ApiClient(
     fun putMatch(matchId: String, match: MatchInfo) {
         val body = JSONObject().put("homeTeamName", match.homeTeam).put("awayTeamName", match.awayTeam)
             .putOpt("name", match.name).putOpt("playedOn", match.playedOn).putOpt("venue", match.venue)
-            .put("kind", match.kind)
+            .put("kind", match.kind).put("rules", rulesJson(match.rules))
         request("PUT", "/matches/$matchId", body.toString().toByteArray())
     }
+
+    /**
+     * Sets the rule the server counts the sets of the match with. The request names the whole rule,
+     * so repeating it after a lost answer changes nothing more. The server moves the rally list of
+     * the match on, and a confirmation given under the old rule lapses. The answer is not read.
+     */
+    fun putMatchRules(matchId: String, rules: MatchRules) {
+        request("PUT", "/matches/$matchId/rules", rulesJson(rules).toString().toByteArray(), timeoutMs = correctionTimeoutMs)
+    }
+
+    private fun rulesJson(rules: MatchRules) = JSONObject()
+        .put("setsToWin", rules.setsToWin).put("setTarget", rules.setTarget).put("decidingSetTarget", rules.decidingSetTarget)
+
+    private fun parseRules(json: JSONObject) = MatchRules(json.getInt("setsToWin"), json.getInt("setTarget"), json.getInt("decidingSetTarget"))
 
     fun createUpload(matchId: String, fileName: String, sizeBytes: Long, mimeType: String, sha256: String): UploadTicket {
         val body = JSONObject().put("fileName", fileName).put("sizeBytes", sizeBytes).put("mimeType", mimeType)
@@ -135,9 +152,11 @@ class ApiClient(
 
     fun rallies(jobId: String, timeoutMs: Int = 60_000): RallyList {
         val json = request("GET", "/analyses/$jobId/rallies", timeoutMs = timeoutMs)
+        // A list without its rule comes from a server before 0.6, which counts every match with the FIVB rule.
         return RallyList(
             json.getJSONArray("rallies").objects().map(::parseRally), json.getInt("rallyListVersion"),
             json.getBoolean("listConfirmed"), json.getLong("videoDurationMs"), json.getJSONArray("sets").objects().map(::parseSet),
+            parseRules(json.getJSONObject("rules")),
         )
     }
 
@@ -240,6 +259,15 @@ class ApiClient(
             unattributedHome = if (unattributed.isNull("home")) null else unattributed.getInt("home"),
             unattributedAway = if (unattributed.isNull("away")) null else unattributed.getInt("away"),
             coverage = json.getJSONArray("coverage").objects().map { Coverage(it.getString("metricId"), it.getInt("eligibleN"), it.getInt("verifiedN")) },
+            // A server before 0.6 names its fixed rule without setsToWin; its deciding set tells it.
+            rules = json.optJSONObject("rules")?.let { rules ->
+                runCatching {
+                    MatchRules(
+                        if (rules.has("setsToWin")) rules.getInt("setsToWin") else (rules.getInt("decidingSetNumber") + 1) / 2,
+                        rules.getInt("setTarget"), rules.getInt("decidingSetTarget"),
+                    )
+                }.getOrNull()
+            },
         )
     }
 

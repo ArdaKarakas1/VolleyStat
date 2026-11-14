@@ -148,7 +148,15 @@ fun FlowScaffold(
 /** 03: only defaults and optional details. Nothing here blocks the user. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MatchCreateScreen(draft: Draft, today: String, onEdit: ((Draft) -> Draft) -> Unit, onContinue: () -> Unit, onBack: () -> Unit) {
+fun MatchCreateScreen(
+    draft: Draft,
+    today: String,
+    onEdit: ((Draft) -> Draft) -> Unit,
+    onContinue: () -> Unit,
+    onBack: () -> Unit,
+    /** Opens screen 13. The FIVB rule is chosen already, so a standard match never needs it. */
+    onOpenRules: () -> Unit = {},
+) {
     var pickingDate by rememberSaveable { mutableStateOf(false) }
     val day = draft.playedOn.ifBlank { today }
     FlowScaffold(
@@ -188,6 +196,7 @@ fun MatchCreateScreen(draft: Draft, today: String, onEdit: ((Draft) -> Draft) ->
             )
             Text(stringResource(R.string.match_kind_note), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        MatchRulesCard(draft.rules, onOpenRules)
         StatusChip(stringResource(R.string.match_rules), Tone.NEUTRAL)
     }
     if (pickingDate) {

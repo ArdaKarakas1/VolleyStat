@@ -5,6 +5,7 @@ import com.voleybolveveleybol.volleystat.model.Draft
 import com.voleybolveveleybol.volleystat.model.LocalVideo
 import com.voleybolveveleybol.volleystat.model.MatchKind
 import com.voleybolveveleybol.volleystat.model.MatchRecord
+import com.voleybolveveleybol.volleystat.model.MatchRules
 import com.voleybolveveleybol.volleystat.model.MatchStatus
 import com.voleybolveveleybol.volleystat.model.Player
 import com.voleybolveveleybol.volleystat.model.ServerTarget
@@ -42,7 +43,8 @@ class LocalStoreTest {
         val file = File(folder.root, "state.json")
         val state = StoredState(
             settings = Settings(ServerTarget.USB_DEVICE, displayName = "Deneme", welcomeSeen = true),
-            draft = Draft("Hazırlık", "2026-11-12", "Salon", MatchKind.OFFICIAL, "A Takımı", "B Takımı", "t1", null, unknownVideo, "/data/pending.mp4"),
+            draft = Draft("Hazırlık", "2026-11-12", "Salon", MatchKind.OFFICIAL, "A Takımı", "B Takımı", "t1", null, unknownVideo, "/data/pending.mp4",
+                rules = MatchRules(2, 21, 15)),
             teams = listOf(
                 Team("t1", "A Takımı", listOf(Player("p1", "Birinci Oyuncu", 7), Player("p2", "", null))),
                 Team("t2", "B Takımı"),
@@ -50,7 +52,8 @@ class LocalStoreTest {
             matches = listOf(
                 MatchRecord("m1", "Ev", "Konuk", 10, knownVideo, "Final", "2026-11-01", "Salon", MatchKind.OFFICIAL, "t1", "t2",
                     UploadSession("abc", "srv", "up", 77),
-                    VideoCheck("v1", VideoCheck.QUARANTINED, "VIDEO_CORRUPT", null, null, null, null, null, emptyList()), 99),
+                    VideoCheck("v1", VideoCheck.QUARANTINED, "VIDEO_CORRUPT", null, null, null, null, null, emptyList()), 99,
+                    rules = MatchRules(2, 25, 25)),
                 MatchRecord("m2", "Bir", "İki", 20, unknownVideo, check = check(VideoCheck.READY), checkedAtMs = 5,
                     analysis = AnalysisSummary("job", AnalysisSummary.NEEDS_REVIEW, mock = true, reviewOpen = 3, reviewTotal = 9)),
                 MatchRecord("m3", "Üç", "Dört", 30, unknownVideo),
@@ -64,6 +67,42 @@ class LocalStoreTest {
         assertNull("a player without a number keeps no number", loaded.teams[0].players[1].jersey)
         assertNull(loaded.matches[2].session.uploadId)
         assertNull(loaded.matches[2].name)
+    }
+
+    @Test fun aFileWrittenByVersion0_5LoadsWithTheFivbRule() {
+        // What app 0.5.0 wrote: no rule on the draft and none on the match. Those matches were counted with the FIVB rule.
+        val file = File(folder.root, "state.json").apply {
+            writeText(
+                """{"version": 2, "draft": {"homeTeam": "A Takımı"},
+                   "matches": [{"localId": "m1", "homeTeam": "Ev", "awayTeam": "Konuk", "createdAtMs": 10,
+                                "video": {"location": "/data/rec.mp4", "source": "CAMERA", "fileName": "rec.mp4", "sizeBytes": 10}}]}"""
+            )
+        }
+        val loaded = LocalStore(file).load()
+        assertEquals(MatchRules.FIVB, loaded.draft.rules)
+        assertEquals(MatchRules.FIVB, loaded.matches.single().rules)
+        assertEquals("A Takımı", loaded.draft.homeTeam)
+        assertEquals("nothing was set aside", 0, folder.root.listFiles { f -> f.name.contains(".unreadable-") }!!.size)
+    }
+
+    @Test fun aRuleThatIsNotOfferedFallsBackToFivbAndCostsNoOtherMatch() {
+        // A rule the server would refuse could never be sent, so the upload of that match would be stuck for good.
+        val file = File(folder.root, "state.json").apply {
+            writeText(
+                """{"version": 2, "draft": {"rules": {"setsToWin": 2, "setTarget": 11, "decidingSetTarget": 15}},
+                   "matches": [
+                     {"localId": "m1", "homeTeam": "Ev", "awayTeam": "Konuk", "createdAtMs": 10,
+                      "video": {"location": "/a.mp4", "source": "CAMERA", "fileName": "a.mp4", "sizeBytes": 10},
+                      "rules": {"setsToWin": 2, "setTarget": 21}},
+                     {"localId": "m2", "homeTeam": "Bir", "awayTeam": "İki", "createdAtMs": 20,
+                      "video": {"location": "/b.mp4", "source": "CAMERA", "fileName": "b.mp4", "sizeBytes": 10},
+                      "rules": {"setsToWin": 2, "setTarget": 21, "decidingSetTarget": 15}}]}"""
+            )
+        }
+        val loaded = LocalStore(file).load()
+        assertEquals(MatchRules.FIVB, loaded.draft.rules)
+        assertEquals(listOf(MatchRules.FIVB, MatchRules(2, 21, 15)), loaded.matches.map { it.rules })
+        assertEquals(0, folder.root.listFiles { f -> f.name.contains(".unreadable-") }!!.size)
     }
 
     @Test fun anUnreadableFileIsSetAsideNotDeleted() {

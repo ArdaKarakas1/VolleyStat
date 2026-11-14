@@ -78,6 +78,8 @@ fun Modifier.dashedOutline(color: Color, radius: Dp, width: Dp = 1.5.dp): Modifi
 fun VsCard(
     modifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null,
+    /** Only for a card with [onClick]: false while what the tap would open can not be used. */
+    enabled: Boolean = true,
     padding: PaddingValues = PaddingValues(Dimens.cardPadding),
     content: @Composable ColumnScope.() -> Unit,
 ) {
@@ -87,7 +89,7 @@ fun VsCard(
     if (onClick == null) {
         Surface(modifier.fillMaxWidth(), shape = shape, color = MaterialTheme.colorScheme.surface, border = border, content = body)
     } else {
-        Surface(onClick = onClick, modifier = modifier.fillMaxWidth(), shape = shape, color = MaterialTheme.colorScheme.surface, border = border, content = body)
+        Surface(onClick = onClick, enabled = enabled, modifier = modifier.fillMaxWidth(), shape = shape, color = MaterialTheme.colorScheme.surface, border = border, content = body)
     }
 }
 

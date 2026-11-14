@@ -27,6 +27,7 @@ import com.voleybolveveleybol.volleystat.data.StoredState
 import com.voleybolveveleybol.volleystat.model.AnalysisSummary
 import com.voleybolveveleybol.volleystat.model.LocalVideo
 import com.voleybolveveleybol.volleystat.model.MatchRecord
+import com.voleybolveveleybol.volleystat.model.MatchRules
 import com.voleybolveveleybol.volleystat.model.Settings
 import com.voleybolveveleybol.volleystat.model.UploadSession
 import com.voleybolveveleybol.volleystat.model.VideoCheck
@@ -74,6 +75,8 @@ class RallyListFlowTest {
     @Volatile private var winners = listOf<String?>("HOME", "AWAY", "HOME")
     @Volatile private var unsure = setOf<Int>()
     @Volatile private var thirdEndMs = 56_000L
+    /** The rule the stand-in server counts the sets with. */
+    @Volatile private var rules = MatchRules.FIVB
     /** While this is set, the server holds back its answer to a winner decision, as a slow network would. */
     @Volatile private var holdDecision: java.util.concurrent.CountDownLatch? = null
     /** The next read of the cards fails, as it does when the connection drops for a moment. */
@@ -90,6 +93,9 @@ class RallyListFlowTest {
         .put("rallyListVersion", version).put("listConfirmed", confirmed)
 
     private val spans get() = listOf(2_000L to 9_000L, 15_000L to 24_000L, 48_000L to thirdEndMs)
+
+    private fun rulesJson() = JSONObject().put("setsToWin", rules.setsToWin).put("setTarget", rules.setTarget)
+        .put("decidingSetTarget", rules.decidingSetTarget).put("winBy", 2).put("decidingSetNumber", rules.decidingSetNumber)
 
     /** The running score, counted the way the server counts it: up to the first rally without a winner. */
     private fun scores(): List<Pair<Int, Int>?> {
@@ -110,7 +116,7 @@ class RallyListFlowTest {
             .put("origin", "ANALYZER").put("status", if (winners[index] != null) "VERIFIED" else if (index in unsure) "UNRESOLVED" else "PROPOSED")
             .put("proposedWinner", "UNKNOWN").put("winner", winners[index] ?: JSONObject.NULL)
             .put("scoreAfter", score?.let { JSONObject().put("set", 1).put("home", it.first).put("away", it.second) } ?: JSONObject.NULL)
-    })).put("rallyListVersion", version).put("listConfirmed", confirmed).put("videoDurationMs", 60_000)
+    })).put("rallyListVersion", version).put("listConfirmed", confirmed).put("videoDurationMs", 60_000).put("rules", rulesJson())
         .put("sets", JSONArray(listOfNotNull(scores().lastOrNull { it != null }?.let { JSONObject().put("number", 1).put("home", it.first).put("away", it.second).put("complete", false) })))
 
     private fun cards() = JSONObject().put("cards", JSONArray(winners.indices.map { index ->
@@ -131,6 +137,7 @@ class RallyListFlowTest {
         val away = winners.count { it == "AWAY" }
         return JSONObject().put("jobId", "j1").put("analyzer", JSONObject().put("id", "motion-baseline").put("kind", "BASELINE")).put("mock", false)
             .put("verificationStatus", if (open == 0 && unsure.isEmpty()) "VERIFIED" else "PARTIALLY_VERIFIED").put("ralliesMayBeMissing", !confirmed)
+            .put("rules", rulesJson())
             .put("rallyList", JSONObject().put("confirmed", confirmed).put("confirmedAt", JSONObject.NULL).put("corrections", 0))
             .put("rallies", JSONObject().put("proposed", 3).put("total", 3).put("userCreated", 0).put("verified", home + away).put("rejected", 0)
                 .put("unresolved", unsure.size).put("open", open))
@@ -150,12 +157,19 @@ class RallyListFlowTest {
                 override fun dispatch(request: RecordedRequest): MockResponse {
                     val path = request.requestUrl!!.encodedPath.removePrefix("/v1")
                     requests += "${request.method} $path"
-                    val body = if (request.method == "POST") JSONObject(request.body.readUtf8()).also { bodies += it } else JSONObject()
+                    val body = if (request.method == "POST" || request.method == "PUT") JSONObject(request.body.readUtf8()).also { bodies += it } else JSONObject()
                     return when ("${request.method} $path") {
                         "GET /matches/server-1/report" -> ok(report())
                         "GET /videos/video-1/analyses/latest" -> ok(job())
                         "GET /analyses/j1/rallies" -> ok(rallies())
                         "GET /analyses/j1/review-cards" -> if (failNextCardRead) MockResponse().setResponseCode(500).also { failNextCardRead = false } else ok(cards())
+                        "PUT /matches/server-1/rules" -> {
+                            // As on the real server: a new rule recounts the list and moves it on, so the confirmation lapses.
+                            rules = MatchRules(body.getInt("setsToWin"), body.getInt("setTarget"), body.getInt("decidingSetTarget"))
+                            version++
+                            confirmed = false
+                            ok(JSONObject().put("id", "server-1"))
+                        }
                         "POST /analyses/j1/rally-list/confirm" -> {
                             confirmed = true
                             ok(JSONObject().put("job", job()).put("reportRevision", 9))
@@ -434,5 +448,33 @@ class RallyListFlowTest {
         // Rally 2 is answered. Going back to it would show the user a question they are done with.
         waitFor(text(R.string.review_position, 3, 3))
         assertTrue(app.onAllNodesWithText(text(R.string.review_position, 2, 3)).fetchSemanticsNodes().isEmpty())
+    }
+
+    @Test fun aRuleChangedOnTheListRecountsItAndTakesAwayTheConfirmation() {
+        confirmed = true
+        openTheRallyList()
+        waitFor(text(R.string.rallies_confirmed))
+        app.onNodeWithText(text(R.string.rule_name_fivb)).performScrollTo().assertIsDisplayed()
+
+        app.onNodeWithText(text(R.string.rule_card_change)).performScrollTo().performClick()
+        waitFor(text(R.string.rule_title))
+        // The user confirmed the list under the old set scores, and the screen says what a new rule does to that.
+        app.onNodeWithText(text(R.string.rule_drops_confirmation)).performScrollTo().assertIsDisplayed()
+        app.onNodeWithText(text(R.string.rule_sets_option, 2)).performScrollTo().performClick()
+        app.onAllNodesWithText(text(R.string.rule_points_option, 21))[0].performScrollTo().performClick()
+        tap(R.string.action_save_rule)
+
+        // The screen closes once the server applied the rule, and the list below names it.
+        waitFor(text(R.string.rule_name_custom))
+        assertEquals(1, requests.count { it == "PUT /matches/server-1/rules" })
+        assertEquals(listOf(2, 21, 15), bodies.last().let { listOf(it.getInt("setsToWin"), it.getInt("setTarget"), it.getInt("decidingSetTarget")) })
+        app.onNodeWithText(text(R.string.rule_detail, 2, 21, 3, 15)).assertIsDisplayed()
+        assertTrue(app.onAllNodesWithText(text(R.string.rallies_confirmed)).fetchSemanticsNodes().isEmpty())
+        app.onNodeWithText(text(R.string.action_check_score)).performScrollTo().assertIsDisplayed()
+
+        // The report names the new rule, and its numbers are lower bounds again.
+        back()
+        waitFor(text(R.string.report_rules, text(R.string.rule_counting, 21, 3, 15)))
+        app.onNodeWithText("0+ - 0+").performScrollTo().assertIsDisplayed()
     }
 }

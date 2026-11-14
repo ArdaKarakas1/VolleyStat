@@ -63,6 +63,7 @@ import com.voleybolveveleybol.volleystat.ui.screens.VideoCheckScreen
 import com.voleybolveveleybol.volleystat.ui.screens.VideoSourceScreen
 import com.voleybolveveleybol.volleystat.ui.screens.WelcomeScreen
 import com.voleybolveveleybol.volleystat.ui.screens.rememberEditorVideo
+import com.voleybolveveleybol.volleystat.ui.screens.MatchRulesScreen
 import java.time.LocalDate
 
 private object Routes {
@@ -73,6 +74,8 @@ private object Routes {
     const val PROFILE = "profile"
     const val TEAM = "team/{id}"
     const val NEW_MATCH = "new/match"
+    /** Screen 13 on the rule of the draft. Saving only changes the draft. */
+    const val NEW_RULES = "new/rules"
     const val NEW_TEAMS = "new/teams"
     const val NEW_VIDEO = "new/video"
     const val NEW_RECORD = "new/record"
@@ -85,6 +88,8 @@ private object Routes {
     const val REPORT = "report/{id}"
     const val PLAYERS = "players/{id}"
     const val RALLIES = "rallies/{id}"
+    /** Screen 13 on the rule the server counts the rally list of a match with. Saving sends it. */
+    const val RULES = "rules/{id}"
     /** The range editor on one rally of the list. */
     const val RALLY = "rally/{id}/{rally}"
     /** The range editor on the pause that holds the moment {at} of the video. */
@@ -96,6 +101,7 @@ private object Routes {
     fun report(id: String) = "report/$id"
     fun players(id: String) = "players/$id"
     fun rallies(id: String) = "rallies/$id"
+    fun rules(id: String) = "rules/$id"
     fun rally(id: String, rallyId: String) = "rally/$id/$rallyId"
     fun gap(id: String, atMs: Long) = "gap/$id/$atMs"
 }
@@ -267,6 +273,35 @@ fun VolleyStatApp(
         }
     }
 
+    /**
+     * Screen 13 on the rule of a match that is on the server. The screen shows the rule the server
+     * named with the rally list, sends the new one, and closes once the server applied it.
+     */
+    @Composable
+    fun RulesRoute(entry: NavBackStackEntry, match: MatchRecord?) {
+        if (match?.check?.videoId == null) {
+            LaunchedEffect(Unit) { leave(Routes.RULES) }
+            return
+        }
+        // Closes this screen, once, and never the screen below it.
+        val done: () -> Unit = { if (nav.currentBackStackEntry?.id == entry.id) nav.popBackStack() }
+        val shown = rallyState(match)
+        val missing = shown.rallies == null
+        LaunchedEffect(shown.job?.id, missing) { if (shown.job != null && missing) viewModel.loadRallies(match.localId) }
+        val list = shown.rallies
+        if (list == null) {
+            RallyEditorWaiting(stringResource(R.string.rule_title), shown, onRetry = { viewModel.retryRallies(match.localId) }, onBack = { nav.popBackStack() })
+        } else {
+            MatchRulesScreen(
+                list.rules, onSave = { rules -> viewModel.changeMatchRules(rules) { done() } },
+                // A problem belongs to this screen. Cleared on the way out, it does not flash on the list below.
+                onBack = { viewModel.clearCorrectionProblem(); nav.popBackStack() },
+                onList = true, listConfirmed = list.confirmed, sending = shown.correcting, problem = shown.correctionProblem,
+                onSelectionChanged = viewModel::clearCorrectionProblem,
+            )
+        }
+    }
+
     NavigationSuiteScaffold(
         // Task screens have no bottom bar: one step, one action, and back pops one step.
         layoutType = if (tabs.any { it.route == route }) NavigationSuiteScaffoldDefaults.calculateFromAdaptiveInfo(currentWindowAdaptiveInfo()) else NavigationSuiteType.None,
@@ -319,7 +354,14 @@ fun VolleyStatApp(
             composable(Routes.GUIDE) { GuideScreen(onBack = { nav.popBackStack() }) }
 
             composable(Routes.NEW_MATCH) {
-                MatchCreateScreen(state.draft, LocalDate.now().toString(), viewModel::editDraft, onContinue = { go(Routes.NEW_TEAMS) }, onBack = { nav.popBackStack() })
+                MatchCreateScreen(
+                    state.draft, LocalDate.now().toString(), viewModel::editDraft, onContinue = { go(Routes.NEW_TEAMS) }, onBack = { nav.popBackStack() },
+                    onOpenRules = { go(Routes.NEW_RULES) },
+                )
+            }
+            composable(Routes.NEW_RULES) {
+                // The match is not on the server yet: the rule travels with the request that creates it.
+                MatchRulesScreen(state.draft.rules, onSave = { rules -> viewModel.editDraft { it.copy(rules = rules) }; nav.popBackStack() }, onBack = { nav.popBackStack() })
             }
             composable(Routes.NEW_TEAMS) {
                 MatchTeamsScreen(
@@ -433,9 +475,11 @@ fun VolleyStatApp(
                         // A new screen on top, so that back leads to this list again.
                         onOpenReview = { go(Routes.reviewAt(match.localId, it.id)) },
                         onRetry = { viewModel.retryRallies(match.localId) }, onBack = { nav.popBackStack() },
+                        onChangeRules = { go(Routes.rules(match.localId)) },
                     )
                 }
             }
+            composable(Routes.RULES) { entry -> RulesRoute(entry, match(entry.arguments?.getString("id"))) }
             composable(Routes.RALLY) { entry ->
                 val rallyId = entry.arguments?.getString("rally")
                 EditorRoute(entry, match(entry.arguments?.getString("id")), Routes.RALLY, R.string.editor_title_rally) { list -> rallyId?.let { rallyTarget(list, it) } }

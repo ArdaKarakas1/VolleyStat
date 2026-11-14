@@ -11,6 +11,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.lifecycle.ViewModelProvider
 import com.github.takahirom.roborazzi.captureRoboImage
@@ -46,7 +47,7 @@ class JourneyTest {
     }
     @get:Rule(order = 1) val app = createAndroidComposeRule<MainActivity>()
 
-    private fun text(id: Int) = app.activity.getString(id)
+    private fun text(id: Int, vararg arguments: Any) = app.activity.getString(id, *arguments)
     private fun tap(id: Int) = app.onAllNodesWithText(text(id)).onFirst().performClick()
 
     private fun passWelcome() {
@@ -126,5 +127,34 @@ class JourneyTest {
         app.onNodeWithText(text(R.string.record_permission_title)).assertIsDisplayed()
         app.onNodeWithText(text(R.string.record_use_gallery)).performClick()
         app.onNodeWithText(text(R.string.source_title)).assertIsDisplayed()
+    }
+
+    @Test fun theRuleOfANewMatchIsFivbUntilTheUserChangesItAndSurvivesBackAndARestart() {
+        passWelcome()
+        app.onNodeWithText(text(R.string.home_new_match_body)).performClick()
+        app.onNodeWithText(text(R.string.rule_name_fivb)).performScrollTo().assertIsDisplayed()
+
+        // Back from screen 13 throws the choice away.
+        app.onNodeWithText(text(R.string.rule_card_change)).performScrollTo().performClick()
+        app.onNodeWithText(text(R.string.rule_title)).assertIsDisplayed()
+        app.onNodeWithText(text(R.string.rule_sets_option, 2)).performScrollTo().performClick()
+        app.onNodeWithContentDescription(text(R.string.action_back)).performClick()
+        app.onNodeWithText(text(R.string.rule_name_fivb)).performScrollTo().assertIsDisplayed()
+
+        // Saved, the choice goes into the draft.
+        app.onNodeWithText(text(R.string.rule_card_change)).performScrollTo().performClick()
+        app.onNodeWithText(text(R.string.rule_sets_option, 2)).performScrollTo().performClick()
+        app.onAllNodesWithText(text(R.string.rule_points_option, 21))[0].performScrollTo().performClick()
+        app.onNodeWithText(text(R.string.action_save_rule)).performClick()
+        app.onNodeWithText(text(R.string.rule_name_custom)).performScrollTo().assertIsDisplayed()
+        app.onNodeWithText(text(R.string.rule_detail, 2, 21, 3, 15)).assertIsDisplayed()
+
+        // The rule stays with the draft on the way to the team step and back, and through a restart.
+        tap(R.string.action_continue)
+        app.onNodeWithText(text(R.string.match_teams_title)).assertIsDisplayed()
+        app.onNodeWithContentDescription(text(R.string.action_back)).performClick()
+        app.onNodeWithText(text(R.string.rule_name_custom)).performScrollTo().assertIsDisplayed()
+        app.activityRule.scenario.recreate()
+        app.onNodeWithText(text(R.string.rule_detail, 2, 21, 3, 15)).performScrollTo().assertIsDisplayed()
     }
 }

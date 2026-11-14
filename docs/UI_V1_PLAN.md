@@ -12,7 +12,7 @@ Tasarım paketinde Figma dosyası yok. Uygulama PNG görsellerini görsel hedef,
 |---|---|---|---|---|
 | 01 | Açılış | Yok | Mor geçişli karşılama, "Başla" | Yeni. Yalnız ilk açılışta görünür. |
 | 02 | Ana ekran | Var, krem tema, 3 sekme | Karşılama satırı, mor "Yeni Maç" kartı, dört liste satırı, 4 sekme | Yeniden düzenlenir. Sayılar gerçek kayıtlardan gelir. |
-| 03 | Maç oluştur | Yalnız iki takım adı | Maç adı, tarih, salon, maç türü | Alanlar eklenir. Hepsi isteğe bağlı ya da varsayılanlıdır. |
+| 03 | Maç oluştur | Yalnız iki takım adı | Maç adı, tarih, salon, maç türü | Alanlar eklenir. Hepsi isteğe bağlı ya da varsayılanlıdır. Maç kuralı (FIVB seçili) ADR-0115 ile geldi. |
 | 04 | Takım ve kadro | İki metin alanı | Kayıtlı takımdan seçim, isteğe bağlı kadro | Yerel takım ve kadro kaydı eklenir. |
 | 05 | Video kaynağı | İki kart, ayrı rehber | Radyo kartları, önerilen ayarlar, tek düğme | Yeniden düzenlenir. Dosya kontrol adımı korunur. |
 | 06 | Kamera kaydı | Sistem kamera uygulaması | Uygulama içi kayıt: süre, duraklat, bitir, kamera değiştir | CameraX ile yeni ekran. |
@@ -166,6 +166,7 @@ Ekip bu bölümü 13 Kasım 2026'da, kodu yazdıktan sonra ekledi. Üstteki böl
 | Rapor | Kararsız ralli uyarısı | Sunucu set skorunu kazananı belli olmayan ilk rallide durdurur. Ekran bunu söyler. |
 | Rapor | "Sayılar alt sınırdır" uyarısı | Analizör ralli kaçırabilir. Sunucu kullanıcı ralli listesini onaylayana kadar raporu `ralliesMayBeMissing` ile işaretler ve ekran bunu yazar. |
 | Ralli listesi ve ralli düzenleyici | UI Tasarım V1 paketinde olmayan iki ekran | Ürün sahibi 14 Kasım 2026'da kullanıcının ralli listesini düzeltmesine izin verdi (ADR-0114). Oturum ekranları mevcut bileşenlerle kurdu. |
+| Maç kuralı ekranı | UI Tasarım V1 paketinde olmayan bir ekran ve iki kart | Ürün sahibi 14 Kasım 2026'da kullanıcının maç kuralını seçmesine karar verdi (ADR-0115). Oturum ekranı mevcut bileşenlerle kurdu. Kart yeni maç ekranında ve ralli listesinde durur. |
 | Ralli düzenleyici | İşaret düğmeleri sabit durur, birleştirme düğmesi kayan bölümdedir | 320 dp telefonda dört sabit düğme konum çubuğunu ve adım düğmelerini ekranın dışına itiyordu. |
 | Ralli düzenleyici | Adım düğmesinin birimi büyük yazıda alt satıra iner | 1,5 kat yazıda "+0,2 sn" yazısı düğmeden taşıyordu. |
 | Yükleme sonrası gezinme | Uygulama analiz ekranında kalır | Cihaz testi şunu buldu: Kontrol ekranı yükleme başlayınca kullanıcıyı ana ekrana atıyordu ve analiz izlenmiyordu. |

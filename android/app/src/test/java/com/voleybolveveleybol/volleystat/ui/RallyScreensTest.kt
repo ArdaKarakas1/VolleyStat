@@ -14,6 +14,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasScrollToNodeAction
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.StateRestorationTester
@@ -24,6 +25,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.test.core.app.ApplicationProvider
@@ -38,6 +40,7 @@ import com.voleybolveveleybol.volleystat.model.AnalysisSummary
 import com.voleybolveveleybol.volleystat.model.EditTarget
 import com.voleybolveveleybol.volleystat.model.LocalVideo
 import com.voleybolveveleybol.volleystat.model.MatchRecord
+import com.voleybolveveleybol.volleystat.model.MatchRules
 import com.voleybolveveleybol.volleystat.model.Rally
 import com.voleybolveveleybol.volleystat.model.RallyList
 import com.voleybolveveleybol.volleystat.model.SetPoint
@@ -113,6 +116,7 @@ class RallyScreensTest {
         val reviews = mutableListOf<String>()
         var confirms = 0
         var retries = 0
+        var ruleChanges = 0
     }
 
     private fun list(analysis: AnalysisUi): ListTaps {
@@ -121,13 +125,14 @@ class RallyScreensTest {
             RalliesScreen(
                 match, analysis, onOpenRally = { taps.rallies += it.id }, onOpenGap = { taps.gaps += it }, onConfirm = { taps.confirms++ },
                 onOpenReview = { taps.reviews += it.id }, onRetry = { taps.retries++ }, onBack = {},
+                onChangeRules = { taps.ruleChanges++ },
             )
         }
         return taps
     }
 
     /** The hint as the screen shows it: with the labels of the button and of the answer it sends the user to. */
-    private val hint get() = text(R.string.rallies_no_hint, text(R.string.action_choose_winner), text(R.string.review_not_a_rally))
+    private val hint get() = text(R.string.rallies_no_hint, text(R.string.rule_card_change), text(R.string.action_choose_winner), text(R.string.review_not_a_rally))
 
     /** The list builds only the rows on screen, so a row further down has to be scrolled to before it exists. */
     private fun reach(text: String) = compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasText(text, substring = true))
@@ -175,7 +180,8 @@ class RallyScreensTest {
         compose.onNodeWithText(check).performClick()
         compose.onNodeWithText(text(R.string.score_check_set, 1, 25, 21)).assertIsDisplayed()
         compose.onNodeWithText(text(R.string.score_check_set_open, 2, 3, 1)).assertIsDisplayed()
-        compose.onNodeWithText(text(R.string.score_check_rule)).assertIsDisplayed()
+        // The decided list was counted with the FIVB rule, and the question names it.
+        compose.onNodeWithText(text(R.string.score_check_rule, text(R.string.rule_counting, 25, 5, 15))).assertIsDisplayed()
         // A dialog is its own window, so the screenshot run can not reach it; this run keeps its picture.
         compose.onNode(isDialog()).captureRoboImage("build/outputs/roborazzi/11_ralli_listesi_skor_denetimi.png")
         compose.onNodeWithText(text(R.string.score_check_unknown)).performClick()
@@ -764,5 +770,55 @@ class RallyScreensTest {
         compose.onNodeWithText(text(R.string.rallies_load_failed)).assertIsDisplayed()
         compose.onNodeWithText(text(R.string.action_retry)).performClick()
         assertEquals(1, retries)
+    }
+
+    // ----- the match rule on the list (ADR-0115) -----
+
+    private val toTwentyOne = MatchRules(2, 21, 15)
+    /** The card merges the texts inside it into itself, so the card is the clickable node that carries its button label. */
+    private val ruleCard get() = hasClickAction() and hasText(text(R.string.rule_card_change), substring = true)
+
+    @Test fun theListNamesTheRuleTheServerCountedWith() {
+        // The match was created with the FIVB rule. The list says the server counts it with another one now, and the list wins.
+        val taps = list(state(decided.copy(rules = toTwentyOne)))
+        reach(text(R.string.rule_card_label))
+        compose.onNodeWithText(text(R.string.rule_name_custom)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.rule_detail, 2, 21, 3, 15)).assertIsDisplayed()
+        assertFalse(shown(text(R.string.rule_name_fivb)))
+        compose.onNode(ruleCard).performClick()
+        assertEquals(1, taps.ruleChanges)
+    }
+
+    @Test fun theRuleCanNotBeChangedWhileSomethingIsOnItsWay() {
+        val taps = list(state(decided, correcting = true))
+        reach(text(R.string.rule_card_label))
+        compose.onNode(ruleCard).assertIsNotEnabled().performClick()
+        assertEquals(0, taps.ruleChanges)
+    }
+
+    @Test fun theScoreCheckNamesTheRuleOfTheListItShows() {
+        val counted = decided.copy(rules = toTwentyOne, sets = listOf(SetScore(1, 21, 18, true), SetScore(2, 3, 1, false)))
+        list(state(counted))
+        compose.onNodeWithText(text(R.string.action_check_score)).performScrollTo().performClick()
+        compose.onNodeWithText(text(R.string.score_check_rule, text(R.string.rule_counting, 21, 3, 15))).assertIsDisplayed()
+        assertFalse("the question never names a rule the list was not counted with", shown(text(R.string.rule_counting, 25, 5, 15)))
+        compose.onNode(isDialog()).captureRoboImage("build/outputs/roborazzi/11_ralli_listesi_skor_denetimi_kural.png")
+    }
+
+    @Test fun afterNoTheHintSendsTheUserToTheRuleFirst() {
+        list(state(decided))
+        compose.onNodeWithText(text(R.string.action_check_score)).performScrollTo().performClick()
+        compose.onNodeWithText(text(R.string.score_check_no)).performClick()
+        compose.onNodeWithText(hint).performScrollTo().assertIsDisplayed()
+        // The hint quotes the button of the rule card by the label the card carries.
+        assertTrue(hint.contains("\"${text(R.string.rule_card_change)}\""))
+        assertTrue(hint.indexOf(text(R.string.rule_card_change)) < hint.indexOf(text(R.string.action_choose_winner)))
+    }
+
+    @Test fun theListOfADemoAnalysisOffersTheRuleToo() {
+        val taps = list(state(decided, mock = true))
+        reach(text(R.string.rule_card_label))
+        compose.onNode(ruleCard).assertIsEnabled().performClick()
+        assertEquals(1, taps.ruleChanges)
     }
 }

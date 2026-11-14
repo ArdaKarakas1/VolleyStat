@@ -52,6 +52,7 @@ import com.voleybolveveleybol.volleystat.CorrectionProblem
 import com.voleybolveveleybol.volleystat.R
 import com.voleybolveveleybol.volleystat.RalliesLoad
 import com.voleybolveveleybol.volleystat.model.MatchRecord
+import com.voleybolveveleybol.volleystat.model.MatchRules
 import com.voleybolveveleybol.volleystat.model.Rally
 import com.voleybolveveleybol.volleystat.model.RallyList
 import com.voleybolveveleybol.volleystat.model.ReviewCard
@@ -169,6 +170,8 @@ fun RalliesScreen(
     onOpenReview: (Rally) -> Unit,
     onRetry: () -> Unit,
     onBack: () -> Unit,
+    /** Opens screen 13 on the rule the server counted this list with. */
+    onChangeRules: () -> Unit = {},
 ) {
     val list = analysis.rallies
     var checking by rememberSaveable { mutableStateOf(false) }
@@ -221,7 +224,7 @@ fun RalliesScreen(
                     }
                 }
             } else {
-                item(key = "state") { ListState(list, analysis, scoresDiffer, onCheck = { checking = true }, onOpenReview = onOpenReview) }
+                item(key = "state") { ListState(list, analysis, scoresDiffer, onCheck = { checking = true }, onOpenReview = onOpenReview, onChangeRules = onChangeRules) }
                 items(lines(list), key = { line ->
                     when (line) {
                         is Line.SetStart -> "set-${line.number}"
@@ -242,7 +245,7 @@ fun RalliesScreen(
     }
     if (checking && list != null) {
         ScoreCheckDialog(
-            list.sets,
+            list.sets, list.rules,
             onYes = { checking = false; scoresDiffer = false; onConfirm() },
             onNo = { checking = false; scoresDiffer = true },
             onUnknown = { checking = false },
@@ -257,7 +260,14 @@ private fun SectionLine(text: String) {
 
 /** The head of the list: how many rallies it holds, what the user can do here, and how far the list is from confirmed. */
 @Composable
-private fun ListState(list: RallyList, analysis: AnalysisUi, scoresDiffer: Boolean, onCheck: () -> Unit, onOpenReview: (Rally) -> Unit) {
+private fun ListState(
+    list: RallyList,
+    analysis: AnalysisUi,
+    scoresDiffer: Boolean,
+    onCheck: () -> Unit,
+    onOpenReview: (Rally) -> Unit,
+    onChangeRules: () -> Unit,
+) {
     val waiting = list.rallies.filter { it.waits }
     // An interval the user called "not a rally" stays on the list, and it is not counted as a rally anywhere.
     val rejected = list.rallies.count { it.status == Rally.REJECTED }
@@ -276,6 +286,8 @@ private fun ListState(list: RallyList, analysis: AnalysisUi, scoresDiffer: Boole
         if (!list.confirmed && list.sets.isNotEmpty() && analysis.job?.mock != true) {
             Text(stringResource(R.string.rallies_scores_lower), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        // The rule the server counted these scores with: the list's own, not the one the match was created with.
+        MatchRulesCard(list.rules, onChangeRules, enabled = !analysis.correcting)
         when {
             list.confirmed -> Notice(stringResource(R.string.rallies_confirmed), Tone.POSITIVE)
             analysis.job?.mock == true -> Notice(stringResource(R.string.rallies_demo), Tone.NEUTRAL)
@@ -285,8 +297,16 @@ private fun ListState(list: RallyList, analysis: AnalysisUi, scoresDiffer: Boole
                 SecondaryButton(stringResource(R.string.action_go_review), onClick = { onOpenReview(waiting.first()) }, icon = R.drawable.ic_fact_check)
             }
             else -> {
-                // The hint sends the user to a button and to an answer. It quotes both by their own labels.
-                if (scoresDiffer) Notice(stringResource(R.string.rallies_no_hint, stringResource(R.string.action_choose_winner), stringResource(R.string.review_not_a_rally)), Tone.NEUTRAL)
+                // The hint sends the user to the rule, to a button and to an answer. It quotes each by its own label.
+                if (scoresDiffer) {
+                    Notice(
+                        stringResource(
+                            R.string.rallies_no_hint, stringResource(R.string.rule_card_change),
+                            stringResource(R.string.action_choose_winner), stringResource(R.string.review_not_a_rally),
+                        ),
+                        Tone.NEUTRAL,
+                    )
+                }
                 // Without one counted rally the server has no set score to show, and it would refuse the confirmation.
                 PrimaryButton(stringResource(R.string.action_check_score), onCheck, enabled = !analysis.correcting && list.sets.isNotEmpty(), icon = R.drawable.ic_task_alt)
             }
@@ -354,7 +374,7 @@ private fun GapRow(gap: Line.Gap, enabled: Boolean, onClick: () -> Unit) {
  * confirms. "No" and "I do not know" leave every number a lower bound.
  */
 @Composable
-fun ScoreCheckDialog(sets: List<SetScore>, onYes: () -> Unit, onNo: () -> Unit, onUnknown: () -> Unit) {
+fun ScoreCheckDialog(sets: List<SetScore>, rules: MatchRules, onYes: () -> Unit, onNo: () -> Unit, onUnknown: () -> Unit) {
     AlertDialog(
         onDismissRequest = onUnknown,
         title = { Text(stringResource(R.string.score_check_title)) },
@@ -369,7 +389,8 @@ fun ScoreCheckDialog(sets: List<SetScore>, onYes: () -> Unit, onNo: () -> Unit, 
                         )
                     }
                 }
-                Text(stringResource(R.string.score_check_rule), style = MaterialTheme.typography.bodySmall)
+                // The rule of the list these scores were counted with, by name: a rule of another match would make the "yes" mean nothing.
+                Text(stringResource(R.string.score_check_rule, ruleCounting(rules)), style = MaterialTheme.typography.bodySmall)
                 Text(stringResource(R.string.score_check_question), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
             }
         },

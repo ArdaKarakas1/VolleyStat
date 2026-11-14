@@ -348,17 +348,17 @@
     <string name="rallies_gap">%1$s boşluk</string>
     <string name="rallies_gap_add">Ralli ekle</string>
     <string name="rallies_confirm_sending">Uygulama onayı sunucuya gönderiyor</string>
-    <string name="rallies_confirmed">Sen bu listenin videodaki bütün rallileri içerdiğini onayladın. Listeyi ya da bir kazananı değiştirirsen onay düşer.</string>
+    <string name="rallies_confirmed">Sen bu listenin videodaki bütün rallileri içerdiğini onayladın. Listeyi, bir kazananı ya da maç kuralını değiştirirsen onay düşer.</string>
     <string name="rallies_demo">Uygulama deneme analizinin listesini onaylatmaz. Sunucu bu aralıkları uydurdu, bu yüzden buradaki skorlar gerçek maç hakkında bilgi vermez.</string>
     <string name="rallies_not_ready">Skoru denetlemek için önce her rallinin kazananını seç. %1$d ralli kararını bekliyor.</string>
-    <string name="rallies_no_hint">Skor tutmuyorsa listede eksik ya da fazla bir ralli vardır. Skorun bozulduğu ilk sete bak. Uzun bir boşluk kaçan bir ralliyi, uzun bir ralli birleşmiş iki ralliyi gösterebilir. Hakem bir ralliyi tekrarlattıysa o ralliye dokun, \"%1$s\" düğmesine bas ve \"%2$s\" yanıtını ver.</string>
+    <string name="rallies_no_hint">Skor tutmuyorsa önce maç kuralına bak. Takımlar maçı başka bir kuralla oynadıysa \"%1$s\" düğmesine bas. Kural doğruysa listede eksik ya da fazla bir ralli vardır. Skorun bozulduğu ilk sete bak. Uzun bir boşluk kaçan bir ralliyi, uzun bir ralli birleşmiş iki ralliyi gösterebilir. Hakem bir ralliyi tekrarlattıysa o ralliye dokun, \"%2$s\" düğmesine bas ve \"%3$s\" yanıtını ver.</string>
     <string name="action_check_score">Skoru Denetle</string>
     <string name="action_go_review">Doğrulamaya Git</string>
     <string name="score_check_title">Set skorları doğru mu?</string>
     <string name="score_check_intro">Sunucu listedeki rallileri şu skorla saydı:</string>
     <string name="score_check_set">%1$d. set: %2$d - %3$d</string>
     <string name="score_check_set_open">%1$d. set: %2$d - %3$d (kurala göre bitmedi)</string>
-    <string name="score_check_rule">Sunucu seti 25 sayıda, beşinci seti 15 sayıda ve iki farkla bitirir. Maçı başka bir kuralla oynadıysan bu skorlar tutmaz.</string>
+    <string name="score_check_rule">%1$s Takımlar maçı başka bir kuralla oynadıysa bu skorlar tutmaz.</string>
     <string name="score_check_question">Bu skorlar maçta oynanan skorlarla aynı mı?</string>
     <string name="score_check_yes">Evet, Aynı</string>
     <string name="score_check_no">Hayır</string>
@@ -419,7 +419,7 @@
     <string name="report_verification_draft">Taslak</string>
     <string name="report_verification_partial">Bir kısmını doğruladın</string>
     <string name="report_verification_done">Senin kararlarınla tamamlandı</string>
-    <string name="report_rules">Skor kuralı: Set 25 sayıda, beşinci set 15 sayıda ve iki farkla biter.</string>
+    <string name="report_rules">Skor kuralı: %1$s</string>
     <string name="report_set_open">%1$d. set sürüyor</string>
     <string name="report_may_miss">Rapor yalnızca listedeki rallileri sayar. Listede olmayan bir rallinin sayısı raporda yoktur. Sen ralli listesini onaylayınca set skorunun ve \"Sayı\" satırının artı işareti kalkar. Sayı türü satırlarının artı işareti, sen her sayının türünü seçince kalkar.</string>
     <string name="report_may_miss_demo">Rapor yalnızca listedeki rallileri sayar. Sunucu bu aralıkları uydurdu, bu yüzden sayılar gerçek maç hakkında bilgi vermez.</string>
@@ -508,4 +508,30 @@
     <string name="recording_delete_title">Bu kaydı sileyim mi?</string>
     <string name="recording_delete_body">Uygulama %1$s dosyasını telefondan siler. Dosyanın başka kopyası yoksa kayıt geri gelmez.</string>
     <string name="profile_version">Sürüm %1$s</string>
+
+    <!-- 13: the match rule (ADR-0115). The server counts the sets with it; the phone counts nothing. -->
+    <string name="rule_card_label">Maç kuralı</string>
+    <string name="rule_card_change">Kuralı değiştir</string>
+    <string name="rule_name_fivb">FIVB kuralı</string>
+    <string name="rule_name_custom">Senin seçtiğin kural</string>
+    <!-- A number stays on the line of its noun (no-break spaces), so a narrow card breaks the line only between the parts. -->
+    <string name="rule_detail">%1$d\u00A0set alan kazanır · Set\u00A0%2$d\u00A0sayı · %3$d.\u00A0set\u00A0%4$d\u00A0sayı</string>
+    <string name="rule_detail_same">%1$d\u00A0set alan kazanır · Her set\u00A0%2$d\u00A0sayı</string>
+    <string name="rule_title">Maç Kuralı</string>
+    <string name="rule_intro">Sunucu set skorlarını bu kurala göre sayar.</string>
+    <string name="rule_later">Kuralı analizden sonra ralli listesinden de değiştirebilirsin.</string>
+    <string name="rule_keeps_answers">Verdiğin kararlar ve yaptığın düzeltmeler kalır. Sunucu yalnız setleri yeni kurala göre yeniden sayar.</string>
+    <string name="rule_drops_confirmation">Sen bu listeyi onayladın. Kuralı değiştirirsen onay düşer ve rapordaki sayılar yeniden alt sınır olur.</string>
+    <string name="rule_sets_question">Maçı kaç set alan takım kazanır?</string>
+    <string name="rule_sets_option">%1$d set</string>
+    <string name="rule_sets_option_fivb">%1$d set (FIVB)</string>
+    <string name="rule_points_question">Set kaç sayıda biter?</string>
+    <string name="rule_deciding_question">Karar seti (%1$d. set) kaç sayıda biter?</string>
+    <string name="rule_points_option">%1$d sayı</string>
+    <string name="rule_points_option_fivb">%1$d sayı (FIVB)</string>
+    <string name="rule_counting">Sunucu seti %1$d sayıda, %2$d. seti %3$d sayıda ve iki farkla bitirir.</string>
+    <string name="rule_counting_same">Sunucu her seti %1$d sayıda ve iki farkla bitirir.</string>
+    <string name="action_save_rule">Kuralı Kaydet</string>
+    <string name="rule_sending">Uygulama kuralı sunucuya gönderiyor</string>
+    <string name="rule_refused">Sunucu bu kuralı kabul etmedi.</string>
 </resources>

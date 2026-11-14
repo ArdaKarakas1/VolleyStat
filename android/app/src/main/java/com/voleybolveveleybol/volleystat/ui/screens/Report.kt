@@ -267,7 +267,10 @@ fun ReportScreen(
                             stringResource(if (report.corrections > 0) R.string.report_source_corrected else R.string.report_source, report.analyzerId, report.analyzerKind),
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        Text(stringResource(R.string.report_rules), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        // The rule the server counted this report's set score with. Without one the report names none.
+                        report.rules?.let { rules ->
+                            Text(stringResource(R.string.report_rules, ruleCounting(rules)), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
                 }
             }
