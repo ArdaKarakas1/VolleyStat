@@ -403,6 +403,9 @@
     <string name="correction_demo">Sunucu deneme analizinde liste onayını kaydetmez.</string>
     <string name="correction_unreachable">Uygulama sunucuya ulaşamadı. Sunucunun açık olduğunu denetle ve yeniden dene.</string>
     <string name="correction_refused">Sunucu bu düzeltmeyi kabul etmedi.</string>
+    <!-- The rally list sends a confirmation, not a correction. Its refusals name the step the user repeats there. -->
+    <string name="rallies_confirm_stale">Sunucudaki liste değişmiş. Uygulama listeyi yeniden yükledi. Skoru yeniden denetle.</string>
+    <string name="rallies_confirm_refused">Sunucu onayını kaydetmedi.</string>
     <string name="definitions_open">Sayı türlerinin tanımlarını aç</string>
     <string name="definitions_title">Sayı Türleri</string>
     <string name="define_attack">Takım sayıyı hücum vuruşuyla doğrudan alır. Top bloğa çarpıp dışarı çıkarsa ya da rakip savunduğu topu oyunda tutamazsa sayı yine hücum sayısıdır.</string>

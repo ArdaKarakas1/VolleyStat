@@ -191,13 +191,13 @@ def test_setting_the_rule_the_match_already_has_changes_nothing(best_of_three):
     assert listing(client, job_id)["listConfirmed"] is True
 
 
-# The later change differs from the rule the late request names in every field, or in exactly one of them.
+# The later change differs from the rule the late request names in two fields, or in exactly one of them.
 @pytest.mark.parametrize("later", [
     FIVB,
     {**BEST_OF_THREE_TO_21, "setsToWin": 3},
     {**BEST_OF_THREE_TO_21, "setTarget": 25},
     {**BEST_OF_THREE_TO_21, "decidingSetTarget": 25},
-], ids=["every-field", "sets-to-win", "set-target", "deciding-target"])
+], ids=["two-fields", "sets-to-win", "set-target", "deciding-target"])
 def test_a_late_request_for_a_rule_does_not_undo_a_later_change(best_of_three, later):
     client, match_id, job_id, storage = best_of_three
     # The phone asked for "every set to 15" and gave up waiting. The user then chose another rule, which landed.

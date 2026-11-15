@@ -275,10 +275,7 @@ class ScreenshotTest {
         shotOn("kucuk_11_ralli_listesi", "+w320dp-h568dp-port", content = screen(listState(waitingList)))
         shotOn("buyuk_yazi_11_ralli_listesi", "+w411dp-h891dp-port", fontScale = 1.5f, content = screen(listState(waitingList)))
         shotOn("kucuk_buyuk_yazi_11_ralli_listesi_kural", "+w320dp-h568dp-port", fontScale = 1.5f, content = screen(listState(decidedList.copy(rules = MatchRules(2, 21, 15)))))
-        // What became of a confirmation on the same phone. The list has brought the line and its button onto the screen.
-        val custom = listState(decidedList.copy(rules = MatchRules(2, 21, 15)))
-        shotOn("kucuk_buyuk_yazi_11_ralli_listesi_gonderiliyor", "+w320dp-h568dp-port", fontScale = 1.5f, content = screen(custom.copy(correcting = true)))
-        shotOn("kucuk_buyuk_yazi_11_ralli_listesi_ret", "+w320dp-h568dp-port", fontScale = 1.5f, content = screen(custom.copy(correctionProblem = CorrectionProblem.STALE)))
+        // The same phone after a confirmation: RallyScreensTest keeps those two pictures, because the list moves there.
     }
 
     @Test fun s12_editor() {

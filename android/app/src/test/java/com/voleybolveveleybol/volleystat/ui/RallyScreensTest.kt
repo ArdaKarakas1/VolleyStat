@@ -286,7 +286,33 @@ class RallyScreensTest {
     @Test fun aRefusedConfirmationNamesItsCauseOnTheList() {
         list(state(decided, problem = CorrectionProblem.STALE))
         // A screen reader says the refusal when it appears.
-        compose.onNodeWithText(text(R.string.correction_stale)).assertIsDisplayed().assert(announced)
+        compose.onNodeWithText(text(R.string.rallies_confirm_stale)).assertIsDisplayed().assert(announced)
+    }
+
+    @Test fun theListWordsARefusalAsAConfirmationAndNotAsACorrection() {
+        // The list sends one thing, the confirmation. A line that says "redo the correction" would send the user
+        // back to a split or a merge the server has already applied.
+        var problem by mutableStateOf(CorrectionProblem.STALE)
+        show { RalliesScreen(match, state(decided, problem = problem), onOpenRally = {}, onOpenGap = {}, onConfirm = {}, onOpenReview = {}, onRetry = {}, onBack = {}) }
+        compose.onNodeWithText(text(R.string.rallies_confirm_stale)).assertIsDisplayed()
+        assertFalse(shown(text(R.string.correction_stale)))
+
+        problem = CorrectionProblem.REFUSED
+        compose.waitForIdle()
+        compose.onNodeWithText(text(R.string.rallies_confirm_refused)).assertIsDisplayed()
+        assertFalse(shown(text(R.string.correction_refused)))
+    }
+
+    @Test fun theEditorWordsAStaleListAndARefusalAsACorrection() {
+        var problem by mutableStateOf(CorrectionProblem.STALE)
+        show { RallyEditorScreen(rallyTarget(four, "r2")!!, state(four, problem = problem), FakeControl(20_000).video, { _, _ -> }, {}, {}, { _, _ -> }, onBack = {}) }
+        compose.onNodeWithText(text(R.string.correction_stale)).assertIsDisplayed()
+        assertFalse(shown(text(R.string.rallies_confirm_stale)))
+
+        problem = CorrectionProblem.REFUSED
+        compose.waitForIdle()
+        compose.onNodeWithText(text(R.string.correction_refused)).assertIsDisplayed()
+        assertFalse(shown(text(R.string.rallies_confirm_refused)))
     }
 
     @Test fun theListSaysWhatBecameOfTheConfirmationNextToItsButtonAndReportsItToAScreenReader() {
@@ -306,42 +332,94 @@ class RallyScreensTest {
         announcements.reset()
         correcting = false
         problem = CorrectionProblem.STALE
-        assertEquals(listOf(text(R.string.correction_stale)), announcements.heard())
-        val refusal = compose.onNodeWithText(text(R.string.correction_stale)).getUnclippedBoundsInRoot()
+        assertEquals(listOf(text(R.string.rallies_confirm_stale)), announcements.heard())
+        val refusal = compose.onNodeWithText(text(R.string.rallies_confirm_stale)).getUnclippedBoundsInRoot()
         assertTrue(refusal.top >= compose.onNode(ruleCard).getUnclippedBoundsInRoot().bottom)
         assertTrue(refusal.bottom <= compose.onNodeWithText(text(R.string.action_check_score)).getUnclippedBoundsInRoot().top)
     }
 
+    /**
+     * The list on a 320x568 dp phone at 1.5x text, with a rule whose name is long. The bottom edge of the
+     * first screen cuts the "Skoru Denetle" button there.
+     */
+    private fun smallList(analysis: () -> AnalysisUi) = show {
+        CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, 1.5f)) {
+            RalliesScreen(match, analysis(), onOpenRally = {}, onOpenGap = {}, onConfirm = {}, onOpenReview = {}, onRetry = {}, onBack = {})
+        }
+    }
+    private val custom get() = decided.copy(rules = MatchRules(2, 21, 15))
+    private fun place(label: String) = compose.onNodeWithText(label).getUnclippedBoundsInRoot()
+    private val listTop get() = compose.onNode(hasScrollToNodeAction()).getUnclippedBoundsInRoot().top
+    private val firstLine get() = text(R.string.rallies_count_rejected, 3, 1)
+
     @Config(sdk = [35], qualifiers = "w320dp-h568dp-xhdpi")
     @Test fun onASmallPhoneWithLargeTextTheListBringsWhatBecameOfTheConfirmationOntoTheScreen() {
-        // A 320x568 dp phone at 1.5x text and a rule with a long name: the button stands at the bottom edge of
-        // the first screen. A line that opens above it pushes the button down, and itself with it.
+        // A line that opens above the button pushes the button down, and most of itself with it.
         var correcting by mutableStateOf(false)
         var problem by mutableStateOf<CorrectionProblem?>(null)
-        show {
-            CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, 1.5f)) {
-                RalliesScreen(
-                    match, state(decided.copy(rules = MatchRules(2, 21, 15)), correcting = correcting, problem = problem),
-                    onOpenRally = {}, onOpenGap = {}, onConfirm = {}, onOpenReview = {}, onRetry = {}, onBack = {},
-                )
-            }
-        }
+        smallList { state(custom, correcting = correcting, problem = problem) }
         val screen = compose.onRoot().getUnclippedBoundsInRoot()
-        val title = compose.onNodeWithText(text(R.string.rallies_title)).getUnclippedBoundsInRoot()
-        fun bounds(label: String) = compose.onNodeWithText(label).getUnclippedBoundsInRoot()
         val button = text(R.string.action_check_score)
-        assertTrue("the test starts where the button reaches the bottom edge", bounds(button).bottom > screen.bottom - 8.dp)
+        assertTrue("the test starts where the bottom edge cuts the button", place(button).bottom > screen.bottom)
 
+        // The list moves as far as the line and its button need and no further.
+        fun settled(line: String) {
+            assertTrue("the whole line is on the screen", place(line).top >= listTop)
+            assertEquals("the button ends at the bottom edge", screen.bottom.value, place(button).bottom.value, 1f)
+            assertTrue("the rule card above the line stays whole", compose.onNode(ruleCard).getUnclippedBoundsInRoot().top >= listTop)
+        }
         correcting = true
         compose.waitForIdle()
-        assertTrue("the whole sending line is on the screen", bounds(text(R.string.rallies_confirm_sending)).let { it.top >= title.bottom && it.bottom <= screen.bottom })
-        assertTrue("and so is the button it belongs to", bounds(button).bottom <= screen.bottom)
+        settled(text(R.string.rallies_confirm_sending))
+        // The screenshot run draws a screen once, so it can not show a list that moved. This run keeps the pictures.
+        compose.onRoot().captureRoboImage("build/outputs/roborazzi/kucuk_buyuk_yazi_11_ralli_listesi_gonderiliyor.png")
 
         correcting = false
         problem = CorrectionProblem.STALE
         compose.waitForIdle()
-        assertTrue("the whole refusal is on the screen", bounds(text(R.string.correction_stale)).let { it.top >= title.bottom && it.bottom <= screen.bottom })
-        assertTrue("and so is the button for the next attempt", bounds(button).bottom <= screen.bottom)
+        settled(text(R.string.rallies_confirm_stale))
+        compose.onRoot().captureRoboImage("build/outputs/roborazzi/kucuk_buyuk_yazi_11_ralli_listesi_ret.png")
+    }
+
+    @Config(sdk = [35], qualifiers = "w320dp-h568dp-xhdpi")
+    @Test fun aListThatOpensWithALineStaysAtItsTopAndALineThatGoesMovesNothing() {
+        // The editor can leave a refusal behind for the frame in which the list opens. Nothing happened on
+        // this screen, so the list shows its top, as it does on every other opening.
+        var problem by mutableStateOf<CorrectionProblem?>(CorrectionProblem.STALE)
+        smallList { state(custom, problem = problem) }
+        val screen = compose.onRoot().getUnclippedBoundsInRoot()
+        val start = place(firstLine).top
+        assertTrue("the list shows its top", start >= listTop)
+        assertTrue("the refusal lies under the bottom edge", place(text(R.string.rallies_confirm_stale)).bottom > screen.bottom)
+
+        problem = null
+        compose.waitForIdle()
+        assertEquals("the list has not moved", start.value, place(firstLine).top.value, 0.5f)
+        assertTrue("the bottom edge still cuts the button", place(text(R.string.action_check_score)).bottom > screen.bottom)
+    }
+
+    @Config(sdk = [35], qualifiers = "w320dp-h568dp-xhdpi")
+    @Test fun aUserWhoScrolledAwayIsLeftAloneAndFindsTheRefusalAtTheTopOfTheList() {
+        var correcting by mutableStateOf(false)
+        var problem by mutableStateOf<CorrectionProblem?>(null)
+        smallList { state(custom, correcting = correcting, problem = problem) }
+        correcting = true
+        compose.waitForIdle()
+        // While the answer is on its way the user scrolls down to the last rally, and the head leaves the list.
+        val lastRow = "00:48 · 8 sn"
+        reach(lastRow)
+        assertFalse("the head is not built any more", shown(firstLine))
+        val row = place(lastRow).top
+
+        correcting = false
+        problem = CorrectionProblem.STALE
+        compose.waitForIdle()
+        assertEquals("the list stays where the user put it", row.value, place(lastRow).top.value, 0.5f)
+
+        // Back at the top the refusal waits above its button.
+        reach(firstLine)
+        compose.waitForIdle()
+        compose.onNodeWithText(text(R.string.rallies_confirm_stale)).assertExists()
     }
 
     @Test fun theEditorReportsACorrectionOnItsWayAndItsRefusalToAScreenReader() {

@@ -39,8 +39,10 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -74,6 +76,7 @@ import com.voleybolveveleybol.volleystat.ui.formatClock
 import com.voleybolveveleybol.volleystat.ui.formatDuration
 import com.voleybolveveleybol.volleystat.ui.theme.Dimens
 import com.voleybolveveleybol.volleystat.ui.theme.LocalVsColors
+import kotlinx.coroutines.flow.drop
 
 /** One line of the rally list: the start of a set, the place where the count stops, a rally, or the time between two rallies. */
 private sealed interface Line {
@@ -108,23 +111,26 @@ private fun lines(list: RallyList): List<Line> = buildList {
     while (next < pauses.size) pauses[next++].let { add(Line.Gap(it.windowStartMs, it.windowEndMs)) }
 }
 
-/** What a correction problem says, on every screen that can run into one. */
+/**
+ * What a correction problem says, on every screen that can run into one. The rally list sends a
+ * confirmation and no correction, so it words the two general refusals for that step.
+ */
 @Composable
-fun correctionProblemText(analysis: AnalysisUi): String? = when (analysis.correctionProblem) {
+fun correctionProblemText(analysis: AnalysisUi, confirmation: Boolean = false): String? = when (analysis.correctionProblem) {
     null -> null
-    CorrectionProblem.STALE -> stringResource(R.string.correction_stale)
+    CorrectionProblem.STALE -> stringResource(if (confirmation) R.string.rallies_confirm_stale else R.string.correction_stale)
     CorrectionProblem.OVERLAP -> analysis.overlapsRally?.let { stringResource(R.string.correction_overlap, it) } ?: stringResource(R.string.correction_overlap_unknown)
     CorrectionProblem.OUTSIDE -> stringResource(R.string.correction_outside)
     CorrectionProblem.NOT_READY -> stringResource(R.string.correction_not_ready)
     CorrectionProblem.DEMO -> stringResource(R.string.correction_demo)
     CorrectionProblem.UNREACHABLE -> stringResource(R.string.correction_unreachable)
-    CorrectionProblem.REFUSED -> stringResource(R.string.correction_refused)
+    CorrectionProblem.REFUSED -> stringResource(if (confirmation) R.string.rallies_confirm_refused else R.string.correction_refused)
 }
 
 @Composable
-private fun CorrectionProblemNotice(analysis: AnalysisUi) {
+private fun CorrectionProblemNotice(analysis: AnalysisUi, confirmation: Boolean) {
     // After STALE the app has already read the list again, so nothing is wrong any more: the user repeats the step.
-    correctionProblemText(analysis)?.let { Notice(it, if (analysis.correctionProblem == CorrectionProblem.STALE) Tone.CAUTION else Tone.NEGATIVE, Modifier.announced()) }
+    correctionProblemText(analysis, confirmation)?.let { Notice(it, if (analysis.correctionProblem == CorrectionProblem.STALE) Tone.CAUTION else Tone.NEGATIVE, Modifier.announced()) }
 }
 
 /**
@@ -132,9 +138,9 @@ private fun CorrectionProblemNotice(analysis: AnalysisUi) {
  * why the server did not apply it. Each line is reported to a screen reader when it appears.
  */
 @Composable
-fun CorrectionStatus(analysis: AnalysisUi, @StringRes sending: Int) {
+fun CorrectionStatus(analysis: AnalysisUi, @StringRes sending: Int, confirmation: Boolean = false) {
     if (analysis.correcting) ProgressLine(sending)
-    CorrectionProblemNotice(analysis)
+    CorrectionProblemNotice(analysis, confirmation)
 }
 
 /** The words for a match that has no job to work on. */
@@ -196,6 +202,21 @@ fun RalliesScreen(
     val scoresDiffer = list != null && noAt == list.version
     // The confirmation is sent from here. Until its answer is there the user stays, so a refusal is not lost.
     BackHandler(enabled = analysis.correcting) {}
+    // What becomes of the confirmation opens above the button that sent it. On a small screen with large text
+    // that button stands at the bottom edge, and the line would push the button, and most of itself, under
+    // that edge. So the list brings both onto the screen when the line appears or changes. A line the screen
+    // opened with is not news, and a user who scrolled the head away meanwhile is left where they are.
+    val statusPlace = remember { BringIntoViewRequester() }
+    val shown by rememberUpdatedState(analysis)
+    LaunchedEffect(Unit) {
+        snapshotFlow { shown.correcting to shown.correctionProblem }.drop(1).collect { (correcting, problem) ->
+            if (correcting || problem != null) {
+                // The line is measured in the frame after the one that composed it.
+                withFrameNanos { }
+                statusPlace.bringIntoView()
+            }
+        }
+    }
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
         containerColor = MaterialTheme.colorScheme.background,
@@ -241,7 +262,7 @@ fun RalliesScreen(
                     }
                 }
             } else {
-                item(key = "state") { ListState(list, analysis, scoresDiffer, onCheck = { checking = true }, onOpenReview = onOpenReview, onChangeRules = onChangeRules) }
+                item(key = "state") { ListState(list, analysis, scoresDiffer, statusPlace, onCheck = { checking = true }, onOpenReview = onOpenReview, onChangeRules = onChangeRules) }
                 items(lines(list), key = { line ->
                     when (line) {
                         is Line.SetStart -> "set-${line.number}"
@@ -281,6 +302,8 @@ private fun ListState(
     list: RallyList,
     analysis: AnalysisUi,
     scoresDiffer: Boolean,
+    /** Where the line about the confirmation and its button stand, for the screen to bring onto the screen. */
+    statusPlace: BringIntoViewRequester,
     onCheck: () -> Unit,
     onOpenReview: (Rally) -> Unit,
     onChangeRules: () -> Unit,
@@ -303,20 +326,9 @@ private fun ListState(
         }
         // The rule the server counted these scores with: the list's own, not the one the match was created with.
         MatchRulesCard(list.rules, onChangeRules, enabled = !analysis.correcting)
-        // What became of the confirmation stands next to the button that sent it, and the list brings both
-        // onto the screen. On a small screen with large text the button stands at the bottom edge: a line
-        // that opens above it would push the button, and most of itself, under that edge.
-        val statusPlace = remember { BringIntoViewRequester() }
-        val status = analysis.correcting || analysis.correctionProblem != null
-        LaunchedEffect(analysis.correcting, analysis.correctionProblem) {
-            if (status) {
-                // The line is measured in the frame after the one that composed it.
-                withFrameNanos { }
-                statusPlace.bringIntoView()
-            }
-        }
+        // What became of the confirmation stands next to the button that sent it.
         Column(Modifier.bringIntoViewRequester(statusPlace), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            CorrectionStatus(analysis, R.string.rallies_confirm_sending)
+            CorrectionStatus(analysis, R.string.rallies_confirm_sending, confirmation = true)
             when {
                 list.confirmed -> Notice(stringResource(R.string.rallies_confirmed), Tone.POSITIVE)
                 analysis.job?.mock == true -> Notice(stringResource(R.string.rallies_demo), Tone.NEUTRAL)
