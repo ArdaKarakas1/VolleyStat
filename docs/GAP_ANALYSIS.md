@@ -44,10 +44,10 @@ Depoda eğitilmiş model yok. Kimse hiçbir yapay zekâ bileşeninin doğruluğu
 | # | Ekran | Durum | Açıklama |
 |---|---|---|---|
 | 01 | Açılış | TEST EDİLDİ (JVM) | Yalnız ilk açılışta görünür. |
-| 02 | Ana ekran | TEST EDİLDİ (JVM) | Yeni maç kartı, devam eden maçlar, dört liste satırı. Sayılar gerçek kayıtlardan gelir. |
+| 02 | Ana ekran | TEST EDİLDİ (JVM) | Yeni maç kartı, devam eden maçlar, dört liste satırı. Sayılar gerçek kayıtlardan gelir. Yarım kalan kurulumun kartı FIVB dışındaki kuralı adıyla yazar. |
 | 03 | Maç oluştur | TEST EDİLDİ (JVM) | Ad, tarih, salon ve tür isteğe bağlıdır. Maç kuralı FIVB seçili gelir. |
 | 04 | Takım ve kadro | TEST EDİLDİ (JVM) | Kayıtlı takımdan seçim, yeni takım, kadro. |
-| 05 | Video kaynağı | TEST EDİLDİ (JVM) | Kamera ya da galeri. Ardından telefonun okuduğu dosya bilgileri ve hak beyanı. |
+| 05 | Video kaynağı | TEST EDİLDİ (JVM) | Kamera ya da galeri. Ardından telefonun okuduğu dosya bilgileri ve hak beyanı. Maçın kuralı FIVB kuralı değilse kural kartı hak beyanının hemen üstünde durur. |
 | 06 | Maç kaydı | TEST EDİLDİ (JVM, CI emülatörü) | Çizim ve izin akışı JVM'de, kayıt emülatörde testli. Gerçek telefonda deneme yok. |
 | 07 | Yükleme ve analiz durumu | TEST EDİLDİ (JVM, gerçek sunucu) | |
 | 08 | Belirsiz olay doğrulama | TEST EDİLDİ (JVM, gerçek sunucu, CI emülatörü) | Klip oynatma emülatörde testli. |
@@ -114,12 +114,12 @@ Sayılar son yerel koşudan gelir. CI aynı testleri her PR'da çalıştırır.
 
 | Kanıt | Sonuç |
 |---|---|
-| Arka uç `pytest` | 581 test geçti (yerelde Python 3.13). CI aynı testleri Python 3.12 ile çalıştırır. |
+| Arka uç `pytest` | 582 test geçti (yerelde Python 3.13). CI aynı testleri Python 3.12 ile çalıştırır. |
 | `ml` `pytest` | 239 test geçti (yerel ve CI) |
-| Android JVM testleri (`:core:test`, `:app:testDebugUnitTest`) | 251 test geçti, hiçbiri atlanmadı (yerel): `:core` 5, `:app` 246. Testler 84 ekran görüntüsü üretti. |
-| Uygulama gerçek sunucuya karşı (JVM) | 11 test geçti (yerel): `BackendE2eTest` 7, `AppFlowE2eTest` 1, `AppUploadFlowE2eTest` 1, `RallyFixE2eTest` 2. Bu on bir test yukarıdaki 251 testin içindedir. İkisi ralli düzeltmeyi dener: biri API istemcisinden, öbürü ekranlardan. İkisi maç kuralını dener. Biri API istemcisinden gider: Kural maçla gider, sunucu sunulan 18 kuralın hepsini kabul eder, listede yeni kuralı verir ve eski kurala dayanan geç bir isteği reddeder. Öbürü kuralı ekranlardan değiştirir. Bu iki test hiçbir set sınırına ulaşmaz. Setleri kuralla sayan rotaları sunucu testleri dener. |
+| Android JVM testleri (`:core:test`, `:app:testDebugUnitTest`) | 260 test geçti, hiçbiri atlanmadı (yerel): `:core` 5, `:app` 255. Testler 86 ekran görüntüsü üretti. |
+| Uygulama gerçek sunucuya karşı (JVM) | 11 test geçti (yerel): `BackendE2eTest` 7, `AppFlowE2eTest` 1, `AppUploadFlowE2eTest` 1, `RallyFixE2eTest` 2. Bu on bir test yukarıdaki 260 testin içindedir. İkisi ralli düzeltmeyi dener: biri API istemcisinden, öbürü ekranlardan. İkisi maç kuralını dener. Biri API istemcisinden gider: Kural maçla gider, sunucu sunulan 18 kuralın hepsini kabul eder, listede yeni kuralı verir ve eski kurala dayanan geç bir isteği reddeder. Öbürü kuralı ekranlardan değiştirir. Bu iki test hiçbir set sınırına ulaşmaz. Setleri kuralla sayan rotaları sunucu testleri dener. |
 | Lint | 0 hata |
-| Mutasyon sınaması (sürüm 0.6.0) | Oturum maç kuralının sunucudaki 41 kuralını ve uygulamadaki 68 kuralını tek tek bozdu. Testler son kodda bir bozma dışında hepsini yakalar. Kalan bozma kural ekranından geri dönerken ret uyarısını temizlemeyi atlar. Ralli listesi o uyarıyı açılırken kendisi temizler, bu yüzden uyarı yalnız bir kare görünür ve hiçbir test o kareyi göremez. Üç bozma ilk koşusunda yakalanmadı ve iki test boşluğunu gösterdi. Oturum o boşlukları kapattı. |
+| Mutasyon sınaması (sürüm 0.6.0) | Oturum maç kuralının sunucudaki 44 kuralını tek tek bozdu ve testler son kodda 44 bozmanın hepsini yakaladı. Uygulamada oturum önceki turlarda 68 kuralı tek tek bozdu ve testler biri dışında hepsini yakaladı. Kalan bozma kural ekranından geri dönerken ret uyarısını temizlemeyi atlar. Ralli listesi o uyarıyı açılırken kendisi temizler, bu yüzden uyarı yalnız bir kare görünür ve hiçbir test o kareyi göremez. Oturum uygulamadaki bozmaları bu turun koduyla yeniden koşuyor ve sonucu bu satıra yazacak. |
 | Mutasyon sınaması (sürüm 0.5.0) | Oturum ralli düzeltmenin uygulamadaki 161 kuralını ve sunucudaki 9 kuralını tek tek bozdu. Testler son kodda bozmaların hepsini yakalar. Beş bozma ilk koşusunda yakalanmadı ve dört test boşluğunu gösterdi. Oturum o boşlukları kapattı. |
 | Emülatörde cihaz testleri (CI, API 34) | 2 test: kamera kaydı ve baştan sona akış (yeni maç, kayıt, yükleme, dosya kontrolü, deneme analizi, sunucudan klip, ralli düzenleyicide gerçek oynatıcıyla bitiş taşıma, karar, rapor). İlk iki koşu kırmızıydı ve uygulamada gerçek bir gezinme hatasını gösterdi. Düzenleyici adımı sürüm 0.5.0 ile geldi. |
 | Gerçek telefonda deneme | **Yok.** |
@@ -139,7 +139,7 @@ Ayrı inceleyiciler üç parçayı ve yapay zekâ planını okudu. Ayrı bir do�
 | Android uygulaması (sürüm 0.4.0) | 21 | Doğrulayıcı 19 bulguyu doğruladı ve 2 bulguyu reddetti. Doğrulanan 19 bulgu sürüm 0.4.1 ile düzeldi. Reddedilen bulgulardan biri metin kuralıydı ve o metinler de düzeldi. Öbürü uygulanmadı: "Oyuncusu belli olmayan sayı" alt sınır değildir, çünkü kullanıcı oyuncu seçtikçe bu sayı azalır. |
 | Maç silme, gizlilik satırları ve sayı türü tanımları (sürüm 0.4.2) | 19 | Doğrulayıcılar 11 bulguyu doğruladı, 5 bulguyu kısmen doğruladı ve 3 bulguyu reddetti. Tekrarlar ayıklanınca dokuz ayrı kusur kaldı ve dokuzu da düzeldi. Oturum her düzeltmeyi geri alıp ilgili testin kırıldığını gördü. Reddedilen 3 bulgu sözcük tercihiydi. |
 | Ralli düzeltme (sürüm 0.5.0), üç tur | 36 + 22 + 17 | Dört inceleyici 31 bulgu yazdı. Doğrulayıcılar 16 bulguyu doğruladı, 11 bulguyu kısmen doğruladı ve 4 bulguyu reddetti. Eksiklik denetçisi 5 bulgu daha ekledi. Oturum 32 bulguyu düzeltti. İkinci bir tur bu düzeltmeleri koda karşı yeniden denedi: 21 düzeltme tam, 11 düzeltme yarım çıktı ve tur 22 yeni nokta buldu. Oturum yarım kalan düzeltmeleri tamamladı ve yeni noktaları kapattı. Üçüncü tur ikinci turun düzeltmelerini okudu ve 17 nokta yazdı. Doğrulayıcılar 2 noktayı reddetti ve oturum kalan 15 noktayı kapattı. Açık kalan iki konu bu inceleme listelerinin altındadır. |
-| Maç kuralı (sürüm 0.6.0) | 26 + 3 | Dört inceleyici 26 bulgu yazdı. Doğrulayıcılar 15 bulguyu doğruladı, 11 bulguyu kısmen doğruladı ve hiçbirini reddetmedi. Üç bulgu başka bir bulgunun tekrarıydı. Eksiklik denetçisi 3 bulgu daha ekledi. Oturum bir bulgu dışında hepsini kapattı. Kalan bulgu bilinen bir sınırdır ve bölümün sonundadır. |
+| Maç kuralı (sürüm 0.6.0), iki tur | 29 + 25 | Dört inceleyici 26 bulgu yazdı. Doğrulayıcılar 15 bulguyu doğruladı, 11 bulguyu kısmen doğruladı ve hiçbirini reddetmedi. Üç bulgu başka bir bulgunun tekrarıydı. Eksiklik denetçisi 3 bulgu daha ekledi. Oturum bir bulgu dışında hepsini kapattı. İkinci tur bu düzeltmeleri koda karşı yeniden denedi: Dört okuyucu 21 nokta yazdı. Doğrulayıcılar 13 noktayı doğruladı, 7 noktayı kısmen doğruladı ve 1 noktayı reddetti. Eksiklik denetçisi 4 nokta daha ekledi. Oturum bu noktaları kapattı. Biri bilinen sınır olarak kaldı. Açık kalan konular bu inceleme listelerinin altındadır. |
 
 Android incelemesinin bulduğu en ağır hatalar şunlardı:
 
@@ -200,7 +200,7 @@ Maç kuralı incelemesinin (sürüm 0.6.0) bulduğu en ağır kusurlar şunlard�
 
 - Kullanıcı yeni maç ekranında bir kural seçip kurulumu bıraktıysa kural taslakta kalıyordu ve ana ekran hiçbir şey göstermiyordu. Sonraki maç, standart bir maç bile, o kuralla açılıyordu.
 - Kural yoldayken gelen bir kazanan yanıtı kural ekranını bekleme ekranına çeviriyordu. Ekran kullanıcıyı tutmayı bırakıyordu ve seçimi siliyordu. Kural henüz gönderilmemişken de aynı yanıt kullanıcının seçimini sessizce siliyordu.
-- Uygulamanın beklemekten vazgeçtiği bir kural isteği sonradan sunucuya ulaşırsa kullanıcının sonraki seçimini geri alabiliyordu. Kural isteği artık kullanıcının gördüğü kuralı taşır ve sunucu geç isteği reddeder.
+- Uygulamanın beklemekten vazgeçtiği bir kural isteği sonradan sunucuya ulaşırsa kullanıcının sonraki seçimini geri alabiliyordu. Kural isteği artık telefonun sunucudan son okuduğu kuralı taşır. Maçın kuralı o kural değilse sunucu geç isteği reddeder.
 - Kural ekranı kaydedilmemiş seçimi sunucunun kuralı gibi düz cümleyle söylüyordu. Ret metni de kuralı suçluyordu, oysa sunucu uygulamanın sunduğu hiçbir kuralı reddetmez.
 - Sunucu maç isteğindeki bilinmeyen alanı sessizce düşürüyordu. Başka bir adla gelen kural FIVB kuralına dönüyordu.
 - 320 dp telefonda büyük yazıyla kural kartı "5. set 15 sayı" gibi parçaları sözcüğün ortasından bölüyordu. Tarih kartında da aynı sorun vardı.
@@ -208,7 +208,18 @@ Maç kuralı incelemesinin (sürüm 0.6.0) bulduğu en ağır kusurlar şunlard�
 - Skor denetimi, başka bir kuralın skorları her zaman bozduğunu söylüyordu. "Hayır" ipucu yanlış seçilmiş bir kazananı hiç anmıyordu. Onaylı listede kural ekranı sunucunun "yalnız setleri yeniden saydığını" yazıyordu, oysa onay da düşer.
 - Hiçbir test kural ekranını gerçek sunucuya karşı sürmüyordu, ama belge ekranı gerçek sunucuyla denenmiş gösteriyordu. Bu tur o testi ekledi.
 
-Maç kuralı incelemesinden iki konu açık kaldı. Uygulama 0.6.0 eski bir 0.5 sunucusuyla çalışırsa sunucu seçilen kuralı yok sayar. Uygulama o sunucunun ralli listesini okuyamadığını söyler ve rapor sunucunun kullandığı kuralı yazar, ama uygulama seçilen kuralın düştüğünü ayrıca söylemez (ADR-0115). Testler ekran okuyucunun duyurularını yalnız anlam ağacında denetler ve kimse TalkBack'i gerçek telefonda denemedi.
+Maç kuralı incelemesinin ikinci turunun bulduğu kusurlar şunlardı:
+
+- Kural değişikliğinin geri alma testi isteği hiç göndermiyordu. İlk turun eklediği yardımcı önce maçı okuyordu ve test o okumada duruyordu. Yanıtı işlemin dışına taşıyan bir bozma bu yüzden bütün testlerden geçiyordu.
+- Sunucu kural değişikliğinde yalnız kuralları karşılaştırır. Belgeler ise geç gelen bir isteğin kullanıcının sonraki seçimini hiçbir durumda geri alamayacağını yazıyordu.
+- Sunucudaki kural ekran açıkken değiştiyse kural ekranı kullanıcıya seçimini denetlemesini söylüyordu, ama sunucunun şimdiki kuralını yazmıyordu.
+- Ana ekrandaki "Yeni Maç" kartı da yarım kalan kurulumu açıyordu. Küçük telefonda kural kartı yeni maç ekranının görünmeyen bölümünde kalıyordu ve yarım kurulumun kuralı yine sonraki maça görünmeden geçebiliyordu.
+- Küçük telefonda büyük yazıyla ralli listesi, onayın yolda olduğunu ve sunucunun reddini ekranın görünmeyen bölümünde gösteriyordu.
+- Üç test, denediği düzeltme geri alındığında da geçebiliyordu. Biri hangi yanıtın önce geldiğine bağlıydı, biri yalnız tek bir seçimi geri okuyordu, biri FIVB kuralını sabit bir değerden ayırt edemiyordu.
+
+İkinci tur bir soruyu ölçümle kapattı: İki ajan, ekranda yeni beliren bir canlı bölgeyi Android'in ekran okuyucuya bildirip bildirmediği konusunda ayrıştı. Oturum uygulamanın gönderdiği erişilebilirlik olaylarını bir testte ölçtü. Uygulama, satır belirince o satırdan bir değişiklik olayı gönderir. Testler artık bu olayı üç ekranda da denetler.
+
+Maç kuralı incelemesinden üç konu açık kaldı. Uygulama 0.6.0 eski bir 0.5 sunucusuyla çalışırsa sunucu seçilen kuralı yok sayar. Uygulama o sunucunun ralli listesini okuyamadığını söyler ve rapor sunucunun kullandığı kuralı yazar, ama uygulama seçilen kuralın düştüğünü ayrıca söylemez (ADR-0115). Sunucu kural değişikliğinde yalnız kuralları karşılaştırır: Telefonun beklemekten vazgeçtiği bir istek yoldayken kullanıcı kuralı iki kez daha değiştirip ilk kurala dönerse sunucu geç gelen isteği uygular (ADR-0115). Testler uygulamanın ekran okuyucuya gönderdiği olayı ölçer, ama kimse TalkBack'i gerçek telefonda dinlemedi.
 
 ## 7. Sıradaki dilimler
 

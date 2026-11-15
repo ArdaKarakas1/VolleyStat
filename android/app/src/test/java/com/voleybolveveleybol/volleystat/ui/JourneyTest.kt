@@ -16,11 +16,17 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.lifecycle.ViewModelProvider
 import com.github.takahirom.roborazzi.captureRoboImage
+import com.voleybolveveleybol.volleystat.AppViewModel
 import com.voleybolveveleybol.volleystat.MainActivity
 import com.voleybolveveleybol.volleystat.R
+import com.voleybolveveleybol.volleystat.model.LocalVideo
+import com.voleybolveveleybol.volleystat.model.MatchRules
+import com.voleybolveveleybol.volleystat.model.VideoSource
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
-import org.junit.rules.ExternalResource
 import org.junit.Test
+import org.junit.rules.ExternalResource
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -170,5 +176,44 @@ class JourneyTest {
         app.onNodeWithText(text(R.string.rule_name_custom)).performScrollTo().assertIsDisplayed()
         app.activityRule.scenario.recreate()
         app.onNodeWithText(text(R.string.rule_detail, 2, 21, 3, 15)).performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun aRuleLeftOnAnUnfinishedSetupIsNamedOnHomeAndBeforeTheUploadStarts() {
+        passWelcome()
+        // A setup the user left some day: two teams, a video and a rule that is not the standard one.
+        val viewModel = ViewModelProvider(app.activity)[AppViewModel::class.java]
+        app.runOnUiThread {
+            viewModel.editDraft {
+                it.copy(
+                    homeTeam = "A Takımı", awayTeam = "B Takımı", rules = MatchRules(2, 21, 15),
+                    video = LocalVideo("/none/mac.mp4", VideoSource.GALLERY, "mac.mp4", 1_000, "video/mp4", 60_000, 1920, 1080, null),
+                )
+            }
+        }
+        app.waitForIdle()
+        // Home names the rule the setup holds.
+        app.onNodeWithText(text(R.string.home_draft_title)).performScrollTo().assertIsDisplayed()
+        app.onNodeWithText(text(R.string.rule_detail, 2, 21, 3, 15)).assertIsDisplayed()
+
+        // The big card opens the same setup. The user walks on without looking at the rule on 03.
+        app.onNodeWithText(text(R.string.home_new_match_body)).performScrollTo().performClick()
+        tap(R.string.action_continue)
+        app.onNodeWithText(text(R.string.match_teams_title)).assertIsDisplayed()
+        tap(R.string.action_continue)
+        app.onNodeWithText(text(R.string.source_existing_action)).performClick()
+
+        // The last screen before the upload names the rule next to the box the user has to tick.
+        app.onNodeWithText(text(R.string.check_title)).assertIsDisplayed()
+        app.onNodeWithText(text(R.string.rule_name_custom)).performScrollTo().assertIsDisplayed()
+        app.onNodeWithText(text(R.string.rule_detail, 2, 21, 3, 15)).assertIsDisplayed()
+
+        // From there the user puts the standard rule back, and the screen has no rule to name any more.
+        app.onNodeWithText(text(R.string.rule_card_change)).performClick()
+        app.onNodeWithText(text(R.string.rule_sets_option_fivb, 3)).performScrollTo().performClick()
+        app.onNodeWithText(text(R.string.rule_points_option_fivb, 25)).performScrollTo().performClick()
+        app.onNodeWithText(text(R.string.action_save_rule)).performClick()
+        app.onNodeWithText(text(R.string.check_title)).assertIsDisplayed()
+        assertTrue(app.onAllNodesWithText(text(R.string.rule_card_change)).fetchSemanticsNodes().isEmpty())
+        assertEquals(MatchRules.FIVB, viewModel.state.value.draft.rules)
     }
 }

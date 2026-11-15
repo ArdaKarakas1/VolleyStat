@@ -155,6 +155,8 @@ class ScreenshotTest {
         shot("02_ana_ekran") { HomeScreen(state, {}, {}, {}, {}, {}) }
         shot("02_ana_ekran_bos") { HomeScreen(AppUiState(), {}, {}, {}, {}, {}) }
         shot("02_ana_ekran_koyu", dark = true) { HomeScreen(state, {}, {}, {}, {}, {}) }
+        // A setup the user left with nothing but a rule: its card names the rule.
+        shot("02_ana_ekran_yarim_kurulum_kural") { HomeScreen(AppUiState(draft = Draft(rules = MatchRules(2, 21, 15))), {}, {}, {}, {}, {}) }
     }
 
     @Test fun tabs() {
@@ -181,6 +183,10 @@ class ScreenshotTest {
         shot("04_takim_kadro_bos") { MatchTeamsScreen(Draft(), emptyList(), { _, _ -> }, { null }, {}, {}, {}) }
         shot("05_video_kaynagi") { VideoSourceScreen(cameraSelected = true, reading = false, problem = null, onSelect = {}, onGo = {}, onOpenGuide = {}, onBack = {}) }
         shot("05_video_kontrol") { VideoCheckScreen(video, rightsAccepted = true, serverConfigured = true, onRights = {}, onStart = {}, onChangeVideo = {}, onBack = {}) }
+        // The rule card stands above the rights box at the end of the screen, so a tall window keeps it in the picture.
+        shotOn("05_video_kontrol_kural", "+w411dp-h1500dp-port") {
+            VideoCheckScreen(video, rightsAccepted = false, serverConfigured = true, onRights = {}, onStart = {}, onChangeVideo = {}, onBack = {}, rules = MatchRules(2, 21, 15))
+        }
         shot("cekim_rehberi") { GuideScreen {} }
     }
 

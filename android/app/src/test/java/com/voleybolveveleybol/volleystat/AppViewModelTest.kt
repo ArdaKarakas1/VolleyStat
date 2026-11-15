@@ -1089,7 +1089,8 @@ class AppViewModelTest {
     }
 
     @Test fun changingTheRuleSendsTheWholeRuleAndShowsTheListCountedWithIt() {
-        var rules = MatchRules.FIVB
+        // The list on screen was counted with a rule that is not the FIVB rule.
+        var rules = MatchRules(3, 21, 25)
         var version = 3
         val vm = withRallyList { rallies(version, rally("r1", 1, 2_000, 9_000), rules = rules) }
         val bodies = CopyOnWriteArrayList<JSONObject>()
@@ -1108,8 +1109,8 @@ class AppViewModelTest {
         assertEquals(listOf("PUT /matches/server-A/rules", "GET /analyses/J/rallies", "GET /videos/video-A/analyses/latest"), requests.toList())
         assertEquals(setOf("setsToWin", "setTarget", "decidingSetTarget", "expectedRules"), bodies.single().keys().asSequence().toSet())
         assertEquals(listOf(2, 21, 15), rulesOf(bodies.single()))
-        // The request names the rule the user saw: the one the list on screen was counted with.
-        assertEquals(listOf(3, 25, 15), rulesOf(bodies.single().getJSONObject("expectedRules")))
+        // The request names the rule of the list on screen, whatever rule that is.
+        assertEquals(listOf(3, 21, 25), rulesOf(bodies.single().getJSONObject("expectedRules")))
         val shown = vm.analysis.value
         assertEquals(MatchRules(2, 21, 15), shown.rallies!!.rules)
         assertEquals(4, shown.rallies!!.version)
@@ -1161,6 +1162,20 @@ class AppViewModelTest {
         assertEquals("the app read the list again and shows the rule the server has", MatchRules(2, 25, 25), vm.analysis.value.rallies!!.rules)
         assertFalse(vm.analysis.value.correcting)
         assertEquals("the app never sends the rule a second time by itself", 1, requests.count { it == "PUT /matches/server-A/rules" })
+
+        // The user saves again. The request now names the rule the app read with the list of now.
+        val bodies = CopyOnWriteArrayList<JSONObject>()
+        on("PUT /matches/server-A/rules") { request ->
+            bodies += JSONObject(request.body.readUtf8())
+            rules = MatchRules(2, 21, 15)
+            version = 5
+            ok(JSONObject().put("id", "server-A"))
+        }
+        var done = false
+        vm.changeMatchRules(MatchRules(2, 21, 15)) { done = true }
+        await("the second save") { done }
+        assertEquals(listOf(2, 25, 25), rulesOf(bodies.single().getJSONObject("expectedRules")))
+        assertEquals(MatchRules(2, 21, 15), vm.analysis.value.rallies!!.rules)
     }
 
     @Test fun aStaleRuleChangeWhoseListDoesNotArriveIsUnreachable() {

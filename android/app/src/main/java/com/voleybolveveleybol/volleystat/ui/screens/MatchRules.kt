@@ -106,14 +106,14 @@ fun MatchRulesScreen(
                 // While the rule is on its way, that is the one thing the screen has to say.
                 sending -> ProgressLine(R.string.rule_sending)
                 problem != null -> Notice(
-                    stringResource(
-                        when (problem) {
-                            CorrectionProblem.UNREACHABLE -> R.string.correction_unreachable
-                            CorrectionProblem.STALE -> R.string.rule_stale
-                            // The server accepts every rule the app offers, so the words never blame the rule.
-                            else -> R.string.rule_refused
-                        },
-                    ),
+                    when (problem) {
+                        CorrectionProblem.UNREACHABLE -> stringResource(R.string.correction_unreachable)
+                        // The app has read the list again, so [current] is the rule the server has now. The notice
+                        // names the whole of it: the next Save is made on that rule, and the user has not seen it yet.
+                        CorrectionProblem.STALE -> stringResource(R.string.rule_stale, ruleDetail(current))
+                        // The server accepts every rule the app offers, so the words never blame the rule.
+                        else -> stringResource(R.string.rule_refused)
+                    },
                     // After STALE the app has read the list again: the user only saves once more.
                     if (problem == CorrectionProblem.STALE) Tone.CAUTION else Tone.NEGATIVE,
                     Modifier.announced(),

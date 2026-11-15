@@ -204,6 +204,18 @@ def test_a_late_request_for_a_rule_does_not_undo_a_later_change(best_of_three):
     assert (client.get(f"/v1/matches/{match_id}").json(), job_row(storage, job_id)) == before
 
 
+def test_a_late_request_lands_when_the_match_is_back_at_the_rule_it_saw(best_of_three):
+    # The known limit of comparing rules (ADR-0115): the match carries no rule revision.
+    client, match_id, job_id, _ = best_of_three
+    every_set_to_25 = {"setsToWin": 2, "setTarget": 25, "decidingSetTarget": 25}
+    assert put_rules(client, match_id, FIVB, expected=BEST_OF_THREE_TO_21).status_code == 200
+    assert put_rules(client, match_id, BEST_OF_THREE_TO_21, expected=FIVB).status_code == 200
+    late = put_rules(client, match_id, every_set_to_25, expected=BEST_OF_THREE_TO_21)
+    assert late.status_code == 200 and late.json()["rules"] == payload(every_set_to_25)
+    # Whatever landed, the list names the rule it is counted with.
+    assert listing(client, job_id)["rules"] == payload(every_set_to_25)
+
+
 def test_a_repeated_rule_change_lands_once(best_of_three):
     client, match_id, job_id, storage = best_of_three
     assert confirm(client, job_id).status_code == 200
@@ -346,14 +358,20 @@ def test_a_rule_change_that_fails_half_way_leaves_nothing_behind(best_of_three, 
     client, match_id, job_id, storage = best_of_three
     before = (client.get(f"/v1/matches/{match_id}").json(), job_row(storage, job_id), listing(client, job_id))
 
+    calls = []
+
     def broken(*args, **kwargs):
+        calls.append(args)
         raise RuntimeError("the disk is full")
 
-    # The answer is built after the rule and the list versions were written.
+    # The answer is built after the rule and the list versions were written. The request names the
+    # rule it saw itself: reading the match first would run into the broken answer before the change is sent.
     monkeypatch.setattr("app.main.match_payload", broken)
     with pytest.raises(RuntimeError):
-        put_rules(client, match_id, FIVB)
+        put_rules(client, match_id, FIVB, expected=BEST_OF_THREE_TO_21)
     monkeypatch.undo()
+    # The change got as far as its answer, and the match the route wanted to answer with had the new rule.
+    assert [(row["sets_to_win"], row["set_target"], row["deciding_set_target"]) for (row,) in calls] == [(3, 25, 15)]
     assert (client.get(f"/v1/matches/{match_id}").json(), job_row(storage, job_id), listing(client, job_id)) == before
 
 

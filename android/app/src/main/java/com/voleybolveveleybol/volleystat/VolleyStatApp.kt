@@ -403,6 +403,7 @@ fun VolleyStatApp(
                         video, rights, state.serverConfigured, onRights = { rights = it },
                         onStart = { viewModel.startUpload()?.let { id -> nav.navigate(Routes.status(id)) { popUpTo(Routes.HOME) } } },
                         onChangeVideo = { nav.popBackStack() }, onBack = { nav.popBackStack() },
+                        rules = state.draft.rules, onOpenRules = { go(Routes.NEW_RULES) },
                     )
                 }
             }

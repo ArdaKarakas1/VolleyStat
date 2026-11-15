@@ -98,8 +98,9 @@ fun VsCard(
 }
 
 /**
- * A line that appears while the user waits, such as an answer of the server or a refusal: a screen
- * reader reads it out when it appears, with no need to move the focus to it.
+ * A line that appears while the user waits, such as "sending" or a refusal of the server. It is a
+ * polite live region: when it appears, Compose reports a change from this very node to the
+ * accessibility services, so a screen reader can read it out with no need to move the focus to it.
  */
 fun Modifier.announced(): Modifier = semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite }
 

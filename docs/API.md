@@ -19,7 +19,7 @@ Sürüm 0.6.0 maç kuralını ekler (`rules` alanı ve `PUT /matches/{id}/rules`
 | `POST /matches` | İki farklı takım adıyla maç açar. Sunucu kimliği üretir | 201 | 422 |
 | `PUT /matches/{id}` | Maçı istemcinin seçtiği kimlikle açar ya da o kimlikteki maçı döner | 201, 200 | 422 |
 | `GET /matches/{id}` | Maçı okur | 200 | 404 |
-| `PUT /matches/{id}/rules` | Sunucunun maçın setlerini saydığı kuralı değiştirir. İstek kullanıcının gördüğü kuralı da taşır | 200 | 404, 409, 422 |
+| `PUT /matches/{id}/rules` | Sunucunun maçın setlerini saydığı kuralı değiştirir. İstek istemcinin sunucudan son okuduğu kuralı da taşır | 200 | 404, 409, 422 |
 | `DELETE /matches/{id}` | Maçı ve sunucunun o maç için tuttuğu her şeyi siler | 204 | 404, 409 |
 | `POST /matches/{id}/uploads` | Yükleme oturumu açar | 201 | 404, 422 |
 | `GET /uploads/{id}` | Sunucudaki offset ve durumu verir (devam için) | 200 | 404 |

@@ -75,10 +75,11 @@ class ApiClient(
 
     /**
      * Sets the rule the server counts the sets of the match with. The request names the whole rule,
-     * so repeating it after a lost answer changes nothing more. It also names the rule the user saw
-     * ([seen]): a request the app gave up on that arrives late is refused as stale and can not undo
-     * a later change. The server moves the rally list of the match on, and a confirmation given
-     * under the old rule lapses. The answer is not read.
+     * so repeating it after a lost answer changes nothing more. It also names the rule of the list
+     * the app last read ([seen]): while the match has another rule, a request the app gave up on
+     * that arrives late is refused as stale and does not undo a later change to another rule. The
+     * server moves the rally list of the match on, and a confirmation given under the old rule
+     * lapses. The answer is not read.
      */
     fun putMatchRules(matchId: String, rules: MatchRules, seen: MatchRules) {
         val body = rulesJson(rules).put("expectedRules", rulesJson(seen))

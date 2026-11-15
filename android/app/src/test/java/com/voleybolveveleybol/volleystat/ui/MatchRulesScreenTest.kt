@@ -215,6 +215,23 @@ class MatchRulesScreenTest {
         assertEquals(1, leaves())
     }
 
+    @Test fun theScreenReportsTheRuleOnItsWayAndTheRefusalToAScreenReader() {
+        val announcements = Announcements(compose)
+        var sending by mutableStateOf(false)
+        var problem by mutableStateOf<CorrectionProblem?>(null)
+        show { MatchRulesScreen(MatchRules.FIVB, onSave = {}, onBack = {}, onList = true, sending = sending, problem = problem, initial = MatchRules(2, 21, 15)) }
+        // The user's hand rests on Save, and the focus of a screen reader stays there. The screen itself
+        // reports the line that appears: first that the rule is on its way, then how it ended.
+        announcements.reset()
+        sending = true
+        assertEquals(listOf(text(R.string.rule_sending)), announcements.heard())
+
+        announcements.reset()
+        sending = false
+        problem = CorrectionProblem.REFUSED
+        assertEquals(listOf(text(R.string.rule_refused)), announcements.heard())
+    }
+
     @Test fun aRefusalStandsAboveTheSaveButtonAndGoesWithTheNextChoice() {
         var problem by mutableStateOf<CorrectionProblem?>(CorrectionProblem.REFUSED)
         show {
@@ -238,7 +255,9 @@ class MatchRulesScreenTest {
     @Test fun aRuleThatChangedOnTheServerMeanwhileSaysSoAndLeavesTheChoiceToSave() {
         // The list of now came back with the rule of now. The user's choice is still on screen.
         show { MatchRulesScreen(MatchRules(2, 25, 25), onSave = {}, onBack = {}, onList = true, problem = CorrectionProblem.STALE, initial = MatchRules(2, 21, 15)) }
-        compose.onNodeWithText(text(R.string.rule_stale)).assertIsDisplayed().assert(announced)
+        // The notice names the whole rule the server has now, the sets to win too: the next Save is made on
+        // that rule, and the user checks the choice against it.
+        compose.onNodeWithText(text(R.string.rule_stale, text(R.string.rule_detail_same, 2, 25))).assertIsDisplayed().assert(announced)
         assertFalse(shown(text(R.string.rule_refused)))
         compose.onNodeWithText(save).assertIsEnabled()
     }

@@ -122,12 +122,12 @@ Ek ekranlar (V4): Maçlar listesi, Takımlar ve kadro yönetimi, Profil (gizlili
 
 | Katman | Araç | Kapsam | Nerede |
 |---|---|---|---|
-| Kural ve rapor mantığı | JUnit (saf Kotlin) | Skor, set, kapsama, bilinmeyen ≠ 0 | Yerel ve CI |
+| `android/core` kuralları | JUnit (saf Kotlin) | Skor, set, kapsama, bilinmeyen ≠ 0. Uygulama bu modülü bugün kullanmaz ve bu testler yalnız modülün kendi kurallarını dener. | Yerel ve CI |
 | Veri katmanı | Robolectric + MockWebServer | Yükleme protokolü, kesinti, sağlama, yerel kayıt | Yerel ve CI |
 | İstemci–sunucu | `BackendE2eTest` | Gerçek FastAPI sunucusuna yükleme, sürdürme, iş, kart, rapor | Yerel ve CI |
 | Görsel | Roborazzi | Her ekranın her durumu, açık ve koyu tema, büyük yazı | Yerel ve CI (görüntüler artefakt) |
 | Cihaz akışı | Compose UI testleri, emülatör | Gezinme, form, izin akışı, kamera kaydı | Yalnız CI |
-| Arka uç | pytest | Yükleme, dosya kontrolü, iş, kart, karar, rapor | Yerel ve CI |
+| Arka uç | pytest | Yükleme, dosya kontrolü, iş, kart, karar, rapor, maç kuralıyla set sayımı | Yerel ve CI |
 | Analiz | pytest, sentetik video | Ralli bölütleme ölçüleri, etiket doğrulama | Yerel ve CI |
 
 Bir test koşmadıysa raporda "koşmadı" yazar.

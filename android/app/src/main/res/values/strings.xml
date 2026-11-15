@@ -540,5 +540,6 @@
     <string name="rule_sending">Uygulama kuralı sunucuya gönderiyor</string>
     <!-- The server accepts every rule the app offers, so a refusal never blames the rule. -->
     <string name="rule_refused">Sunucu kuralı kaydetmedi. Sunucunun güncel sürümle çalıştığını denetle ve yeniden dene.</string>
-    <string name="rule_stale">Sen bu ekranı açtıktan sonra sunucudaki kural değişti. Uygulama listeyi yeniden yükledi. Seçimini denetle ve yeniden kaydet.</string>
+    <!-- %1$s: the whole rule the server has now, as the rule card writes it (rule_detail). The user checks the choice against it. -->
+    <string name="rule_stale">Sunucudaki kural bu ekranın gösterdiği kuraldan farklı. Sunucu şimdi \"%1$s\" kuralıyla sayıyor. Seçimini denetle ve yeniden kaydet.</string>
 </resources>

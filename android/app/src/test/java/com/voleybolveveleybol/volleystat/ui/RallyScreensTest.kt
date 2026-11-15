@@ -18,6 +18,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasScrollToNodeAction
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
@@ -282,6 +283,42 @@ class RallyScreensTest {
         list(state(decided, problem = CorrectionProblem.STALE))
         // A screen reader says the refusal when it appears.
         compose.onNodeWithText(text(R.string.correction_stale)).assertIsDisplayed().assert(announced)
+    }
+
+    @Test fun theListSaysWhatBecameOfTheConfirmationNextToItsButtonAndReportsItToAScreenReader() {
+        val announcements = Announcements(compose)
+        var correcting by mutableStateOf(false)
+        var problem by mutableStateOf<CorrectionProblem?>(null)
+        leavesBy { RalliesScreen(match, state(decided, correcting = correcting, problem = problem), onOpenRally = {}, onOpenGap = {}, onConfirm = {}, onOpenReview = {}, onRetry = {}, onBack = {}) }
+        announcements.reset()
+        correcting = true
+        assertEquals(listOf(text(R.string.rallies_confirm_sending)), announcements.heard())
+        // The line stands between the rule card and the button the user tapped, not at the top of the list:
+        // on a small screen with large text that button is below the first screen.
+        val line = compose.onNodeWithText(text(R.string.rallies_confirm_sending)).getUnclippedBoundsInRoot()
+        assertTrue(line.top >= compose.onNode(ruleCard).getUnclippedBoundsInRoot().bottom)
+        assertTrue(line.bottom <= compose.onNodeWithText(text(R.string.action_check_score)).getUnclippedBoundsInRoot().top)
+
+        announcements.reset()
+        correcting = false
+        problem = CorrectionProblem.STALE
+        assertEquals(listOf(text(R.string.correction_stale)), announcements.heard())
+        val refusal = compose.onNodeWithText(text(R.string.correction_stale)).getUnclippedBoundsInRoot()
+        assertTrue(refusal.top >= compose.onNode(ruleCard).getUnclippedBoundsInRoot().bottom)
+        assertTrue(refusal.bottom <= compose.onNodeWithText(text(R.string.action_check_score)).getUnclippedBoundsInRoot().top)
+    }
+
+    @Test fun theEditorReportsACorrectionOnItsWayAndItsRefusalToAScreenReader() {
+        val announcements = Announcements(compose)
+        var shown by mutableStateOf(state(four))
+        leavesBy { RallyEditorScreen(rallyTarget(four, "r2")!!, shown, FakeControl(20_000).video, { _, _ -> }, {}, {}, { _, _ -> }, onBack = {}) }
+        announcements.reset()
+        shown = state(four, correcting = true)
+        assertEquals(listOf(text(R.string.correction_sending)), announcements.heard())
+
+        announcements.reset()
+        shown = state(four, problem = CorrectionProblem.OUTSIDE)
+        assertEquals(listOf(text(R.string.correction_outside)), announcements.heard())
     }
 
     @Test fun theListStaysOpenUntilTheAnswerOfTheConfirmationIsThere() {

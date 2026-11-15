@@ -117,9 +117,19 @@ fun correctionProblemText(analysis: AnalysisUi): String? = when (analysis.correc
 }
 
 @Composable
-fun CorrectionProblemNotice(analysis: AnalysisUi) {
+private fun CorrectionProblemNotice(analysis: AnalysisUi) {
     // After STALE the app has already read the list again, so nothing is wrong any more: the user repeats the step.
     correctionProblemText(analysis)?.let { Notice(it, if (analysis.correctionProblem == CorrectionProblem.STALE) Tone.CAUTION else Tone.NEGATIVE, Modifier.announced()) }
+}
+
+/**
+ * What became of the last tap on a screen that sends corrections: the correction on its way, or
+ * why the server did not apply it. Each line is reported to a screen reader when it appears.
+ */
+@Composable
+fun CorrectionStatus(analysis: AnalysisUi, @StringRes sending: Int) {
+    if (analysis.correcting) ProgressLine(sending)
+    CorrectionProblemNotice(analysis)
 }
 
 /** The words for a match that has no job to work on. */
@@ -143,13 +153,7 @@ fun JobProblemNotice(problem: JobLoad, onRetry: () -> Unit) {
     }
 }
 
-/** Says that a correction is on its way. The screen that sent it keeps the user until the answer is there. */
-@Composable
-fun CorrectionProgress(analysis: AnalysisUi, @StringRes text: Int) {
-    if (analysis.correcting) ProgressLine(text)
-}
-
-/** A spinner and what is on its way. A screen reader says it when it appears, as the hand that sent it waits. */
+/** A spinner and what is on its way. The screen that sent it keeps the user until the answer is there. */
 @Composable
 fun ProgressLine(@StringRes text: Int) {
     Row(Modifier.announced(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -280,8 +284,6 @@ private fun ListState(
     // An interval the user called "not a rally" stays on the list, and it is not counted as a rally anywhere.
     val rejected = list.rallies.count { it.status == Rally.REJECTED }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        CorrectionProgress(analysis, R.string.rallies_confirm_sending)
-        CorrectionProblemNotice(analysis)
         Text(
             if (rejected == 0) stringResource(R.string.rallies_count, list.rallies.size)
             else stringResource(R.string.rallies_count_rejected, list.rallies.size - rejected, rejected),
@@ -296,6 +298,9 @@ private fun ListState(
         }
         // The rule the server counted these scores with: the list's own, not the one the match was created with.
         MatchRulesCard(list.rules, onChangeRules, enabled = !analysis.correcting)
+        // What became of the confirmation stands next to the button that sent it. At the top of this head
+        // it lay above the edge of a small screen with large text, where the button is below the first screen.
+        CorrectionStatus(analysis, R.string.rallies_confirm_sending)
         when {
             list.confirmed -> Notice(stringResource(R.string.rallies_confirmed), Tone.POSITIVE)
             analysis.job?.mock == true -> Notice(stringResource(R.string.rallies_demo), Tone.NEUTRAL)

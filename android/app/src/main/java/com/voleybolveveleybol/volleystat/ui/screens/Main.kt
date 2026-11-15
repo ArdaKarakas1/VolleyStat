@@ -64,6 +64,7 @@ import com.voleybolveveleybol.volleystat.UploadProgress
 import com.voleybolveveleybol.volleystat.data.UploadPhase
 import com.voleybolveveleybol.volleystat.model.MatchKind
 import com.voleybolveveleybol.volleystat.model.MatchRecord
+import com.voleybolveveleybol.volleystat.model.MatchRules
 import com.voleybolveveleybol.volleystat.model.MatchStatus
 import com.voleybolveveleybol.volleystat.model.ServerTarget
 import com.voleybolveveleybol.volleystat.model.Team
@@ -214,6 +215,13 @@ fun HomeScreen(
             if (state.draft.started) {
                 VsCard(onClick = onNewMatch) {
                     Text(stringResource(R.string.home_draft_title), style = MaterialTheme.typography.titleSmall)
+                    // A rule chosen on the setup counts every set of its match, and the big card above opens this
+                    // same setup. The card names the rule, so it does not go unseen into the match started next.
+                    if (state.draft.rules != MatchRules.FIVB) {
+                        Text(stringResource(R.string.rule_card_label), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(ruleName(state.draft.rules), style = MaterialTheme.typography.bodyMedium)
+                        Text(ruleDetail(state.draft.rules), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                     Text(stringResource(R.string.home_draft_action), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
                 }
             }

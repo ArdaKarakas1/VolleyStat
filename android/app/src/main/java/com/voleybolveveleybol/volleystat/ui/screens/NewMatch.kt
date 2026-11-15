@@ -77,6 +77,7 @@ import com.voleybolveveleybol.volleystat.model.Draft
 import com.voleybolveveleybol.volleystat.model.LocalVideo
 import com.voleybolveveleybol.volleystat.model.MAX_VIDEO_BYTES
 import com.voleybolveveleybol.volleystat.model.MatchKind
+import com.voleybolveveleybol.volleystat.model.MatchRules
 import com.voleybolveveleybol.volleystat.model.Team
 import com.voleybolveveleybol.volleystat.model.teamNamesValid
 import com.voleybolveveleybol.volleystat.model.uploadFormat
@@ -468,6 +469,9 @@ fun VideoCheckScreen(
     onStart: () -> Unit,
     onChangeVideo: () -> Unit,
     onBack: () -> Unit,
+    /** The rule the match will be created with. */
+    rules: MatchRules = MatchRules.FIVB,
+    onOpenRules: () -> Unit = {},
 ) {
     val format = uploadFormat(video.mimeType, video.fileName)
     val tooLarge = video.sizeBytes > MAX_VIDEO_BYTES
@@ -517,6 +521,10 @@ fun VideoCheckScreen(
         }
 
         if (!blocked) {
+            // A rule other than the standard one counts every set of this match. It stands next to the box the
+            // user has to tick, so the user sees it before the upload starts, on the smallest phone too. A rule
+            // left over from a setup the user gave up would otherwise first show on the rally list.
+            if (rules != MatchRules.FIVB) MatchRulesCard(rules, onOpenRules)
             Row(
                 Modifier.fillMaxWidth().heightIn(min = 56.dp).toggleable(value = rightsAccepted, role = Role.Checkbox, onValueChange = onRights),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),

@@ -1,13 +1,19 @@
 package com.voleybolveveleybol.volleystat.ui
 
 import android.content.Context
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
@@ -16,6 +22,8 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.voleybolveveleybol.volleystat.AnalysisUi
@@ -42,12 +50,14 @@ import com.voleybolveveleybol.volleystat.model.TeamStats
 import com.voleybolveveleybol.volleystat.model.VideoCheck
 import com.voleybolveveleybol.volleystat.model.VideoSource
 import com.voleybolveveleybol.volleystat.ui.screens.ClipPlaceholder
+import com.voleybolveveleybol.volleystat.ui.screens.HomeScreen
 import com.voleybolveveleybol.volleystat.ui.screens.MatchCreateScreen
 import com.voleybolveveleybol.volleystat.ui.screens.PlayersScreen
 import com.voleybolveveleybol.volleystat.ui.screens.ProfileScreen
 import com.voleybolveveleybol.volleystat.ui.screens.ReportScreen
 import com.voleybolveveleybol.volleystat.ui.screens.ReviewScreen
 import com.voleybolveveleybol.volleystat.ui.screens.StatusScreen
+import com.voleybolveveleybol.volleystat.ui.screens.VideoCheckScreen
 import com.voleybolveveleybol.volleystat.ui.screens.WelcomeScreen
 import com.voleybolveveleybol.volleystat.ui.theme.VolleyStatTheme
 import org.junit.Assert.assertEquals
@@ -379,6 +389,67 @@ class ScreenStatesTest {
         compose.onNodeWithText(text(R.string.rule_detail_same, 2, 21)).assertIsDisplayed()
         compose.onNodeWithText(text(R.string.rule_card_change)).performClick()
         assertEquals(1, opens)
+    }
+
+    @Test fun homeNamesTheRuleAnUnfinishedSetupHolds() {
+        var opens = 0
+        show { HomeScreen(AppUiState(draft = Draft(rules = MatchRules(2, 21, 15))), { opens++ }, {}, {}, {}, {}) }
+        // The big "Yeni Maç" card opens this same setup, so the card of the setup says which rule goes with it.
+        compose.onNodeWithText(text(R.string.home_draft_title)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.rule_name_custom)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.rule_detail, 2, 21, 3, 15)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.home_draft_title)).performClick()
+        assertEquals(1, opens)
+    }
+
+    @Test fun homeNamesNoRuleForASetupWithTheStandardRule() {
+        show { HomeScreen(AppUiState(draft = Draft(name = "Hazırlık Maçı")), {}, {}, {}, {}, {}) }
+        compose.onNodeWithText(text(R.string.home_draft_title)).performScrollTo().assertIsDisplayed()
+        assertEquals(false, shown(text(R.string.rule_card_label)))
+        assertEquals(false, shown(text(R.string.rule_name_fivb)))
+    }
+
+    @Test fun theLastScreenBeforeTheUploadNamesARuleThatIsNotTheStandardOne() {
+        var opens = 0
+        show {
+            VideoCheckScreen(video, rightsAccepted = false, serverConfigured = true, onRights = {}, onStart = {}, onChangeVideo = {}, onBack = {},
+                rules = MatchRules(2, 21, 15), onOpenRules = { opens++ })
+        }
+        compose.onNodeWithText(text(R.string.rule_name_custom)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.rule_detail, 2, 21, 3, 15)).assertIsDisplayed()
+        // The rule stands right above the box the user has to tick before the upload can start.
+        val rule = compose.onNodeWithText(text(R.string.rule_detail, 2, 21, 3, 15), useUnmergedTree = true).getUnclippedBoundsInRoot()
+        val box = compose.onNodeWithText(text(R.string.check_rights), useUnmergedTree = true).getUnclippedBoundsInRoot()
+        assertTrue(rule.bottom <= box.top)
+        compose.onNodeWithText(text(R.string.rule_card_change)).performClick()
+        assertEquals(1, opens)
+    }
+
+    @Test fun theLastScreenBeforeTheUploadShowsNoRuleForAStandardMatch() {
+        show { VideoCheckScreen(video, rightsAccepted = false, serverConfigured = true, onRights = {}, onStart = {}, onChangeVideo = {}, onBack = {}) }
+        compose.onNodeWithText(text(R.string.check_rights)).performScrollTo().assertIsDisplayed()
+        assertEquals(false, shown(text(R.string.rule_card_label)))
+    }
+
+    @Test fun onANarrowPhoneWithLargeTextTheDateCardPutsItsActionUnderTheDate() {
+        // A 320 dp phone at 1.5x text. Beside the date, the action would leave the date so little room that it breaks.
+        var scale by mutableStateOf(1.5f)
+        var width by mutableStateOf(320.dp)
+        show {
+            CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, scale)) {
+                Box(Modifier.width(width)) { MatchCreateScreen(Draft(), "2026-08-14", {}, onContinue = {}, onBack = {}) }
+            }
+        }
+        fun bounds(label: String) = compose.onNodeWithText(label, useUnmergedTree = true).getUnclippedBoundsInRoot()
+        val date = text(R.string.match_date)
+        val change = text(R.string.match_date_pick)
+        assertTrue("the action stands under the date", bounds(change).top >= bounds(date).bottom)
+
+        // A 411 dp phone at normal text has room for both on one line.
+        scale = 1f
+        width = 411.dp
+        compose.waitForIdle()
+        assertTrue("with room, the action stands beside the date", bounds(change).left >= bounds(date).right)
     }
 
     @Test fun theReportNamesTheRuleTheServerCountedWith() {

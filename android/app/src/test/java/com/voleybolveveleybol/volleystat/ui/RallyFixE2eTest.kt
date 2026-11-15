@@ -243,7 +243,8 @@ class RallyFixE2eTest {
 
         // The request names the rule the screen showed. The server refuses it, so the late change does
         // not undo the one made meanwhile, and the screen says so and keeps the choice.
-        waitFor(text(R.string.rule_stale))
+        // The notice names the rule the server has now, which this screen had not shown before.
+        waitFor(text(R.string.rule_stale, text(R.string.rule_detail_same, 2, 25)))
         assertEquals(MatchRules(2, 25, 25), api.rallies(job.id).rules)
         app.onNodeWithText(text(R.string.rule_sets_option, 2)).performScrollTo().assertIsSelected()
 

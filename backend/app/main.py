@@ -62,8 +62,10 @@ class MatchRulesInput(BaseModel):
 
 
 class MatchRulesChange(MatchRulesInput):
-    """A rule change. It also names the rule its user saw, so that a request the phone gave up on can
-    not undo a change the user made after it."""
+    """A rule change. It also names the rule its sender last read. While the match has another rule,
+    a request the phone gave up on is refused, so it does not undo a later change to another rule.
+    The check compares rules: when later changes brought the match back to the rule the request
+    names, the late request still lands (ADR-0115)."""
 
     expectedRules: MatchRulesInput
 
@@ -288,8 +290,9 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
         corrections stay as they are.
 
         The rule the match already has changes nothing, so a repeated request lands once. Any other
-        request must name the rule the match has now (expectedRules). A request whose user saw another
-        rule was sent before a later change, and it is refused as stale instead of undoing that change.
+        request must name the rule the match has now (expectedRules). A request that names another rule
+        was sent before a later change, and it is refused as stale instead of undoing that change.
+        Only the rules are compared: a late request lands when the match is back at the rule it names.
         """
         with connect(write=True) as db:
             match = db.execute("SELECT * FROM matches WHERE id=?", (match_id,)).fetchone()

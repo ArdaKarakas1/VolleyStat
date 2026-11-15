@@ -678,7 +678,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun changeMatchRules(rules: MatchRules, onDone: () -> Unit) {
         val matchId = _analysis.value.matchId ?: return
         val serverMatchId = _state.value.matches.firstOrNull { it.localId == matchId }?.session?.serverMatchId ?: return
-        // The rule the user saw is the one the list on screen was counted with.
+        // The request names the rule of the list the app last read: the one the list on screen was counted with.
         val seen = _analysis.value.rallies?.rules ?: return
         correct(onDone, found = { list -> emptyList<String>().takeIf { list.rules == rules } }, readsCards = false) { api, _, _ ->
             api.putMatchRules(serverMatchId, rules, seen)

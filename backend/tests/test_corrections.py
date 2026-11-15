@@ -818,8 +818,15 @@ def test_no_comment_inside_a_table_definition_holds_a_comma():
     (the one of Python 3.12 in CI) cuts a dropped last column back to the previous comma, and a
     comma inside a comment there leaves the table definition unclosed. A newer SQLite hides this."""
     from app.db import SCHEMA
-    for body in re.findall(r"CREATE TABLE IF NOT EXISTS \w+ \((.*?)\n\);", SCHEMA, re.S):
-        assert [line for line in body.splitlines() if line.strip().startswith("--") and "," in line] == []
+
+    def comments_with_a_comma(schema):
+        return [line for body in re.findall(r"CREATE TABLE IF NOT EXISTS \w+ \((.*?)\n\);", schema, re.S)
+                for line in body.splitlines() if "--" in line and "," in line.split("--", 1)[1]]
+
+    assert comments_with_a_comma(SCHEMA) == []
+    # The guard reads a comment on a line of its own and a comment behind a column, and no column list.
+    sample = "CREATE TABLE IF NOT EXISTS t (\n  -- one, two\n  a INTEGER, -- three, four\n  b INTEGER, c INTEGER -- five\n);"
+    assert comments_with_a_comma(sample) == ["  -- one, two", "  a INTEGER, -- three, four"]
 
 
 def test_an_analyzer_whose_rallies_overlap_fails_its_job(storage, make_clip):

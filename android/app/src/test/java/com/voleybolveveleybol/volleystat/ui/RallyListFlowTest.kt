@@ -77,11 +77,13 @@ class RallyListFlowTest {
     @Volatile private var winners = listOf<String?>("HOME", "AWAY", "HOME")
     @Volatile private var unsure = setOf<Int>()
     @Volatile private var thirdEndMs = 56_000L
-    /** The rule the stand-in server counts the sets with. */
+    /** The rule the stand-in server names with the list. It counts no sets with it. */
     @Volatile private var rules = MatchRules.FIVB
+    /** While this is set, the server holds back the rally list. */
+    @Volatile private var holdRallies: java.util.concurrent.CountDownLatch? = null
     /** While this is set, the server holds back its answer to a new rule. */
     @Volatile private var holdRules: java.util.concurrent.CountDownLatch? = null
-    /** The server refuses the next rule, as a server that does not accept it would. */
+    /** The server refuses the next rule change, as a server that failed while saving it would. */
     @Volatile private var refuseRules = false
     /** While this is set, the server holds back its answer to a winner decision, as a slow network would. */
     @Volatile private var holdDecision: java.util.concurrent.CountDownLatch? = null
@@ -167,7 +169,10 @@ class RallyListFlowTest {
                     return when ("${request.method} $path") {
                         "GET /matches/server-1/report" -> ok(report())
                         "GET /videos/video-1/analyses/latest" -> ok(job())
-                        "GET /analyses/j1/rallies" -> ok(rallies())
+                        "GET /analyses/j1/rallies" -> {
+                            holdRallies?.await(15, java.util.concurrent.TimeUnit.SECONDS)
+                            ok(rallies())
+                        }
                         "GET /analyses/j1/review-cards" -> if (failNextCardRead) MockResponse().setResponseCode(500).also { failNextCardRead = false } else ok(cards())
                         "PUT /matches/server-1/rules" -> {
                             holdRules?.await(15, java.util.concurrent.TimeUnit.SECONDS)
@@ -565,6 +570,12 @@ class RallyListFlowTest {
 
         // The winner answer lands and moves the list on while the rule is still on its way.
         val vm = ViewModelProvider(app.activity)[AppViewModel::class.java]
+        val listReads = { requests.count { it == "GET /analyses/j1/rallies" } }
+        val readsBefore = listReads()
+        // A screen that gave way to the waiting screen would ask for the list. Held back, that list could not
+        // bring the rule screen back before the checks below, so they do not depend on which answer is faster.
+        val listHeld = java.util.concurrent.CountDownLatch(1)
+        holdRallies = listHeld
         decision.countDown()
         idleUntil("the answer of the decision") { vm.analysis.value.job?.rallyListVersion == 8 }
 
@@ -573,7 +584,11 @@ class RallyListFlowTest {
         back()
         app.onNodeWithText(text(R.string.rule_sending)).assertIsDisplayed()
         app.onNodeWithText(text(R.string.rule_sets_option, 2)).performScrollTo().assertIsSelected()
+        // It kept its list, so it asked for no other: a screen that had given way to the waiting screen would have.
+        assertEquals("no list is read while the rule is on its way", readsBefore, listReads())
 
+        // The list the app reads after the rule's answer comes through again.
+        listHeld.countDown()
         holdRules!!.countDown()
         waitFor(text(R.string.rule_name_custom))
         assertEquals(MatchRules(2, 25, 15), rules)
@@ -591,7 +606,10 @@ class RallyListFlowTest {
         back()
         app.onNodeWithText(text(R.string.rule_card_change)).performScrollTo().performClick()
         waitFor(text(R.string.rule_title))
+        // Three answers, each away from the FIVB rule and each another number: 2 sets, sets to 21, the deciding set to 25.
         app.onNodeWithText(text(R.string.rule_sets_option, 2)).performScrollTo().performClick()
+        app.onAllNodesWithText(text(R.string.rule_points_option, 21))[0].performScrollTo().performClick()
+        app.onNodeWithText(text(R.string.rule_points_option, 25)).performScrollTo().performClick()
 
         // The answer lands and moves the list on. The screen waits for the list of now and reads it.
         val vm = ViewModelProvider(app.activity)[AppViewModel::class.java]
@@ -600,27 +618,34 @@ class RallyListFlowTest {
         idleUntil("the list of now") { vm.analysis.value.currentRallies != null }
         waitFor(text(R.string.rule_sets_option, 2))
 
-        // The choice is still there to save, and nothing was sent.
+        // Every answer is still there to save, and nothing was sent.
         app.onNodeWithText(text(R.string.rule_sets_option, 2)).performScrollTo().assertIsSelected()
-        app.onNodeWithText(text(R.string.action_save_rule)).assertIsEnabled()
+        app.onAllNodesWithText(text(R.string.rule_points_option, 21))[0].performScrollTo().assertIsSelected()
+        app.onNodeWithText(text(R.string.rule_points_option, 25)).performScrollTo().assertIsSelected()
+        app.onNodeWithText(text(R.string.rule_counting_if_saved, 21, 3, 25)).assertIsDisplayed()
         assertEquals(0, requests.count { it == "PUT /matches/server-1/rules" })
+
+        // Saved now, the whole choice goes to the server.
+        tap(R.string.action_save_rule)
+        waitFor(text(R.string.rule_name_custom))
+        assertEquals(MatchRules(2, 21, 25), rules)
     }
 
-    @Test fun aNoGivenBeforeTheRuleChangedDoesNotSpeakForTheRecountedList() {
+    @Test fun aNoGivenBeforeTheRuleChangedDoesNotSpeakForTheListOfTheNewRule() {
         openTheRallyList()
         tap(R.string.action_check_score)
         tap(R.string.score_check_no)
         val hint = text(R.string.rallies_no_hint, text(R.string.rule_card_change), text(R.string.action_choose_winner), text(R.string.review_not_a_rally))
         app.onNodeWithText(hint).performScrollTo().assertIsDisplayed()
 
-        // The hint sends the user to the rule. The server recounts the list with the new one.
+        // The hint sends the user to the rule. With the new rule the list moves on.
         app.onNodeWithText(text(R.string.rule_card_change)).performScrollTo().performClick()
         waitFor(text(R.string.rule_title))
         app.onAllNodesWithText(text(R.string.rule_points_option, 21))[0].performScrollTo().performClick()
         tap(R.string.action_save_rule)
         waitFor(text(R.string.rule_name_custom))
 
-        // The user has not compared the recounted scores yet, so nothing on the list says they differ.
+        // The user has not compared the scores of the list of now yet, so nothing on the list says they differ.
         assertTrue(app.onAllNodesWithText(hint).fetchSemanticsNodes().isEmpty())
         app.onNodeWithText(text(R.string.action_check_score)).performScrollTo().assertIsDisplayed()
     }

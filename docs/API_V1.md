@@ -31,9 +31,9 @@ Değişmez kurallar:
 {"setsToWin": 2, "setTarget": 25, "decidingSetTarget": 15}
 ```
 
-- `setsToWin`: Maçı kaç set alan takımın kazandığını söyler, `2` ya da `3`.
-- `setTarget`: Setin kaç sayıda bittiğini söyler, `25`, `21` ya da `15`.
-- `decidingSetTarget`: Karar setinin kaç sayıda bittiğini söyler, `25`, `21` ya da `15`. Karar seti `2 × setsToWin − 1` numaralı settir.
+- `setsToWin`: Maçı kaç set alan takımın kazandığını söyler. Değer `2` ya da `3` olur.
+- `setTarget`: Setin kaç sayıda bittiğini söyler. Değer `25`, `21` ya da `15` olur.
+- `decidingSetTarget`: Karar setinin kaç sayıda bittiğini söyler. Değer `25`, `21` ya da `15` olur. Karar seti `2 × setsToWin − 1` numaralı settir.
 - Üç alan da zorunludur ve tam sayı olur. Sunucu başka bir alanı ve başka bir değeri `422 VALIDATION_ERROR` ile reddeder. Uygulama da yalnız bu değerleri sunar. OpenAPI belgesi kabul edilen değerleri `enum` olarak listeler.
 - Sunucu maç isteğinin bilinmeyen alanını da `422 VALIDATION_ERROR` ile reddeder. Kural `rules` nesnesinin dışında ya da başka bir adla gelirse sunucu onu sessizce düşürmez.
 - Alan yoksa ya da `null` ise sunucu FIVB kuralını yazar: `{"setsToWin": 3, "setTarget": 25, "decidingSetTarget": 15}`. Sunucu 0.6 sürümünden önce açılan her maçı da bu kuralla sayar.
@@ -43,7 +43,7 @@ Yanıt kuralı iki alanla daha verir: `{"setsToWin": 2, "setTarget": 25, "decidi
 
 `PUT /v1/matches/{matchId}/rules`
 
-Gövde kural nesnesidir ve kullanıcının ekranda gördüğü kuralı da taşır (`expectedRules`). Sunucu `200` ile maçı `GET` yanıtındaki biçimde döner.
+Gövde kural nesnesidir ve istemcinin sunucudan son okuduğu kuralı da taşır (`expectedRules`). Sunucu `200` ile maçı `GET` yanıtındaki biçimde döner.
 
 ```json
 {"setsToWin": 2, "setTarget": 21, "decidingSetTarget": 15, "expectedRules": {"setsToWin": 3, "setTarget": 25, "decidingSetTarget": 15}}
@@ -52,8 +52,9 @@ Gövde kural nesnesidir ve kullanıcının ekranda gördüğü kuralı da taşı
 - Kural değiştiyse sunucu aynı işlemde maçın `NEEDS_REVIEW` ya da `COMPLETE` durumundaki her işinin `rallyListVersion` ve `revision` değerini bir artırır. Kullanıcı listeyi eski kuralın set skorlarıyla onayladı, bu yüzden onay düşer (bölüm 9). Eski sürümle yola çıkmış bir onay ya da düzeltme `409 RALLY_LIST_STALE` alır.
 - Kararlar, kartlar ve düzeltmeler kalır. Sunucu kural değişikliğini düzeltme kaydına yazmaz ve rapordaki `rallyList.corrections` sayısı değişmez.
 - Aynı kural yeniden gelirse sunucu hiçbir şey yazmaz, hiçbir sürümü artırmaz ve `expectedRules` alanına bakmaz. İstemci bu yüzden yanıtı kaybolan isteği güvenle yineler.
-- Maçın kuralı `expectedRules` ile aynı değilse sunucu `409 MATCH_RULES_STALE` döner, maçın şimdiki kuralını `details.currentRules` alanında verir ve hiçbir şey yazmaz. İstemcinin beklemekten vazgeçtiği bir istek sonradan gelirse sunucu böylece kullanıcının sonraki seçimini geri almaz.
+- Maçın kuralı `expectedRules` ile aynı değilse sunucu `409 MATCH_RULES_STALE` döner, maçın şimdiki kuralını `details.currentRules` alanında verir ve hiçbir şey yazmaz. İstemcinin beklemekten vazgeçtiği bir istek sonradan gelirse sunucu böylece kullanıcının başka bir kurala yaptığı sonraki değişikliği geri almaz. Sunucu yalnız kuralları karşılaştırır: Kural sonradan değişip isteğin `expectedRules` değerine geri döndüyse sunucu geç gelen isteği de uygular.
 - `expectedRules` zorunludur ve kural nesnesinin kurallarına uyar. Sunucu eksik ya da geçersiz `expectedRules` alanını `422 VALIDATION_ERROR` ile reddeder.
+- `expectedRules` yalnız üç giriş alanını taşır. İstemci, sunucunun yanıtlarda verdiği kural nesnesindeki `winBy` ve `decidingSetNumber` alanlarını geri göndermez.
 - Sunucu kuralı işin durumuna ve liste onayına bakmadan kabul eder. Maç yoksa sunucu `404 MATCH_NOT_FOUND` döner ve hiçbir şey yazmaz.
 
 ## 2. Analizör
@@ -234,7 +235,7 @@ Bir videonun aynı anda tek süren işi olur. `Idempotency-Key` başlığı iste
 
 ## 8. Hata kodları
 
-`VIDEO_NOT_READY`, `VIDEO_FILE_MISSING`, `MODEL_NOT_CONFIGURED`, `ANALYSIS_NOT_FOUND`, `JOB_FINISHED`, `CARD_NOT_FOUND`, `REVIEW_STALE_VERSION`, `IDEMPOTENCY_KEY_REUSED`, `INVALID_SELECTION`, `REPORT_NOT_AVAILABLE`, `RANGE_NOT_SATISFIABLE`, `PAYLOAD_TOO_LARGE`. Ralli düzeltme uçları şu kodları da kullanır: `RALLY_NOT_FOUND`, `JOB_NOT_REVIEWABLE`, `RALLY_LIST_STALE`, `INVALID_INTERVAL`, `RALLY_OVERLAP`, `SPLIT_POINT_OUTSIDE`, `NO_PREVIOUS_RALLY`, `LIST_NOT_READY`, `MOCK_LIST_NOT_CONFIRMABLE`. Hepsi [API.md](API.md) içindeki hata zarfıyla döner.
+`VIDEO_NOT_READY`, `VIDEO_FILE_MISSING`, `MODEL_NOT_CONFIGURED`, `ANALYSIS_NOT_FOUND`, `JOB_FINISHED`, `CARD_NOT_FOUND`, `REVIEW_STALE_VERSION`, `IDEMPOTENCY_KEY_REUSED`, `INVALID_SELECTION`, `REPORT_NOT_AVAILABLE`, `RANGE_NOT_SATISFIABLE`, `PAYLOAD_TOO_LARGE`. Ralli düzeltme uçları şu kodları da kullanır: `RALLY_NOT_FOUND`, `JOB_NOT_REVIEWABLE`, `RALLY_LIST_STALE`, `INVALID_INTERVAL`, `RALLY_OVERLAP`, `SPLIT_POINT_OUTSIDE`, `NO_PREVIOUS_RALLY`, `LIST_NOT_READY`, `MOCK_LIST_NOT_CONFIRMABLE`. Maç kuralı ucu (`PUT /v1/matches/{id}/rules`, bölüm 1) `MATCH_RULES_STALE` kodunu da kullanır. Hepsi [API.md](API.md) içindeki hata zarfıyla döner.
 
 JSON gövdesi alan uçlar en çok 64 KiB gövde kabul eder. Daha büyük gövdeye sunucu gövdeyi ayrıştırmadan `413 PAYLOAD_TOO_LARGE` döner. Parça yükleme ucu (`PUT /v1/uploads/{id}/chunks`) kendi sınırını uygular.
 
