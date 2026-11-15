@@ -60,7 +60,7 @@ fun ruleCountingIfSaved(rules: MatchRules): String =
     if (rules.setTarget == rules.decidingSetTarget) stringResource(R.string.rule_counting_same_if_saved, rules.setTarget)
     else stringResource(R.string.rule_counting_if_saved, rules.setTarget, rules.decidingSetNumber, rules.decidingSetTarget)
 
-/** The rule of a match on 03 and on the rally list. A tap opens screen 13. */
+/** The rule of a match on 03 and on the rally list, and on the check screen when it is not the FIVB rule. A tap opens screen 13. */
 @Composable
 fun MatchRulesCard(rules: MatchRules, onClick: () -> Unit, enabled: Boolean = true) {
     ChoiceCard(R.drawable.ic_sports_volleyball, stringResource(R.string.rule_card_change), onClick, enabled) {

@@ -18,6 +18,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -33,10 +35,13 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -298,30 +303,42 @@ private fun ListState(
         }
         // The rule the server counted these scores with: the list's own, not the one the match was created with.
         MatchRulesCard(list.rules, onChangeRules, enabled = !analysis.correcting)
-        // What became of the confirmation stands next to the button that sent it. At the top of this head
-        // it lay above the edge of a small screen with large text, where the button is below the first screen.
-        CorrectionStatus(analysis, R.string.rallies_confirm_sending)
-        when {
-            list.confirmed -> Notice(stringResource(R.string.rallies_confirmed), Tone.POSITIVE)
-            analysis.job?.mock == true -> Notice(stringResource(R.string.rallies_demo), Tone.NEUTRAL)
-            // A rally without a winner leaves the score open, so there is no score to compare yet.
-            waiting.isNotEmpty() -> {
-                Notice(stringResource(R.string.rallies_not_ready, waiting.size), Tone.CAUTION)
-                SecondaryButton(stringResource(R.string.action_go_review), onClick = { onOpenReview(waiting.first()) }, icon = R.drawable.ic_fact_check)
+        // What became of the confirmation stands next to the button that sent it, and the list brings both
+        // onto the screen. On a small screen with large text the button stands at the bottom edge: a line
+        // that opens above it would push the button, and most of itself, under that edge.
+        val statusPlace = remember { BringIntoViewRequester() }
+        val status = analysis.correcting || analysis.correctionProblem != null
+        LaunchedEffect(analysis.correcting, analysis.correctionProblem) {
+            if (status) {
+                // The line is measured in the frame after the one that composed it.
+                withFrameNanos { }
+                statusPlace.bringIntoView()
             }
-            else -> {
-                // The hint sends the user to the rule, to a button and to an answer. It quotes each by its own label.
-                if (scoresDiffer) {
-                    Notice(
-                        stringResource(
-                            R.string.rallies_no_hint, stringResource(R.string.rule_card_change),
-                            stringResource(R.string.action_choose_winner), stringResource(R.string.review_not_a_rally),
-                        ),
-                        Tone.NEUTRAL,
-                    )
+        }
+        Column(Modifier.bringIntoViewRequester(statusPlace), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            CorrectionStatus(analysis, R.string.rallies_confirm_sending)
+            when {
+                list.confirmed -> Notice(stringResource(R.string.rallies_confirmed), Tone.POSITIVE)
+                analysis.job?.mock == true -> Notice(stringResource(R.string.rallies_demo), Tone.NEUTRAL)
+                // A rally without a winner leaves the score open, so there is no score to compare yet.
+                waiting.isNotEmpty() -> {
+                    Notice(stringResource(R.string.rallies_not_ready, waiting.size), Tone.CAUTION)
+                    SecondaryButton(stringResource(R.string.action_go_review), onClick = { onOpenReview(waiting.first()) }, icon = R.drawable.ic_fact_check)
                 }
-                // Without one counted rally the server has no set score to show, and it would refuse the confirmation.
-                PrimaryButton(stringResource(R.string.action_check_score), onCheck, enabled = !analysis.correcting && list.sets.isNotEmpty(), icon = R.drawable.ic_task_alt)
+                else -> {
+                    // The hint sends the user to the rule, to a button and to an answer. It quotes each by its own label.
+                    if (scoresDiffer) {
+                        Notice(
+                            stringResource(
+                                R.string.rallies_no_hint, stringResource(R.string.rule_card_change),
+                                stringResource(R.string.action_choose_winner), stringResource(R.string.review_not_a_rally),
+                            ),
+                            Tone.NEUTRAL,
+                        )
+                    }
+                    // Without one counted rally the server has no set score to show, and it would refuse the confirmation.
+                    PrimaryButton(stringResource(R.string.action_check_score), onCheck, enabled = !analysis.correcting && list.sets.isNotEmpty(), icon = R.drawable.ic_task_alt)
+                }
             }
         }
     }

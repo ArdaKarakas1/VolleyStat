@@ -441,7 +441,9 @@ class ScreenStatesTest {
             }
         }
         fun bounds(label: String) = compose.onNodeWithText(label, useUnmergedTree = true).getUnclippedBoundsInRoot()
-        val date = text(R.string.match_date)
+        // The date itself, the last line of the card. The label above it ends higher than an action that
+        // stands beside a date broken over three lines, so a comparison with the label passes on both layouts.
+        val date = formatDay("2026-08-14")
         val change = text(R.string.match_date_pick)
         assertTrue("the action stands under the date", bounds(change).top >= bounds(date).bottom)
 

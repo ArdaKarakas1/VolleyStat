@@ -7,7 +7,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasScrollToNodeAction
 import androidx.compose.ui.test.hasText
@@ -181,7 +180,7 @@ class RallyListFlowTest {
                                     JSONObject().put("error", JSONObject().put("code", "VALIDATION_ERROR").put("message", "invalid").put("details", JSONObject())).toString()
                                 )
                             } else {
-                                // As on the real server: the request names the rule its user saw, and a new rule moves the list on, so the confirmation lapses.
+                                // As on the real server: the request names the rule the phone last read, and a new rule moves the list on, so the confirmation lapses.
                                 val seen = body.getJSONObject("expectedRules")
                                 check(MatchRules(seen.getInt("setsToWin"), seen.getInt("setTarget"), seen.getInt("decidingSetTarget")) == rules) { "the app named a rule the list did not have" }
                                 rules = MatchRules(body.getInt("setsToWin"), body.getInt("setTarget"), body.getInt("decidingSetTarget"))

@@ -31,6 +31,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.Density
@@ -303,6 +304,32 @@ class MatchRulesScreenTest {
         width = 379.dp
         compose.waitForIdle()
         assertTrue("with room, the action stands beside the rule", bounds(change).left >= bounds(detail).right)
+    }
+
+    @Config(sdk = [35], qualifiers = "w320dp-h568dp-xhdpi")
+    @Test fun onTheSmallestPhoneTheTallestNoticeLeavesSaveOnTheScreenAndARowInReach() {
+        // The stale notice quotes a whole rule, so it is the tallest line above Save. 2x is the largest text Android offers.
+        var scale by mutableStateOf(1.5f)
+        show {
+            CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, scale)) {
+                MatchRulesScreen(MatchRules.FIVB, onSave = {}, onBack = {}, onList = true, problem = CorrectionProblem.STALE, initial = MatchRules(2, 21, 15))
+            }
+        }
+        val notice = text(R.string.rule_stale, text(R.string.rule_detail, 3, 25, 5, 15))
+        listOf(1.5f, 2f).forEach { size ->
+            scale = size
+            compose.waitForIdle()
+            val screen = compose.onRoot().getUnclippedBoundsInRoot()
+            val button = compose.onNodeWithText(save).assertIsEnabled().getUnclippedBoundsInRoot()
+            val line = compose.onNodeWithText(notice).assertIsDisplayed().getUnclippedBoundsInRoot()
+            assertTrue("at ${size}x the whole Save button is on the screen", button.top >= line.bottom && button.bottom <= screen.bottom)
+            assertTrue("at ${size}x the notice starts under the title", line.top >= compose.onNodeWithText(text(R.string.rule_title)).getUnclippedBoundsInRoot().bottom)
+            println("STALE_NOTICE scale=$size notice=${line.bottom - line.top} above=${line.top - compose.onNodeWithText(text(R.string.rule_title)).getUnclippedBoundsInRoot().bottom}")
+            // The questions scroll in what is left, and a row comes within reach of a finger.
+            val other = if (size == 1.5f) threeSets else twoSets
+            tap(other)
+            row(other).assertIsSelected()
+        }
     }
 
     @Test fun aLostConnectionIsNamedAsOne() {

@@ -203,7 +203,7 @@ def test_a_late_request_for_a_rule_does_not_undo_a_later_change(best_of_three, l
     # The phone asked for "every set to 15" and gave up waiting. The user then chose another rule, which landed.
     assert put_rules(client, match_id, later, expected=BEST_OF_THREE_TO_21).status_code == 200
     before = (client.get(f"/v1/matches/{match_id}").json(), job_row(storage, job_id))
-    # The first request arrives now. It names the rule its user saw, which the match no longer has.
+    # The first request arrives now. It names the rule its phone last read, which the match no longer has.
     late = put_rules(client, match_id, {"setsToWin": 2, "setTarget": 15, "decidingSetTarget": 15}, expected=BEST_OF_THREE_TO_21)
     assert late.status_code == 409
     assert late.json()["error"]["code"] == "MATCH_RULES_STALE"

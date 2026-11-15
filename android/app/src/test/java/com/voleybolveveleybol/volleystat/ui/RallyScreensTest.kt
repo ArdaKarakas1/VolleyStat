@@ -5,10 +5,12 @@ import androidx.activity.OnBackPressedDispatcher
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -33,6 +35,8 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.voleybolveveleybol.volleystat.AnalysisUi
@@ -294,7 +298,7 @@ class RallyScreensTest {
         correcting = true
         assertEquals(listOf(text(R.string.rallies_confirm_sending)), announcements.heard())
         // The line stands between the rule card and the button the user tapped, not at the top of the list:
-        // on a small screen with large text that button is below the first screen.
+        // on a small screen with large text that button stands at the bottom edge of the first screen.
         val line = compose.onNodeWithText(text(R.string.rallies_confirm_sending)).getUnclippedBoundsInRoot()
         assertTrue(line.top >= compose.onNode(ruleCard).getUnclippedBoundsInRoot().bottom)
         assertTrue(line.bottom <= compose.onNodeWithText(text(R.string.action_check_score)).getUnclippedBoundsInRoot().top)
@@ -306,6 +310,38 @@ class RallyScreensTest {
         val refusal = compose.onNodeWithText(text(R.string.correction_stale)).getUnclippedBoundsInRoot()
         assertTrue(refusal.top >= compose.onNode(ruleCard).getUnclippedBoundsInRoot().bottom)
         assertTrue(refusal.bottom <= compose.onNodeWithText(text(R.string.action_check_score)).getUnclippedBoundsInRoot().top)
+    }
+
+    @Config(sdk = [35], qualifiers = "w320dp-h568dp-xhdpi")
+    @Test fun onASmallPhoneWithLargeTextTheListBringsWhatBecameOfTheConfirmationOntoTheScreen() {
+        // A 320x568 dp phone at 1.5x text and a rule with a long name: the button stands at the bottom edge of
+        // the first screen. A line that opens above it pushes the button down, and itself with it.
+        var correcting by mutableStateOf(false)
+        var problem by mutableStateOf<CorrectionProblem?>(null)
+        show {
+            CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, 1.5f)) {
+                RalliesScreen(
+                    match, state(decided.copy(rules = MatchRules(2, 21, 15)), correcting = correcting, problem = problem),
+                    onOpenRally = {}, onOpenGap = {}, onConfirm = {}, onOpenReview = {}, onRetry = {}, onBack = {},
+                )
+            }
+        }
+        val screen = compose.onRoot().getUnclippedBoundsInRoot()
+        val title = compose.onNodeWithText(text(R.string.rallies_title)).getUnclippedBoundsInRoot()
+        fun bounds(label: String) = compose.onNodeWithText(label).getUnclippedBoundsInRoot()
+        val button = text(R.string.action_check_score)
+        assertTrue("the test starts where the button reaches the bottom edge", bounds(button).bottom > screen.bottom - 8.dp)
+
+        correcting = true
+        compose.waitForIdle()
+        assertTrue("the whole sending line is on the screen", bounds(text(R.string.rallies_confirm_sending)).let { it.top >= title.bottom && it.bottom <= screen.bottom })
+        assertTrue("and so is the button it belongs to", bounds(button).bottom <= screen.bottom)
+
+        correcting = false
+        problem = CorrectionProblem.STALE
+        compose.waitForIdle()
+        assertTrue("the whole refusal is on the screen", bounds(text(R.string.correction_stale)).let { it.top >= title.bottom && it.bottom <= screen.bottom })
+        assertTrue("and so is the button for the next attempt", bounds(button).bottom <= screen.bottom)
     }
 
     @Test fun theEditorReportsACorrectionOnItsWayAndItsRefusalToAScreenReader() {

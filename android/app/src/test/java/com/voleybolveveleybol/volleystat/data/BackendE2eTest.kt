@@ -292,7 +292,7 @@ class BackendE2eTest {
             assertEquals("a new rule moves the list on", before + 1, after.version)
             assertEquals(MatchRules.FIVB, api.report(matchId)!!.rules)
             // The same rule again changes nothing, so a repeat after a lost answer is harmless,
-            // even though the repeat names the rule the user saw before the first attempt.
+            // even though the repeat names the rule the phone read before the first attempt.
             api.putMatchRules(matchId, MatchRules.FIVB, seen = chosen)
             assertEquals(after.version, api.rallies(job.id).version)
 
