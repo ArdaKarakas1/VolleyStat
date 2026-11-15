@@ -148,6 +148,28 @@ class MatchRulesScreenTest {
         compose.onNodeWithText(text(R.string.rule_counting_same, 21)).assertIsDisplayed()
     }
 
+    @Test fun theRuleInForceIsSaidWithItsOwnDecidingSet() {
+        // Best of three: the deciding set is the third one, and the sentence about the rule the match has says so.
+        show { MatchRulesScreen(MatchRules(2, 21, 15), onSave = {}, onBack = {}, onList = true) }
+        compose.onNodeWithText(text(R.string.rule_counting, 21, 3, 15)).assertIsDisplayed()
+    }
+
+    @Test fun everyChoiceIsReportedAsTheWholeRuleItMakes() {
+        // The rally list route keeps what the screen reports, so that the choice outlives a list that is read again.
+        val reported = mutableListOf<MatchRules>()
+        show { MatchRulesScreen(MatchRules.FIVB, onSave = {}, onBack = {}, onList = true, onSelectionChanged = { reported += it }) }
+        tap(twoSets)
+        assertEquals(MatchRules(2, 25, 15), reported.last())
+        tap(text(R.string.rule_points_option, 21), 0)
+        assertEquals(MatchRules(2, 21, 15), reported.last())
+        tap(text(R.string.rule_points_option, 25))
+        assertEquals(MatchRules(2, 21, 25), reported.last())
+        // Each group reports its own answer: the sets once more, after the two targets.
+        tap(threeSets)
+        assertEquals(MatchRules(3, 21, 25), reported.last())
+        assertEquals(4, reported.size)
+    }
+
     @Test fun everyChoiceIsARadioRowOfAtLeast48dpThatNamesItsQuestionAndSaysWhetherItIsSelected() {
         show { MatchRulesScreen(MatchRules.FIVB, onSave = {}, onBack = {}) }
         val radio = SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton)
