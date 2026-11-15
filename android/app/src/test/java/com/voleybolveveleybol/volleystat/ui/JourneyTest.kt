@@ -4,6 +4,7 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -207,6 +208,10 @@ class JourneyTest {
         app.onNodeWithText(text(R.string.rule_name_custom)).performScrollTo().assertIsDisplayed()
         app.onNodeWithText(text(R.string.rule_detail, 2, 21, 3, 15)).assertIsDisplayed()
 
+        // The user ticks the box and then decides to look at the rule after all.
+        app.onNodeWithText(text(R.string.check_rights)).performScrollTo().performClick()
+        app.onNodeWithText(text(R.string.check_rights)).assertIsOn()
+
         // From there the user puts the standard rule back, and the screen has no rule to name any more.
         app.onNodeWithText(text(R.string.rule_card_change)).performClick()
         app.onNodeWithText(text(R.string.rule_sets_option_fivb, 3)).performScrollTo().performClick()
@@ -215,5 +220,7 @@ class JourneyTest {
         app.onNodeWithText(text(R.string.check_title)).assertIsDisplayed()
         assertTrue(app.onAllNodesWithText(text(R.string.rule_card_change)).fetchSemanticsNodes().isEmpty())
         assertEquals(MatchRules.FIVB, viewModel.state.value.draft.rules)
+        // The statement the user gave about this video is still given: the video did not change.
+        app.onNodeWithText(text(R.string.check_rights)).performScrollTo().assertIsOn()
     }
 }

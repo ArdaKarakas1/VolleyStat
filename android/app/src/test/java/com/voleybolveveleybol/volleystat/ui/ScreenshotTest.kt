@@ -335,5 +335,9 @@ class ScreenshotTest {
             MatchRulesScreen(MatchRules.FIVB, {}, {}, onList = true, listConfirmed = true, initial = chosen)
         }
         shotOn("buyuk_yazi_13_mac_kurali_secim", "+w411dp-h891dp-port", fontScale = 1.5f) { MatchRulesScreen(MatchRules.FIVB, {}, {}, initial = chosen) }
+        // The longest notice of the screen where it has the least room: the narrowest phone with large text.
+        shotOn("kucuk_buyuk_yazi_13_mac_kurali_eski_kural", "+w320dp-h568dp-port", fontScale = 1.5f) {
+            MatchRulesScreen(MatchRules(2, 25, 15), {}, {}, onList = true, problem = CorrectionProblem.STALE, initial = chosen)
+        }
     }
 }

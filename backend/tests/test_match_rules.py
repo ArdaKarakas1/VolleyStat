@@ -191,16 +191,23 @@ def test_setting_the_rule_the_match_already_has_changes_nothing(best_of_three):
     assert listing(client, job_id)["listConfirmed"] is True
 
 
-def test_a_late_request_for_a_rule_does_not_undo_a_later_change(best_of_three):
+# The later change differs from the rule the late request names in every field, or in exactly one of them.
+@pytest.mark.parametrize("later", [
+    FIVB,
+    {**BEST_OF_THREE_TO_21, "setsToWin": 3},
+    {**BEST_OF_THREE_TO_21, "setTarget": 25},
+    {**BEST_OF_THREE_TO_21, "decidingSetTarget": 25},
+], ids=["every-field", "sets-to-win", "set-target", "deciding-target"])
+def test_a_late_request_for_a_rule_does_not_undo_a_later_change(best_of_three, later):
     client, match_id, job_id, storage = best_of_three
-    # The phone asked for "every set to 25" and gave up waiting. The user then chose FIVB, which landed.
-    assert put_rules(client, match_id, FIVB, expected=BEST_OF_THREE_TO_21).status_code == 200
+    # The phone asked for "every set to 15" and gave up waiting. The user then chose another rule, which landed.
+    assert put_rules(client, match_id, later, expected=BEST_OF_THREE_TO_21).status_code == 200
     before = (client.get(f"/v1/matches/{match_id}").json(), job_row(storage, job_id))
     # The first request arrives now. It names the rule its user saw, which the match no longer has.
-    late = put_rules(client, match_id, {"setsToWin": 2, "setTarget": 25, "decidingSetTarget": 25}, expected=BEST_OF_THREE_TO_21)
+    late = put_rules(client, match_id, {"setsToWin": 2, "setTarget": 15, "decidingSetTarget": 15}, expected=BEST_OF_THREE_TO_21)
     assert late.status_code == 409
     assert late.json()["error"]["code"] == "MATCH_RULES_STALE"
-    assert late.json()["error"]["details"]["currentRules"] == payload(FIVB)
+    assert late.json()["error"]["details"]["currentRules"] == payload(later)
     assert (client.get(f"/v1/matches/{match_id}").json(), job_row(storage, job_id)) == before
 
 

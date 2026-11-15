@@ -395,7 +395,7 @@
     <string name="merge_body_previous_answer">Sunucu %1$d. ralli için verdiğin kararı siler.</string>
     <string name="merge_body_reopens">Sunucu %1$d. ralli için verdiğin \"Bu bir ralli değil\" yanıtını da siler ve o rallinin kazanan sorusunu yeniden açar.</string>
     <string name="merge_confirm">Birleştir</string>
-    <string name="correction_stale">Liste bu ekran açıldıktan sonra değişti. Uygulama listeyi yeniden yükledi. Düzeltmeyi yeniden yap.</string>
+    <string name="correction_stale">Sunucudaki liste değişmiş. Uygulama listeyi yeniden yükledi. Düzeltmeyi yeniden yap.</string>
     <string name="correction_overlap">Bu aralık %1$d. ralliyle çakışıyor.</string>
     <string name="correction_overlap_unknown">Bu aralık başka bir ralliyle çakışıyor.</string>
     <string name="correction_outside">Bu konum izin verilen aralığın dışında kalıyor.</string>
@@ -541,5 +541,5 @@
     <!-- The server accepts every rule the app offers, so a refusal never blames the rule. -->
     <string name="rule_refused">Sunucu kuralı kaydetmedi. Sunucunun güncel sürümle çalıştığını denetle ve yeniden dene.</string>
     <!-- %1$s: the whole rule the server has now, as the rule card writes it (rule_detail). The user checks the choice against it. -->
-    <string name="rule_stale">Sunucudaki kural bu ekranın gösterdiği kuraldan farklı. Sunucu şimdi \"%1$s\" kuralıyla sayıyor. Seçimini denetle ve yeniden kaydet.</string>
+    <string name="rule_stale">Sunucudaki kural değişmiş. Sunucu şimdi \"%1$s\" kuralıyla sayıyor. Seçimini denetle ve yeniden kaydet.</string>
 </resources>
