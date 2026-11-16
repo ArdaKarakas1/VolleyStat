@@ -199,6 +199,11 @@ def test_proposals_equally_near_two_rallies_that_name_different_winners_are_refu
             winner.evaluate_video(golds, order, tolerance_ms=30_000)
 
 
+def test_a_contradiction_on_a_later_rally_of_the_video_is_refused_too():
+    with pytest.raises(winner.ContradictingProposals, match="gold rally 10000-15000 ms"):
+        winner.evaluate_video([gold(0, "HOME"), gold(1, "HOME")], [prop(0, "HOME"), prop(1, "HOME"), prop(1, "AWAY")])
+
+
 def test_a_second_proposal_nearest_to_its_own_rally_contradicts_no_neighbour():
     # At a loose tolerance the extra AWAY lies within reach of the HOME rally too, but it is
     # nearest to the AWAY rally, where it repeats the paired decision.

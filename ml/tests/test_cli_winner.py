@@ -634,9 +634,17 @@ def test_a_gold_file_without_rallies_does_not_count_as_an_evaluated_test_video(t
     assert document["notEvaluated"] == {"goldOnly": [], "goldEmpty": ["V2"], "goldWithoutWinner": [], "predictedOnly": [], "manifestOnly": [], "automaticProposals": 35}
     assert (document["videosEvaluated"], document["matchGroups"]) == (["V1"], 1)
 
+    # Under a manifest the video is named once, in the line of the split.
+    assert "not evaluated, the gold file holds no rally" not in out
     # Without a manifest the video is named too.
     code, out, _ = evaluate(capsys, "--gold", only_v1, empty, "--pred", *preds)
     assert "not evaluated, the gold file holds no rally: V2" in out
+    # An empty gold file without a prediction file is a video without predictions, not an empty one.
+    document = as_json(capsys, "--gold", only_v1, empty, "--pred", preds[0])
+    assert (document["notEvaluated"]["goldOnly"], document["notEvaluated"]["goldEmpty"]) == (["V2"], [])
+    # When no gold file annotates a winner nothing can be evaluated.
+    assert_unusable(evaluate(capsys, "--gold", empty, "--pred", preds[1]),
+                    "no gold file of a video in the predicted files annotates a winner: V2")
 
 
 def test_a_share_just_below_a_target_is_not_printed_as_the_target(tmp_path, capsys):
@@ -646,6 +654,35 @@ def test_a_share_just_below_a_target_is_not_printed_as_the_target(tmp_path, caps
     assert "  selective precision: 189/199 automatic decisions are correct (0.9497)" in out
     assert "  precision 189/199 (0.9497): point estimate below the target, interval reaches up to 0.972" in out
     assert "0.950" not in out
+
+
+def test_a_gate_run_without_exclusions_says_zero_and_names_no_hard_case(tmp_path, capsys):
+    gold, preds, manifest, digest = gate_inputs(tmp_path)
+    code, out, _ = evaluate(capsys, "--gold", gold, "--pred", *preds, "--manifest", manifest, "--expect-sha256", digest)
+    assert code == 0
+    assert "  gold rallies without a definite winner: 0\n" in out
+    assert "  automatic decisions that were not scored: 0\n" in out
+    assert "hard cases" not in out
+
+
+def test_hard_cases_without_a_decision_say_nothing_about_decisions(tmp_path, capsys):
+    rows = gold_rows("V1", ["HOME"] * 2) + [["V1", *at(2), "UNKNOWN", "UNKNOWN", "UNRESOLVABLE"]]
+    gold = gold_file(tmp_path, rows)
+    pred = pred_file(tmp_path, "V1", [(0, "HOME"), (1, "HOME")])
+    code, out, _ = evaluate(capsys, "--gold", gold, "--pred", pred)
+    assert "  hard cases of the double-annotated labels, outside this layer: 1 UNRESOLVABLE, 0 NEEDS_MORE_EVIDENCE\n" in out
+
+
+def test_coverage_and_the_lower_bound_beside_their_targets_are_not_rounded_onto_them(tmp_path, capsys):
+    # Coverage 1499/2500 = 0.5996 and, with 79 unpaired decisions, a lower bound 1499/1578 = 0.94993.
+    gold, preds, manifest, digest = gate_inputs(tmp_path, correct=1499, wrong=0, unknown=1001)
+    document = json.loads(preds[0].read_text(encoding="utf-8"))
+    document["rallies"] += proposals("V1", [(index, "HOME") for index in range(1300, 1379)])["rallies"]
+    write_json(preds[0], document)
+    code, out, _ = evaluate(capsys, "--gold", gold, "--pred", *preds, "--manifest", manifest, "--expect-sha256", digest)
+    assert code == 0
+    assert "  automatic coverage: 1499/2500 eligible rallies got an automatic decision (0.5996)" in out
+    assert "    if each were a wrong decision: 1499/1578 (0.9499)" in out
 
 
 def test_targets_that_could_not_be_checked_are_not_read_as_missed(tmp_path, capsys):
@@ -734,6 +771,9 @@ def test_a_manifest_that_can_not_be_trusted_or_does_not_fit_the_videos_is_refuse
     content = "\n".join(line.replace(",test,", ",,") if line.startswith("V2,") else line for line in content.split("\n"))
     unsplit.write_text(f"{content}# content_sha256={hashlib.sha256(content.encode()).hexdigest()}\n", encoding="utf-8")
     assert_unusable(evaluate(capsys, *base, "--manifest", unsplit), "video(s) without a split in the manifest: V2")
+    # Also when that video has a gold file and no prediction file.
+    assert_unusable(evaluate(capsys, "--gold", gold, "--pred", preds[0], "--manifest", unsplit),
+                    "video(s) without a split in the manifest: V2")
 
 
 # --- input that is refused ---------------------------------------------------------------
@@ -807,7 +847,8 @@ def test_prediction_csv_is_read_with_its_own_rules(tmp_path, capsys):
     assert_unusable(evaluate(capsys, "--gold", gold, "--pred", no_winner), "missing column(s): proposed_winner")
 
 
-@pytest.mark.parametrize("column", ["origin", "status", "winner", "rallyListVersion", "rally_list_version", "list_confirmed"])
+@pytest.mark.parametrize("column", ["origin", "status", "winner", "rallyListVersion", "listConfirmed", "rally_list_version",
+                                    "list_confirmed"])
 def test_a_rally_list_with_user_work_is_refused_in_csv_too(tmp_path, capsys, column):
     gold = gold_file(tmp_path, gold_rows("V1", ["HOME"] * 2))
     pred = write_rows(tmp_path / "reviewed.csv", ["video_id", "start_ms", "end_ms", "proposed_winner", column],
@@ -851,6 +892,12 @@ def test_proposals_that_name_different_winners_for_one_rally_are_refused(tmp_pat
     assert_unusable(evaluate(capsys, "--gold", gold, "--pred", pred),
                     "video V1: proposals within +/-1000 ms of the gold rally 0-5000 ms name different winners (AWAY, HOME); "
                     "the component made no single decision on that rally")
+
+
+def test_a_contradiction_on_a_later_rally_names_that_rally(tmp_path, capsys):
+    gold = gold_file(tmp_path, gold_rows("V1", ["HOME"] * 2))
+    pred = pred_file(tmp_path, "V1", [(0, "HOME"), (1, "HOME"), (1, "AWAY")])
+    assert_unusable(evaluate(capsys, "--gold", gold, "--pred", pred), "gold rally 10000-15000 ms name different winners")
 
 
 def test_a_second_proposal_for_a_rally_is_counted_and_named_as_such(tmp_path, capsys):

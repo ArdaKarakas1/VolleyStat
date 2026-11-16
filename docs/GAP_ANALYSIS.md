@@ -115,7 +115,7 @@ Sayılar son yerel koşudan gelir. CI aynı testleri her PR'da çalıştırır.
 | Kanıt | Sonuç |
 |---|---|
 | Arka uç `pytest` | 585 test geçti (yerelde Python 3.13). CI aynı testleri Python 3.12 ile çalıştırır. |
-| `ml` `pytest` | 449 test geçti (yerel). 210 test kazanan ölçümüyle geldi ve uydurma ralli listeleriyle çalışır. |
+| `ml` `pytest` | 455 test geçti (yerel). 216 test kazanan ölçümüyle geldi ve uydurma ralli listeleriyle çalışır. |
 | Android JVM testleri (`:core:test`, `:app:testDebugUnitTest`) | 269 test geçti, hiçbiri atlanmadı (yerel): `:core` 5, `:app` 264. Testler 89 ekran görüntüsü üretti. |
 | Uygulama gerçek sunucuya karşı (JVM) | 11 test geçti (yerel): `BackendE2eTest` 7, `AppFlowE2eTest` 1, `AppUploadFlowE2eTest` 1, `RallyFixE2eTest` 2. Bu on bir test yukarıdaki 269 testin içindedir. İkisi ralli düzeltmeyi dener: biri API istemcisinden, öbürü ekranlardan. İkisi maç kuralını dener. Biri API istemcisinden gider: Kural maçla gider, sunucu sunulan 18 kuralın hepsini kabul eder, listede yeni kuralı verir ve eski kurala dayanan geç bir isteği reddeder. Öbürü kuralı ekranlardan değiştirir. Bu iki test hiçbir set sınırına ulaşmaz. Setleri kuralla sayan rotaları sunucu testleri dener. |
 | Lint | 0 hata |
