@@ -1,5 +1,6 @@
 package com.voleybolveveleybol.volleystat.ui
 
+import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -7,8 +8,19 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.test.core.app.ApplicationProvider
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.voleybolveveleybol.volleystat.AnalysisUi
+import com.voleybolveveleybol.volleystat.CorrectionProblem
+import com.voleybolveveleybol.volleystat.RalliesLoad
+import com.voleybolveveleybol.volleystat.model.EditTarget
+import com.voleybolveveleybol.volleystat.model.Rally
+import com.voleybolveveleybol.volleystat.model.RallyList
+import com.voleybolveveleybol.volleystat.model.SetPoint
+import com.voleybolveveleybol.volleystat.model.gapTarget
+import com.voleybolveveleybol.volleystat.model.rallyTarget
+import com.voleybolveveleybol.volleystat.ui.screens.RalliesScreen
+import com.voleybolveveleybol.volleystat.ui.screens.RallyEditorScreen
 import com.voleybolveveleybol.volleystat.AppUiState
 import com.voleybolveveleybol.volleystat.JobLoad
 import com.voleybolveveleybol.volleystat.ReportLoad
@@ -54,6 +66,7 @@ import com.voleybolveveleybol.volleystat.ui.screens.VideoCheckScreen
 import com.voleybolveveleybol.volleystat.ui.screens.VideoSourceScreen
 import com.voleybolveveleybol.volleystat.ui.screens.WelcomeScreen
 import com.voleybolveveleybol.volleystat.ui.theme.VolleyStatTheme
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -71,6 +84,16 @@ import org.robolectric.annotation.GraphicsMode
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], qualifiers = "w411dp-h891dp-xxhdpi")
 class ScreenshotTest {
+    /**
+     * A screenshot is a still. With animations on, a screen that shows a spinner asks for a new frame
+     * after every frame, and the test runtime, which serves every frame at once, never comes to rest.
+     * Whether that happens depended on which test ran before, so the screenshots turn animations off.
+     */
+    @Before fun noAnimations() {
+        val global = android.provider.Settings.Global.ANIMATOR_DURATION_SCALE
+        android.provider.Settings.Global.putFloat(ApplicationProvider.getApplicationContext<Context>().contentResolver, global, 0f)
+    }
+
     private val video = LocalVideo("/data/kayit.mp4", VideoSource.CAMERA, "kayit-1731400000.mp4", 1_240_000_000, "video/mp4", 4_980_000, 1920, 1080, null)
     private val accepted = VideoCheck("v1", VideoCheck.READY, null, 1920, 1080, 30.0, 4_980_000, "h264", emptyList())
     private val players = listOf(Player("p1", "Birinci Oyuncu", 4), Player("p2", "İkinci Oyuncu", 7), Player("p3", "", 9), Player("p4", "Dördüncü Oyuncu", 12))
@@ -193,8 +216,79 @@ class ScreenshotTest {
         shot("08_dogrulama_oyuncu", content = screen(card(ReviewCard.SCORER, listOf("UNKNOWN_PLAYER")), detail = true))
     }
 
+    private fun rally(sequence: Int, startMs: Long, endMs: Long, winner: String? = "HOME", status: String = Rally.VERIFIED, after: SetPoint? = null, fromAnalyzer: Boolean = true) =
+        Rally("r$sequence", sequence, startMs, endMs, fromAnalyzer, status, winner, after)
+
+    /** Six rallies: one called no rally, one added by the user, and two that still wait for their winner. */
+    private val waitingList = RallyList(
+        listOf(
+            rally(1, 62_000, 71_000, after = SetPoint(1, 1, 0)),
+            rally(2, 84_000, 97_000, winner = "AWAY", after = SetPoint(1, 1, 1)),
+            rally(3, 109_000, 112_000, winner = null, status = Rally.REJECTED),
+            rally(4, 131_000, 143_000, after = SetPoint(1, 2, 1), fromAnalyzer = false),
+            rally(5, 190_000, 204_000, winner = null, status = Rally.PROPOSED),
+            rally(6, 221_000, 229_000, winner = null, status = Rally.UNRESOLVED),
+        ),
+        version = 12, confirmed = false, videoDurationMs = 4_980_000, sets = listOf(SetScore(1, 2, 1, false)),
+    )
+    private val decidedList = waitingList.copy(
+        rallies = waitingList.rallies.map {
+            when (it.sequence) {
+                5 -> it.copy(status = Rally.VERIFIED, winner = "AWAY", scoreAfter = SetPoint(1, 2, 2))
+                6 -> it.copy(status = Rally.VERIFIED, winner = "HOME", scoreAfter = SetPoint(1, 3, 2))
+                else -> it
+            }
+        },
+        sets = listOf(SetScore(1, 3, 2, false)),
+    )
+
+    private fun listState(list: RallyList, mock: Boolean = false) =
+        AnalysisUi("m3", JobLoad.READY, job(AnalysisSummary.NEEDS_REVIEW, mock = mock).copy(rallyListVersion = list.version), rallies = list, ralliesLoad = RalliesLoad.READY)
+
+    @Test fun s11_rallies() {
+        fun screen(analysis: AnalysisUi): @Composable () -> Unit = { RalliesScreen(finished, analysis, {}, {}, {}, {}, {}, {}) }
+        shot("11_ralli_listesi", content = screen(listState(waitingList)))
+        shot("11_ralli_listesi_skor_hazir", content = screen(listState(decidedList)))
+        shot("11_ralli_listesi_onayli", content = screen(listState(decidedList.copy(confirmed = true))))
+        shot("11_ralli_listesi_demo", content = screen(listState(decidedList, mock = true)))
+        shot("11_ralli_listesi_koyu", dark = true, content = screen(listState(waitingList)))
+        shotOn("kucuk_11_ralli_listesi", "+w320dp-h568dp-port", content = screen(listState(waitingList)))
+        shotOn("buyuk_yazi_11_ralli_listesi", "+w411dp-h891dp-port", fontScale = 1.5f, content = screen(listState(waitingList)))
+    }
+
+    @Test fun s12_editor() {
+        val picture: @Composable () -> Unit = { Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF3A3F4B), Color(0xFF8A6A45))))) }
+        fun screen(target: EditTarget, positionMs: Long, analysis: AnalysisUi = listState(waitingList), failed: Boolean = false): @Composable () -> Unit = {
+            RallyEditorScreen(target, analysis, FakeControl(positionMs, picture).also { it.failed = failed }.video, { _, _ -> }, {}, {}, { _, _ -> }, {})
+        }
+        val second = rallyTarget(waitingList, "r2")!!
+        val pause = gapTarget(waitingList, 143_000)!!
+        shot("12_ralli_duzelt", content = screen(second, 92_400))
+        shot("12_ralli_duzelt_cakisma", content = screen(second, 92_400, listState(waitingList).copy(correctionProblem = CorrectionProblem.OVERLAP, overlapsRally = 3)))
+        shot("12_ralli_duzelt_video_yok", content = screen(second, 92_400, failed = true))
+        shot("12_ralli_duzelt_koyu", dark = true, content = screen(second, 92_400))
+        shot("12_ralli_ekle", content = screen(pause, 151_200))
+        shot("12_ralli_duzelt_gonderiliyor", content = screen(second, 92_400, listState(waitingList).copy(correcting = true)))
+        shotOn("kucuk_12_ralli_duzelt", "+w320dp-h568dp-port", content = screen(second, 92_400))
+        // The demo analyzer is the only one a server has today, so this is the editor every user sees first.
+        shotOn("kucuk_12_ralli_duzelt_demo", "+w320dp-h568dp-port", content = screen(second, 92_400, listState(waitingList, mock = true)))
+        shotOn("kucuk_12_ralli_duzelt_cakisma", "+w320dp-h568dp-port", content = screen(second, 92_400, listState(waitingList).copy(correctionProblem = CorrectionProblem.OVERLAP, overlapsRally = 3)))
+        shotOn("kucuk_12_ralli_duzelt_gonderiliyor", "+w320dp-h568dp-port", content = screen(second, 92_400, listState(waitingList).copy(correcting = true)))
+        shotOn("kucuk_12_ralli_ekle", "+w320dp-h568dp-port", content = screen(pause, 151_200))
+        shotOn("buyuk_yazi_12_ralli_duzelt", "+w411dp-h891dp-port", fontScale = 1.5f, content = screen(second, 92_400))
+    }
+
     @Test fun s09_s10_report() {
         shot("09_mac_raporu") { ReportScreen(finished, ReportLoad.READY, report, {}, {}, {}, {}, {}) }
+        // The user confirmed the list, so no number carries a plus sign, and the user's corrections are named as a source.
+        shot("09_mac_raporu_liste_onayli") {
+            val exact = report.copy(
+                verificationStatus = "VERIFIED", scoreStatus = "MEASURED", ralliesMayBeMissing = false, listConfirmed = true, ralliesOpen = 0, ralliesUnresolved = 0,
+                ralliesVerified = 40, ralliesUserCreated = 2, corrections = 5,
+                home = report.home.copy(points = StatValue(28, "MEASURED")), away = report.away.copy(points = StatValue(25, "MEASURED")),
+            )
+            ReportScreen(finished, ReportLoad.READY, exact, {}, {}, {}, {}, {})
+        }
         shot("09_mac_raporu_yok") { ReportScreen(match("m4"), ReportLoad.NONE, null, {}, {}, {}, {}, {}) }
         shot("09_mac_raporu_kararsiz_ralli") { ReportScreen(finished, ReportLoad.READY, report.copy(scoreStoppedAtRally = 29), {}, {}, {}, {}, {}) }
         shot("09_mac_raporu_koyu", dark = true) { ReportScreen(finished, ReportLoad.READY, report, {}, {}, {}, {}, {}) }

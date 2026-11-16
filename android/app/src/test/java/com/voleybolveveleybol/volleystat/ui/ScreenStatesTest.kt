@@ -6,6 +6,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
@@ -47,6 +49,7 @@ import com.voleybolveveleybol.volleystat.ui.screens.StatusScreen
 import com.voleybolveveleybol.volleystat.ui.screens.WelcomeScreen
 import com.voleybolveveleybol.volleystat.ui.theme.VolleyStatTheme
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -165,6 +168,105 @@ class ScreenStatesTest {
         mock = false
         compose.waitForIdle()
         assertEquals(0, compose.onAllNodesWithText(text(R.string.status_demo)).fetchSemanticsNodes().size)
+    }
+
+    @Test fun theReportSaysWhatWouldTakeThePlusSignsAwayAndForADemoThatNothingWill() {
+        var mock by mutableStateOf(false)
+        show { ReportScreen(match, ReportLoad.READY, report("PARTIAL").copy(mock = mock), {}, {}, {}, {}, {}) }
+        compose.onNodeWithText(text(R.string.report_may_miss)).assertIsDisplayed()
+        assertEquals(false, shown(text(R.string.report_may_miss_demo)))
+        // Invented intervals can not be confirmed, so a demo report must not promise that confirming helps.
+        mock = true
+        compose.waitForIdle()
+        compose.onNodeWithText(text(R.string.report_may_miss_demo)).assertIsDisplayed()
+        assertEquals(false, shown(text(R.string.report_may_miss)))
+    }
+
+    @Test fun aConfirmedListIsNamedOnTheReportAndTheWarningAboutMissingRalliesIsGone() {
+        show { ReportScreen(match, ReportLoad.READY, report("MEASURED").copy(listConfirmed = true), {}, {}, {}, {}, {}) }
+        compose.onNodeWithText(text(R.string.report_list_confirmed)).assertIsDisplayed()
+        assertEquals(false, shown(text(R.string.report_may_miss)))
+    }
+
+    @Test fun aConfirmedListMakesThePointsExactAndLeavesThePlusOnTheCountsThatStillWaitForAnAnswer() {
+        // The list is confirmed, so every point is counted. Only some points have a type yet.
+        val confirmed = report("MEASURED").copy(
+            listConfirmed = true,
+            home = TeamStats(StatValue(28, "MEASURED"), StatValue(11, "PARTIAL"), StatValue(null, "UNKNOWN"), StatValue(null, "UNKNOWN"), StatValue(null, "UNKNOWN")),
+            away = TeamStats(StatValue(25, "MEASURED"), StatValue(9, "PARTIAL"), StatValue(null, "UNKNOWN"), StatValue(null, "UNKNOWN"), StatValue(null, "UNKNOWN")),
+        )
+        show { ReportScreen(match, ReportLoad.READY, confirmed, {}, {}, {}, {}, {}) }
+        compose.onNodeWithText("28").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("25").assertIsDisplayed()
+        compose.onNodeWithText("11+").assertIsDisplayed()
+        compose.onNodeWithText("9+").assertIsDisplayed()
+        // The report promised exactly that before the confirmation: the set score and the row of the points.
+        assertTrue(text(R.string.report_may_miss).contains(text(R.string.report_points)))
+    }
+
+    @Test fun theReportNamesTheUsersCorrectionsAsASourceOfItsIntervalsOnlyWhenThereAreSome() {
+        var corrections by mutableStateOf(0)
+        show { ReportScreen(match, ReportLoad.READY, report("PARTIAL").copy(corrections = corrections, ralliesUserCreated = corrections), {}, {}, {}, {}, {}) }
+        compose.onNodeWithText(text(R.string.report_source, "motion-baseline", "BASELINE")).performScrollTo().assertIsDisplayed()
+        corrections = 2
+        compose.waitForIdle()
+        compose.onNodeWithText(text(R.string.report_source_corrected, "motion-baseline", "BASELINE")).performScrollTo().assertIsDisplayed()
+        assertEquals(false, shown(text(R.string.report_source, "motion-baseline", "BASELINE")))
+        compose.onNodeWithText(text(R.string.report_rallies_user)).performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun theReportTellsTheSizeOfTheListApartFromWhatTheAnalyzerProposed() {
+        // The analyzer proposed 41 rallies. After merges and additions the list holds 37 intervals.
+        show { ReportScreen(match, ReportLoad.READY, report("PARTIAL").copy(ralliesProposed = 41, ralliesTotal = 37), {}, {}, {}, {}, {}) }
+        compose.onNodeWithText(text(R.string.report_rallies_listed)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("37").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.report_rallies_total)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("41").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun theStatusScreenCountsWhatTheServerProposedAndNotWhatTheUserMade() {
+        // The list holds five rallies, and the user added one of them.
+        status(AnalysisUi("m1", JobLoad.READY, job(AnalysisSummary.NEEDS_REVIEW).copy(rallies = 5, proposed = 4)))
+        compose.onNodeWithText(text(R.string.stage_rallies_done, 4)).performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun noEditorOpensFromACardWhileACorrectionIsOnItsWay() {
+        val deck = ReviewDeck(listOf(card(1, null)), 0, 1)
+        var correcting by mutableStateOf(true)
+        show {
+            ReviewScreen(match, AnalysisUi("m1", JobLoad.READY, job(AnalysisSummary.NEEDS_REVIEW), deck, correcting = correcting), emptyList(), {}, {}, {}, {}, {}) { ClipPlaceholder() }
+        }
+        compose.onNodeWithText(text(R.string.review_fix_rally)).assertIsNotEnabled()
+        correcting = false
+        compose.waitForIdle()
+        compose.onNodeWithText(text(R.string.review_fix_rally)).assertIsEnabled()
+    }
+
+    @Test fun theReportLeadsToTheRallyList() {
+        var opened = 0
+        show { ReportScreen(match, ReportLoad.READY, report("PARTIAL"), {}, {}, {}, {}, {}, onOpenRallies = { opened++ }) }
+        compose.onNodeWithText(text(R.string.rallies_title)).performScrollTo().performClick()
+        assertEquals(1, opened)
+    }
+
+    @Test fun everyReviewCardLeadsToTheEditorOfItsRallyAndTheEndOfTheReviewLeadsToTheList() {
+        val fixed = mutableListOf<String>()
+        var lists = 0
+        var cursor by mutableStateOf(0)
+        val deck = ReviewDeck(listOf(card(1, "HOME"), card(2, "AWAY")), 2, 2)
+        show {
+            ReviewScreen(
+                match, AnalysisUi("m1", JobLoad.READY, job(AnalysisSummary.COMPLETE), deck, cursor = cursor), emptyList(), {}, {}, {}, {}, {},
+                onFixRally = { fixed += it.rallyId }, onOpenRallies = { lists++ },
+            ) { ClipPlaceholder() }
+        }
+        compose.onNodeWithText(text(R.string.review_fix_rally)).performClick()
+        assertEquals("the rally of the card on screen", listOf("r1"), fixed)
+        // Past the last card every rally has an answer, and the list is where a missed rally is added.
+        cursor = 2
+        compose.waitForIdle()
+        compose.onNodeWithText(text(R.string.rallies_title)).performClick()
+        assertEquals(1, lists)
     }
 
     @Test fun theReportOpensTheSameDefinitionsForTheNumbersItCounts() {

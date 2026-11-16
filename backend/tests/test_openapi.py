@@ -26,6 +26,11 @@ CONTRACT_ROUTES = [
     ("/v1/review-cards/{card_id}/reopen", "post"),
     ("/v1/videos/{video_id}/content", "get"),
     ("/v1/matches/{match_id}/report", "get"),
+    ("/v1/analyses/{job_id}/rallies", "post"),
+    ("/v1/rallies/{rally_id}/move", "post"),
+    ("/v1/rallies/{rally_id}/split", "post"),
+    ("/v1/rallies/{rally_id}/merge-previous", "post"),
+    ("/v1/analyses/{job_id}/rally-list/confirm", "post"),
 ]
 
 
@@ -38,8 +43,8 @@ def test_the_openapi_document_does_not_depend_on_the_analyzer(storage):
     assert create_app(storage, analyzer="demo").openapi() == create_app(storage, analyzer="none").openapi()
 
 
-def test_the_app_is_version_0_4_0_and_serves_every_route_of_the_contract(storage):
+def test_the_app_is_version_0_5_0_and_serves_every_route_of_the_contract(storage):
     spec = create_app(storage, analyzer="none").openapi()
-    assert spec["info"]["version"] == "0.4.1"
+    assert spec["info"]["version"] == "0.5.0"
     missing = [(path, method) for path, method in CONTRACT_ROUTES if method not in spec["paths"].get(path, {})]
     assert missing == []

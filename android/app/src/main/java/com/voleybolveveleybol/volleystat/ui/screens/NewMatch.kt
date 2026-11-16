@@ -109,6 +109,8 @@ fun FlowScaffold(
     title: String,
     onBack: () -> Unit,
     topActions: @Composable () -> Unit = {},
+    /** False while leaving would hide how something ended that the screen has started. */
+    backEnabled: Boolean = true,
     actions: (@Composable ColumnScope.() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
@@ -118,7 +120,7 @@ fun FlowScaffold(
         topBar = {
             CenterAlignedTopAppBar(
                 title = { Text(title, style = MaterialTheme.typography.titleLarge) },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(painterResource(R.drawable.ic_arrow_back), contentDescription = stringResource(R.string.action_back)) } },
+                navigationIcon = { IconButton(onClick = onBack, enabled = backEnabled) { Icon(painterResource(R.drawable.ic_arrow_back), contentDescription = stringResource(R.string.action_back)) } },
                 actions = { topActions() },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
             )

@@ -3,7 +3,7 @@
   "info": {
     "title": "VolleyStat Local Development API",
     "description": "LOCAL TEST DATA ONLY. No authentication, no trained AI. Never expose to the internet.",
-    "version": "0.4.1"
+    "version": "0.5.0"
   },
   "paths": {
     "/v1/health": {
@@ -791,6 +791,52 @@
             }
           }
         }
+      },
+      "post": {
+        "summary": "Add Rally",
+        "description": "Add a rally that the analyzer missed.",
+        "operationId": "add_rally_v1_analyses__job_id__rallies_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntervalInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/v1/analyses/{job_id}/review-cards": {
@@ -975,6 +1021,198 @@
           }
         }
       }
+    },
+    "/v1/rallies/{rally_id}/move": {
+      "post": {
+        "summary": "Move Rally",
+        "description": "Set the start and the end of a rally. A changed end asks for the winner again.",
+        "operationId": "move_rally_v1_rallies__rally_id__move_post",
+        "parameters": [
+          {
+            "name": "rally_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rally Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntervalInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/rallies/{rally_id}/split": {
+      "post": {
+        "summary": "Split Rally",
+        "description": "Cut a rally that holds two. The later part is the rally whose end the user may already have judged.",
+        "operationId": "split_rally_v1_rallies__rally_id__split_post",
+        "parameters": [
+          {
+            "name": "rally_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rally Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SplitInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/rallies/{rally_id}/merge-previous": {
+      "post": {
+        "summary": "Merge Previous",
+        "description": "Join a rally with the one before it. The earlier one was no rally of its own, so its answers go.",
+        "operationId": "merge_previous_v1_rallies__rally_id__merge_previous_post",
+        "parameters": [
+          {
+            "name": "rally_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rally Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_OnList"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/analyses/{job_id}/rally-list/confirm": {
+      "post": {
+        "summary": "Confirm List",
+        "description": "Record that the user declares the list complete: it holds every rally of the video.",
+        "operationId": "confirm_list_v1_analyses__job_id__rally_list_confirm_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_OnList"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1023,6 +1261,30 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "IntervalInput": {
+        "properties": {
+          "expectedListVersion": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Expectedlistversion"
+          },
+          "startMs": {
+            "type": "integer",
+            "title": "Startms"
+          },
+          "endMs": {
+            "type": "integer",
+            "title": "Endms"
+          }
+        },
+        "type": "object",
+        "required": [
+          "expectedListVersion",
+          "startMs",
+          "endMs"
+        ],
+        "title": "IntervalInput"
       },
       "MatchInput": {
         "properties": {
@@ -1104,6 +1366,25 @@
           "expectedVersion"
         ],
         "title": "ReopenInput"
+      },
+      "SplitInput": {
+        "properties": {
+          "expectedListVersion": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Expectedlistversion"
+          },
+          "atMs": {
+            "type": "integer",
+            "title": "Atms"
+          }
+        },
+        "type": "object",
+        "required": [
+          "expectedListVersion",
+          "atMs"
+        ],
+        "title": "SplitInput"
       },
       "UploadInput": {
         "properties": {
@@ -1193,6 +1474,20 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "_OnList": {
+        "properties": {
+          "expectedListVersion": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Expectedlistversion"
+          }
+        },
+        "type": "object",
+        "required": [
+          "expectedListVersion"
+        ],
+        "title": "_OnList"
       }
     }
   }

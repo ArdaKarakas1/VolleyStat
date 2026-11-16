@@ -205,6 +205,16 @@ fun DemoBanner(modifier: Modifier = Modifier, compact: Boolean = false) {
     }
 }
 
+/** The small DEMO label that stands on the item it speaks about: the header of a card, or the line that shows an invented interval. */
+@Composable
+fun DemoTag(modifier: Modifier = Modifier) {
+    val extra = LocalVsColors.current
+    Text(
+        stringResource(R.string.status_demo), style = MaterialTheme.typography.labelMedium, color = extra.onCautionContainer,
+        modifier = modifier.background(extra.cautionContainer, MaterialTheme.shapes.small).padding(horizontal = 8.dp, vertical = 2.dp),
+    )
+}
+
 /** Home side is a filled badge, away side an outlined one. Position and words carry identity; colour supports it. */
 @Composable
 fun TeamBadge(home: Boolean, modifier: Modifier = Modifier, size: Dp = 40.dp) {

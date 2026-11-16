@@ -47,7 +47,11 @@ CREATE TABLE IF NOT EXISTS analysis_jobs (
   -- run_token names the one worker run that may write this job; heartbeat_at proves it is alive.
   run_token TEXT, heartbeat_at REAL, recoveries INTEGER NOT NULL DEFAULT 0,
   revision INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT
+  created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT,
+  -- rally_list_version moves with every correction of the rally list and every winner decision.
+  -- The list counts as complete only while list_confirmed_version equals it.
+  rally_list_version INTEGER NOT NULL DEFAULT 0,
+  list_confirmed_version INTEGER, list_confirmed_at TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS analysis_jobs_one_active
   ON analysis_jobs(video_id) WHERE state IN ('QUEUED', 'PROCESSING');
@@ -60,6 +64,22 @@ CREATE TABLE IF NOT EXISTS analysis_request_keys (
   PRIMARY KEY (video_id, idempotency_key)
 );
 
+-- What the analyzer proposed, written once when its run ends. No correction ever changes a row.
+CREATE TABLE IF NOT EXISTS rally_proposals (
+  id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL REFERENCES analysis_jobs(id) ON DELETE CASCADE,
+  start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL,
+  proposed_winner TEXT NOT NULL, confidence REAL, uncertainty_json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS rally_proposals_job ON rally_proposals(job_id);
+CREATE TRIGGER IF NOT EXISTS rally_proposals_append_only BEFORE UPDATE ON rally_proposals
+BEGIN SELECT RAISE(ABORT, 'rally_proposals is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS rally_proposals_keep_rows BEFORE DELETE ON rally_proposals
+WHEN EXISTS (SELECT 1 FROM analysis_jobs WHERE id = OLD.job_id)
+BEGIN SELECT RAISE(ABORT, 'rally_proposals is append-only'); END;
+
+-- The working list of rallies. start_ms, end_ms and sequence follow the user's corrections;
+-- proposal_id names the proposal a rally came from and is NULL for a rally the user made.
 -- proposed_winner and confidence are the model's proposal. status, winner, terminal_action and
 -- scorer_jersey are written by user decisions only.
 CREATE TABLE IF NOT EXISTS rallies (
@@ -71,6 +91,7 @@ CREATE TABLE IF NOT EXISTS rallies (
   proposed_winner TEXT NOT NULL, confidence REAL, uncertainty_json TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'PROPOSED',
   winner TEXT, terminal_action TEXT, scorer_jersey INTEGER,
+  proposal_id TEXT,
   UNIQUE (job_id, sequence)
 );
 CREATE TABLE IF NOT EXISTS review_cards (
@@ -92,7 +113,9 @@ CREATE TABLE IF NOT EXISTS review_decisions (
   action TEXT NOT NULL,
   previous_value TEXT, new_value TEXT,
   idempotency_key TEXT, response_json TEXT,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  -- Set on rows that a correction of the rally list wrote: the answers it removed or reopened.
+  correction_id TEXT
 );
 -- A key names one decision request on the whole server. The decision route checks that inside
 -- its write transaction; storage written before that rule may hold a key on two cards.
@@ -106,6 +129,26 @@ BEGIN SELECT RAISE(ABORT, 'review_decisions is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS review_decisions_keep_rows BEFORE DELETE ON review_decisions
 WHEN EXISTS (SELECT 1 FROM analysis_jobs WHERE id = OLD.job_id)
 BEGIN SELECT RAISE(ABORT, 'review_decisions is append-only'); END;
+
+-- Audit trail of the user's corrections of the rally list: what was added, moved, split, merged
+-- or confirmed, with the rallies as they were before and after. rally ids are not foreign keys:
+-- a row must outlive a rally that a later correction removed. These rows are a record of what
+-- one user did. They are not labels and never enter a model metric or a training set.
+CREATE TABLE IF NOT EXISTS rally_corrections (
+  id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL REFERENCES analysis_jobs(id) ON DELETE CASCADE,
+  operation TEXT NOT NULL,
+  rally_id TEXT, created_rally_id TEXT, removed_rally_id TEXT,
+  before_json TEXT NOT NULL, after_json TEXT NOT NULL,
+  list_version_after INTEGER NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS rally_corrections_job ON rally_corrections(job_id);
+CREATE TRIGGER IF NOT EXISTS rally_corrections_append_only BEFORE UPDATE ON rally_corrections
+BEGIN SELECT RAISE(ABORT, 'rally_corrections is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS rally_corrections_keep_rows BEFORE DELETE ON rally_corrections
+WHEN EXISTS (SELECT 1 FROM analysis_jobs WHERE id = OLD.job_id)
+BEGIN SELECT RAISE(ABORT, 'rally_corrections is append-only'); END;
 """
 
 # Storage folders created by earlier previews lack the newer columns.
@@ -115,6 +158,10 @@ ADDED_COLUMNS = (
     ("uploads", (("client_sha256", "TEXT"), ("finalize_started_at", "REAL"))),
     ("videos", (("reject_code", "TEXT"), ("media_json", "TEXT"), ("warnings_json", "TEXT"),
                 ("probe_version", "TEXT"), ("storage_key", "TEXT"))),
+    ("analysis_jobs", (("rally_list_version", "INTEGER NOT NULL DEFAULT 0"), ("list_confirmed_version", "INTEGER"),
+                       ("list_confirmed_at", "TEXT"))),
+    ("rallies", (("proposal_id", "TEXT"),)),
+    ("review_decisions", (("correction_id", "TEXT"),)),
 )
 
 
@@ -149,6 +196,18 @@ def migrate(db_path: Path) -> None:
             setup.execute(
                 "INSERT OR IGNORE INTO analysis_request_keys(video_id, idempotency_key, job_id)"
                 " SELECT video_id, idempotency_key, id FROM analysis_jobs WHERE idempotency_key IS NOT NULL")
+        # Storage written before corrections existed holds every rally exactly as the analyzer
+        # proposed it, so the proposal record can still be written from the rally itself. A job
+        # with corrections is never touched: its rallies without a proposal were made by the user.
+        untouched = setup.execute(
+            "SELECT id, job_id, start_ms, end_ms, proposed_winner, confidence, uncertainty_json FROM rallies"
+            " WHERE proposal_id IS NULL AND job_id NOT IN (SELECT job_id FROM rally_corrections)").fetchall()
+        for rally_id, *proposal in untouched:
+            proposal_id = new_id()
+            setup.execute(
+                "INSERT INTO rally_proposals(id, job_id, start_ms, end_ms, proposed_winner, confidence, uncertainty_json)"
+                " VALUES(?,?,?,?,?,?,?)", (proposal_id, *proposal))
+            setup.execute("UPDATE rallies SET proposal_id=? WHERE id=?", (proposal_id, rally_id))
         setup.commit()
     finally:
         setup.close()

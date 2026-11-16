@@ -79,7 +79,7 @@ jobs:
           VOLLEYSTAT_E2E_VIDEO: ${{ runner.temp }}/clip.mp4
         run: ./gradlew --no-daemon :app:testDebugUnitTest --tests '*E2eTest*'
       - name: The end-to-end tests must have run, not skipped
-        run: python tools/require_tests_ran.py android/app/build/test-results/testDebugUnitTest 6
+        run: python tools/require_tests_ran.py android/app/build/test-results/testDebugUnitTest 9
       - uses: actions/upload-artifact@v4
         if: always()
         with:

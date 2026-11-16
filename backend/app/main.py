@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import content, jobs, media, review
+from . import content, corrections, jobs, media, review
 from .analyzers import load_analyzer, require_known_kind
 from .analyzers.base import MODEL, Analyzer
 from .bodylimit import BodyLimit
@@ -177,7 +177,7 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
                 # Joining the thread can wait for a running analyzer to notice the stop signal.
                 await run_in_threadpool(worker.stop)
 
-    app = FastAPI(title="VolleyStat Local Development API", version="0.4.1", lifespan=lifespan,
+    app = FastAPI(title="VolleyStat Local Development API", version="0.5.0", lifespan=lifespan,
                   description="LOCAL TEST DATA ONLY. No authentication, no trained AI. Never expose to the internet.")
     app.state.worker = worker
     app.add_middleware(BodyLimit, exempt=is_chunk_upload)
@@ -491,4 +491,5 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
 
     app.include_router(jobs.router(connect, analyzer, worker))
     app.include_router(review.router(connect))
+    app.include_router(corrections.router(connect))
     return app

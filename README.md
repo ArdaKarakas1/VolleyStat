@@ -2,11 +2,11 @@
 
 **Voleybol Ve Veleybol** · Amatör kapalı saha 6 × 6 voleybol maçları için Android uygulaması.
 
-Hedef: Kullanıcı maçı telefonla kaydeder ya da galeriden seçer. Sunucu videoyu analiz eder ve iki takımın istatistiklerini çıkarır. Kullanıcı yalnızca modelin emin olamadığı anları doğrular.
+Hedef: Kullanıcı maçı telefonla kaydeder ya da galeriden seçer. Sunucu videoyu analiz eder ve iki takımın istatistiklerini çıkarır. Kullanıcı yalnızca modelin emin olamadığı anları doğrular ve gerekirse ralli listesini düzeltir.
 
 Bu depo yalnızca Android uygulamasını ve onun arka ucunu içerir. Web sitesi ayrı bir depodadır (`voleybolveveleybol`) ve bu projeyle kod paylaşmaz.
 
-## Bugünkü durum (sürüm 0.4.2)
+## Bugünkü durum (sürüm 0.5.0)
 
 | Parça | Durum |
 | --- | --- |
@@ -14,7 +14,8 @@ Bu depo yalnızca Android uygulamasını ve onun arka ucunu içerir. Web sitesi 
 | Kamera kaydı (CameraX) ve klip oynatma (Media3) | Var. CI emülatöründe testli. Gerçek telefonda deneme yok. |
 | Video yükleme (parçalı, kaldığı yerden devam, SHA-256) | Çalışıyor, testli. Yükleme uygulama açıkken sürer. |
 | Video dosya doğrulaması (ffprobe) | Çalışıyor, sentetik kliplerle testli. Sunucu sahneyi ölçmez. |
-| Analiz işi, doğrulama kartları, rapor (API 0.4) | Çalışıyor, testli. Rapor yalnız kullanıcı kararlarından oluşur. |
+| Analiz işi, doğrulama kartları, rapor (API 0.5) | Çalışıyor, testli. Rapor yalnız kullanıcı kararlarından oluşur. |
+| Ralli düzeltme ve liste onayı | Var, testli. Kullanıcı kaçan ralliyi ekler, ralliyi böler, iki parçayı birleştirir ve sınırı taşır. Rapor kullanıcı listeyi onaylayana kadar alt sınır verir. Kimse düzeltmeyi gerçek maçta denemedi. |
 | Ralli baseline'ı (`ml/`, hareket enerjisi) | Var. **Kimse gerçek maçta doğruluğunu ölçmedi.** |
 | Eğitilmiş yapay zekâ modeli | **Yok.** Uygulama bugün kendiliğinden istatistik çıkarmaz. Kullanıcı her rallinin kazananını kendisi seçer. |
 | Hesap sistemi, HTTPS, bulut | Yok. Sunucu yalnızca geliştirme bilgisayarında çalışır. |
@@ -100,7 +101,7 @@ Depo herkese açıktır. Maç videoları, oyuncu verileri, API anahtarları, ver
 
 - [docs/GAP_ANALYSIS.md](docs/GAP_ANALYSIS.md): Gereksinim ve kod farkı, sıradaki işler
 - [docs/AI_PLAN.md](docs/AI_PLAN.md): Maçı analiz edecek yapay zekâ için plan
-- [docs/API_V1.md](docs/API_V1.md): Analiz, doğrulama ve rapor sözleşmesi (API 0.4)
+- [docs/API_V1.md](docs/API_V1.md): Analiz, doğrulama, ralli düzeltme ve rapor sözleşmesi (API 0.5)
 - [docs/API.md](docs/API.md): Yükleme ve dosya doğrulama uçları
 - [docs/UI_V1_PLAN.md](docs/UI_V1_PLAN.md): UI Tasarım V1 uygulama planı
 - [docs/design.md](docs/design.md): Tasarım sistemi
