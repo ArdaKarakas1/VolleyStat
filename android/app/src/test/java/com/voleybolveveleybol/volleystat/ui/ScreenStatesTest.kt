@@ -220,6 +220,17 @@ class ScreenStatesTest {
         compose.onNodeWithContentDescription(spoken).performScrollTo().assertIsDisplayed()
     }
 
+    @Test fun onAConfirmedListOnlyThePartTheCountStoppedInCarriesThePlus() {
+        // The list is confirmed and the count stopped in the fourth part: the three matches before it are final.
+        show { ReportScreen(match, ReportLoad.READY, stoppedAfterThreeMatches.copy(ralliesMayBeMissing = false, listConfirmed = true), {}, {}, {}, {}, {}) }
+        assertEquals(2, compose.onAllNodesWithText("3 - 0").fetchSemanticsNodes().size)
+        compose.onNodeWithText("0 - 3").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("1+ - 0+").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithContentDescription(text(R.string.report_score_at_least, 1, 0)).assertIsDisplayed()
+        // The stopped part may still become a match, so the matches won are a lower bound as well.
+        compose.onNodeWithText("2+ - 1+").performScrollTo().assertIsDisplayed()
+    }
+
     @Test fun aVideoOfSeveralMatchesShowsTheMatchesWonAndEachMatchWithItsSets() {
         show { ReportScreen(match, ReportLoad.READY, twoMatches, {}, {}, {}, {}, {}) }
         compose.onNodeWithText("1 - 1").assertIsDisplayed()
@@ -237,6 +248,9 @@ class ScreenStatesTest {
             assertEquals(2, compose.onAllNodesWithText(it).fetchSemanticsNodes().size)
         }
         compose.onNodeWithText(text(R.string.report_part_sets, "25-24…")).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithContentDescription(text(R.string.report_part_sets, text(R.string.report_set_open, 1) + ": 25-24")).assertIsDisplayed()
+        // Sets that all ended need no words beyond their scores.
+        assertEquals(0, compose.onAllNodesWithContentDescription(text(R.string.report_part_sets, "25-20, 25-18, 25-10")).fetchSemanticsNodes().size)
         compose.onNodeWithText(text(R.string.report_part_after_match_note)).performScrollTo().assertIsDisplayed()
     }
 

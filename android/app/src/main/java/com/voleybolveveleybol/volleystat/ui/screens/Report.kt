@@ -165,9 +165,13 @@ fun ScoreHeader(match: MatchRecord, report: MatchReport?, modifier: Modifier = M
     }
 }
 
-/** Every part of a video with its sets: shown when the video holds more than one part. Under PARTIAL each part's sets won are a lower bound. */
+/**
+ * Every part of a video with its sets: shown when the video holds more than one part. A part's sets won
+ * are a lower bound while the list may miss rallies, and in the part the count stopped in, which may
+ * still close more sets. A match that ended before the stop on a confirmed list is final.
+ */
 @Composable
-private fun MatchesCard(parts: List<MatchPart>, atLeast: Boolean) {
+private fun MatchesCard(parts: List<MatchPart>, mayBeMissing: Boolean) {
     VsCard(padding = PaddingValues(0.dp)) {
         SectionHeader(stringResource(R.string.report_matches))
         Column(Modifier.padding(horizontal = Dimens.cardPadding, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -175,6 +179,7 @@ private fun MatchesCard(parts: List<MatchPart>, atLeast: Boolean) {
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(partLabel(part), style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f).semantics { heading() })
+                        val atLeast = mayBeMissing || part.kind == MatchPart.STOPPED
                         val plus = if (atLeast) "+" else ""
                         val spoken = stringResource(R.string.report_score_at_least, part.setsWonHome, part.setsWonAway)
                         Text(
@@ -307,7 +312,7 @@ fun ReportScreen(
                 }
 
                 val several = report.matches.size > 1
-                if (several) MatchesCard(report.matches, atLeast = report.scoreStatus == StatValue.PARTIAL)
+                if (several) MatchesCard(report.matches, mayBeMissing = report.ralliesMayBeMissing)
                 val part = report.matches.getOrNull(scope - 1)?.takeIf { several }
                 val home = part?.home ?: report.home
                 val away = part?.away ?: report.away

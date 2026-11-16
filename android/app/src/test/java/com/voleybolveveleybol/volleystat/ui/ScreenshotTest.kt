@@ -30,6 +30,7 @@ import com.voleybolveveleybol.volleystat.model.AnalysisJob
 import com.voleybolveveleybol.volleystat.model.AnalysisSummary
 import com.voleybolveveleybol.volleystat.model.Coverage
 import com.voleybolveveleybol.volleystat.model.Draft
+import com.voleybolveveleybol.volleystat.model.MatchPart
 import com.voleybolveveleybol.volleystat.model.MatchRules
 import com.voleybolveveleybol.volleystat.model.LocalVideo
 import com.voleybolveveleybol.volleystat.model.MatchKind
@@ -139,11 +140,11 @@ class ScreenshotTest {
     }
 
     /** One screen on another device shape or text size, then back to the default phone. */
-    private fun shotOn(name: String, qualifiers: String, fontScale: Float = 1f, content: @Composable () -> Unit) {
+    private fun shotOn(name: String, qualifiers: String, fontScale: Float = 1f, dark: Boolean = false, content: @Composable () -> Unit) {
         RuntimeEnvironment.setQualifiers(qualifiers)
         RuntimeEnvironment.setFontScale(fontScale)
         try {
-            shot(name, content = content)
+            shot(name, dark = dark, content = content)
         } finally {
             RuntimeEnvironment.setFontScale(1f)
             RuntimeEnvironment.setQualifiers("+w411dp-h891dp-port")
@@ -322,6 +323,22 @@ class ScreenshotTest {
             ReportScreen(finished, ReportLoad.READY, report.copy(rules = MatchRules(2, 21, 15), matches = listOf(part(SetScore(1, 21, 18, true), SetScore(2, 3, 4, false)))), {}, {}, {}, {}, {})
         }
         shot("10_oyuncu_istatistik") { PlayersScreen(finished, report, players, teams[1].players) {} }
+        shot("09_mac_raporu_eski_sunucu") { ReportScreen(finished, ReportLoad.OUTDATED, null, {}, {}, {}, {}, {}) }
+        // Home wins two matches and away one; the count stops in a fourth part. Every number is invented.
+        val severalMatches = report.copy(
+            matches = listOf(
+                part(SetScore(1, 25, 20, true), SetScore(2, 25, 18, true), SetScore(3, 25, 10, true), kind = MatchPart.MATCH, winner = "HOME"),
+                part(SetScore(1, 18, 25, true), SetScore(2, 20, 25, true), SetScore(3, 23, 25, true), number = 2, kind = MatchPart.MATCH, winner = "AWAY"),
+                part(SetScore(1, 25, 21, true), SetScore(2, 25, 19, true), SetScore(3, 25, 17, true), number = 3, kind = MatchPart.MATCH, winner = "HOME"),
+                part(SetScore(1, 25, 22, true), SetScore(2, 24, 23, false), number = 4, kind = MatchPart.STOPPED),
+            ),
+            scoreStoppedAtRally = 431,
+        )
+        shotOn("09_mac_raporu_coklu_mac", "+w411dp-h2400dp-port") { ReportScreen(finished, ReportLoad.READY, severalMatches, {}, {}, {}, {}, {}) }
+        // On a confirmed list only the part the count stopped in keeps the plus.
+        shotOn("09_mac_raporu_coklu_mac_onayli_koyu", "+w411dp-h2400dp-port", dark = true) {
+            ReportScreen(finished, ReportLoad.READY, severalMatches.copy(ralliesMayBeMissing = false, listConfirmed = true), {}, {}, {}, {}, {})
+        }
     }
 
     @Test fun s13_rules() {

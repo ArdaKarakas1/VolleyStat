@@ -13,7 +13,7 @@ Sürüm 0.5.0 ralli düzeltme uçlarını ve liste onayını ekler ([API_V1.md](
 
 Sürüm 0.6.0 maç kuralını ekler (`rules` alanı ve `PUT /matches/{id}/rules`, [API_V1.md](API_V1.md) bölüm 1). Android uygulamasının 0.6.0 sürümü sunucunun 0.6.0 sürümünü ister. Daha eski bir sunucu `rules` alanını yok sayar ve maçı FIVB kuralıyla sayar. Uygulama o sunucunun ralli listesini okuyamaz ve bunu ralli listesi ekranında söyler.
 
-Sürüm 0.7.0 bir videoyu maçlara böler ([API_V1.md](API_V1.md) bölüm 7, ADR-0118). Rapor `score.sets` ve `score.setsWon` yerine `score.matches` ve `score.unplacedRallies` taşır. Ralli listesi `sets` yerine `matches` taşır ve her `scoreAfter` rallinin maç numarasını da taşır. Android uygulamasının 0.7.0 sürümü sunucunun 0.7.0 sürümünü ister. Uygulama daha eski bir sunucunun ralli listesini ve raporunu okuyamaz, çünkü o sunucu bu alanları göndermez.
+Sürüm 0.7.0 bir videoyu maçlara böler ([API_V1.md](API_V1.md) bölüm 7, ADR-0118). Rapor `score.sets` ve `score.setsWon` yerine `score.matches` ve `score.unplacedRallies` taşır. Ralli listesi `sets` yerine `matches` taşır ve her `scoreAfter` rallinin maç numarasını da taşır. Android uygulamasının 0.7.0 sürümü sunucunun 0.7.0 sürümünü ister. Uygulama daha eski bir sunucunun ralli listesini ve raporunu okuyamaz, çünkü o sunucu bu alanları göndermez. Uygulama bu durumda ralli listesi ve rapor ekranında sunucunun güncel sürümle çalışıp çalışmadığını denetlemeyi söyler.
 
 | Uç | Görev | Başarı | Hatalar |
 |---|---|---|---|

@@ -331,6 +331,7 @@ class RallyListFlowTest {
 
         // The report was below all along. The app goes back to it and reads it again, and one step back leaves the match.
         waitFor(text(R.string.report_review_video))
+        app.waitUntil(5_000) { requests.count { it == "GET /matches/server-1/report" } > readsBefore }
         assertEquals(readsBefore + 1, requests.count { it == "GET /matches/server-1/report" })
         back()
         app.onNodeWithText(text(R.string.home_new_match_body)).assertIsDisplayed()

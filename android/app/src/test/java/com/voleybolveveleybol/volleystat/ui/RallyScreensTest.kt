@@ -989,6 +989,20 @@ class RallyScreensTest {
         assertEquals(2, compose.onAllNodesWithText(text(R.string.rallies_set_header, 1)).fetchSemanticsNodes().size)
     }
 
+    @Test fun aCountThatReturnsToAnEarlierPartStillOpensTheList() {
+        // No server count does this either: the parts go 1, 2, 1, 2. Each return names its part again.
+        val back = severalParts.copy(rallies = listOf(
+            rally(1, 2_000, 9_000, Rally.VERIFIED, "HOME", SetPoint(1, 1, 0, match = 1)),
+            rally(2, 15_000, 24_000, Rally.VERIFIED, "AWAY", SetPoint(1, 0, 1, match = 2)),
+            rally(3, 30_000, 41_000, Rally.VERIFIED, "HOME", SetPoint(2, 1, 0, match = 1)),
+            rally(4, 48_000, 56_000, Rally.VERIFIED, "AWAY", SetPoint(1, 0, 2, match = 2)),
+        ))
+        list(state(back))
+        // The last rally: both starts of the after-match part stand on the screen with it.
+        reach(text(R.string.rally_score_after, 0, 2))
+        assertEquals(2, compose.onAllNodesWithText(text(R.string.part_after_match)).fetchSemanticsNodes().size)
+    }
+
     @Test fun aListOfOnePartNamesNoPart() {
         list(state(decided))
         assertFalse(shown(text(R.string.part_match, 1)))

@@ -51,7 +51,7 @@ Ortak bileşenler `ui/components/Components.kt` dosyasındadır.
 Bu kalıplar görsel etkiden önce gelir.
 
 - **Ölçüm yoksa sayı yok.** Uygulama bilinmeyen değeri kesik çizgili boş kutuyla çizer ve ekran okuyucuya "Ölçüm yok" der. Uygulama bilinmeyen değeri hiçbir yerde `0` yazmaz.
-- **Alt sınır artı işareti taşır.** Doğrulama bitmeden görünen sayı `28+` biçimindedir. Ekran artının anlamını bir satırla açıklar. Kazanılan set sayısı da alt sınırken artı taşır (`1+ - 0+`).
+- **Alt sınır artı işareti taşır.** Doğrulama bitmeden görünen sayı `28+` biçimindedir. Ekran artının anlamını bir satırla açıklar. Kazanılan set sayısı da alt sınırken artı taşır (`1+ - 0+`). Bir videoda birden çok bölüm varsa maç kartı artıyı her bölüme ayrı verir: Liste eksik olabilirken her bölüm artı taşır. Liste onaylıysa yalnız sayımın durduğu bölüm artı taşır, çünkü o bölüm sonradan set kazanabilir. Ekran okuyucu artıyı "en az" diye okur ve süren seti "set sürüyor" diye söyler.
 - **Bitmemiş set kesik çizgilidir.** Süren setin skoru kesin set skoru gibi görünmez.
 - **DEMO her ekranda yazılıdır.** Deneme analizörünün verisi durum, doğrulama, rapor ve oyuncu ekranlarında DEMO etiketi taşır.
 - **Sahte yüzde yok.** Analiz ekranı yalnız sunucunun bildirdiği adımı ve oranı gösterir.

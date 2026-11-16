@@ -134,6 +134,8 @@ class ReportReturnTest {
         app.onNodeWithText(text(R.string.action_open_report)).performClick()
 
         waitFor(text(R.string.report_review_video))
+        // The report from before stands on the screen while the app reads it again, so the test waits for the read.
+        app.waitUntil(5_000) { requests.count { it == "GET /matches/server-1/report" } >= 2 }
         assertEquals("the report is read again when the user comes back to it", 2, requests.count { it == "GET /matches/server-1/report" })
         app.runOnUiThread { app.activity.onBackPressedDispatcher.onBackPressed() }
         app.waitForIdle()
