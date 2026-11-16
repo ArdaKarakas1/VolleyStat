@@ -126,7 +126,7 @@ def test_an_unpaired_automatic_decision_is_told_apart_by_whether_the_gold_has_a_
 
 def test_a_second_proposal_for_a_paired_rally_is_not_called_a_boundary_miss():
     # Both lie within the tolerance of the gold rally; the closer one pairs with it.
-    video = winner.evaluate_video([gold(0, "HOME")], [prop(0, "HOME", 0.6), prop(0, "HOME", 0.6, shift=300)])
+    video = winner.evaluate_video([gold(0, "HOME")], [prop(0, "HOME", 0.6), prop(0, "HOME", 0.95, shift=300)])
     assert [(outcome.kind, outcome.reason) for outcome in video.outcomes] == [
         ("CORRECT", None), ("AUTO_UNPAIRED", "SECOND_PROPOSAL")]
     assert winner.pool({"V1": video}).unpaired == {"SECOND_PROPOSAL": 1, "OVERLAPS_GOLD": 0, "NO_GOLD_THERE": 0}
@@ -141,12 +141,72 @@ def test_proposals_that_name_different_winners_for_one_rally_are_refused_in_eith
     assert kinds(winner.evaluate_video([gold(0)], [prop(0, "UNKNOWN"), prop(0, "UNKNOWN", shift=200)])) == ["UNKNOWN"]
 
 
-def test_the_same_side_with_two_confidences_is_refused_since_the_pairing_would_pick_one_by_file_order():
-    for order in ((0.95, 0.5), (0.5, 0.95)):
-        with pytest.raises(winner.ContradictingProposals, match=r"HOME 0\.5, HOME 0\.95"):
-            winner.evaluate_video([gold(0, "AWAY")], [prop(0, "HOME", order[0]), prop(0, "HOME", order[1])])
+def scored(video):
+    return [(outcome.kind, outcome.reason, outcome.gold and outcome.gold.start_ms, outcome.proposal and outcome.proposal.confidence)
+            for outcome in video.outcomes]
+
+
+def test_a_tie_is_broken_by_the_contents_of_the_file_and_never_by_its_row_order():
+    # Same side, same interval, two confidences: the more confident one is scored, so a
+    # confident wrong decision can not hide behind a row order.
+    rows = [prop(0, "HOME", 0.95), prop(0, "HOME", 0.5)]
+    for order in (rows, rows[::-1]):
+        video = winner.evaluate_video([gold(0, "AWAY")], order)
+        assert scored(video) == [("WRONG", None, 0, 0.95), ("AUTO_UNPAIRED", "SECOND_PROPOSAL", None, 0.5)]
+        assert winner.pool({"V1": video}).layers["GOLD"].calibration.high_confidence(0.9) == (1, 1)
+    # One proposal between two gold rallies, equally far from both: both pair, and which
+    # rally each one takes follows the contents too.
+    short = [Rally(0, 800, "HOME", None, "OBSERVED", ground_truth_status="DOUBLE_AGREED"),
+             Rally(900, 1700, "AWAY", None, "OBSERVED", ground_truth_status="DOUBLE_AGREED")]
+    between = [Proposal(450, 1250, "HOME", 0.95), Proposal(450, 1250, "HOME", 0.5)]
+    first, second = (winner.evaluate_video(short, order) for order in (between, between[::-1]))
+    assert scored(first) == scored(second) == [("CORRECT", None, 0, 0.95), ("WRONG", None, 900, 0.5)]
     # Two abstentions say the same whatever confidence they carry: an abstention is never calibrated.
     assert kinds(winner.evaluate_video([gold(0)], [prop(0, "UNKNOWN", 0.3), prop(0, "UNKNOWN", 0.7)])) == ["UNKNOWN"]
+
+
+def test_shuffling_the_rows_of_a_prediction_file_changes_no_number():
+    import random
+    generator = random.Random(11)
+    checked = refused = 0
+    for _ in range(300):
+        rallies = [gold(index, generator.choice(["HOME", "AWAY"])) for index in range(6)]
+        proposals = [Proposal(at(index)[0] + generator.choice([-900, -300, 0, 0, 400, 1500]),
+                              at(index)[1] + generator.choice([-600, 0, 0, 200, 1200]),
+                              generator.choice(["HOME", "HOME", "AWAY", "UNKNOWN"]),
+                              generator.choice([None, 0.5, 0.9, 0.95]))
+                     for index in [generator.randrange(7) for _ in range(9)]]
+        results = []
+        for _ in range(4):
+            generator.shuffle(proposals)
+            try:
+                results.append(winner.pool({"V1": winner.evaluate_video(rallies, list(proposals))}).to_dict(resamples=50))
+            except winner.ContradictingProposals as error:
+                results.append(str(error))
+        assert all(result == results[0] for result in results)
+        refused += isinstance(results[0], str)
+        checked += 1
+    # Both kinds of case were drawn.
+    assert 30 < refused < checked - 30
+
+
+def test_proposals_equally_near_two_rallies_that_name_different_winners_are_refused_in_either_order():
+    # Both proposals sit halfway between the two rallies, so each could pair with either.
+    golds = [gold(0, "HOME"), gold(2, "AWAY")]
+    halfway = [prop(1, "HOME", 0.9), prop(1, "AWAY", 0.9)]
+    for order in (halfway, halfway[::-1]):
+        with pytest.raises(winner.ContradictingProposals, match="AWAY, HOME"):
+            winner.evaluate_video(golds, order, tolerance_ms=30_000)
+
+
+def test_a_second_proposal_nearest_to_its_own_rally_contradicts_no_neighbour():
+    # At a loose tolerance the extra AWAY lies within reach of the HOME rally too, but it is
+    # nearest to the AWAY rally, where it repeats the paired decision.
+    video = winner.evaluate_video([gold(0, "HOME"), gold(1, "AWAY"), gold(2, "AWAY")],
+                                  [prop(0, "HOME"), prop(1, "AWAY"), prop(2, "AWAY"), prop(1, "AWAY", 0.8)],
+                                  tolerance_ms=30_000)
+    assert [(outcome.kind, outcome.reason) for outcome in video.outcomes] == [
+        ("CORRECT", None), ("CORRECT", None), ("AUTO_UNPAIRED", "SECOND_PROPOSAL"), ("CORRECT", None)]
 
 
 def test_neighbouring_rallies_within_the_tolerance_of_each_other_are_scored_and_not_refused():

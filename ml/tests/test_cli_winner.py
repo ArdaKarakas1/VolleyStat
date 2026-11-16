@@ -835,19 +835,23 @@ def test_proposals_that_name_different_winners_for_one_rally_are_refused(tmp_pat
     gold = gold_file(tmp_path, gold_rows("V1", ["HOME"] * 2))
     pred = pred_file(tmp_path, "V1", [(0, "HOME", 0.6), (0, "AWAY", 0.95), (1, "HOME")])
     assert_unusable(evaluate(capsys, "--gold", gold, "--pred", pred),
-                    "video V1: proposals within +/-1000 ms of the gold rally 0-5000 ms differ (AWAY 0.95, HOME 0.6); "
+                    "video V1: proposals within +/-1000 ms of the gold rally 0-5000 ms name different winners (AWAY, HOME); "
                     "the component made no single decision on that rally")
 
 
 def test_a_second_proposal_for_a_rally_is_counted_and_named_as_such(tmp_path, capsys):
     gold = gold_file(tmp_path, gold_rows("V1", ["HOME"] * 2))
-    pred = pred_file(tmp_path, "V1", [(0, "HOME", 0.6), (0, "HOME", 0.6), (1, "HOME")])
+    pred = pred_file(tmp_path, "V1", [(0, "HOME", 0.6), (0, "HOME", 0.95), (1, "HOME")])
     code, out, _ = evaluate(capsys, "--gold", gold, "--pred", pred)
     assert code == 0
     assert ("not scored, automatic decisions that pair with no gold rally within +/-1000 ms: 1 (1 second proposals for a "
             "gold rally that another proposal pairs with, 0 overlap") in out
-    assert as_json(capsys, "--gold", gold, "--pred", pred)["notScored"]["unpaired"] == {
-        "secondProposal": 1, "overlapsGold": 0, "noGoldThere": 0}
+    document = as_json(capsys, "--gold", gold, "--pred", pred)
+    assert document["notScored"]["unpaired"] == {"secondProposal": 1, "overlapsGold": 0, "noGoldThere": 0}
+    # The same rows in the other order give the same report.
+    turned = pred_file(tmp_path, "V1", [(1, "HOME"), (0, "HOME", 0.95), (0, "HOME", 0.6)], name="turned.json")
+    again = as_json(capsys, "--gold", gold, "--pred", turned)
+    assert again["layers"] == document["layers"] and again["notScored"] == document["notScored"]
 
 
 def test_every_bad_cell_of_a_prediction_csv_is_reported_with_its_row(tmp_path, capsys):
