@@ -129,6 +129,8 @@ def test_a_second_proposal_for_a_paired_rally_is_not_called_a_boundary_miss():
     video = winner.evaluate_video([gold(0, "HOME")], [prop(0, "HOME", 0.6), prop(0, "HOME", 0.95, shift=300)])
     assert [(outcome.kind, outcome.reason) for outcome in video.outcomes] == [
         ("CORRECT", None), ("AUTO_UNPAIRED", "SECOND_PROPOSAL")]
+    # The nearer one is scored: confidence decides only between equal costs.
+    assert [outcome.proposal.confidence for outcome in video.outcomes] == [0.6, 0.95]
     assert winner.pool({"V1": video}).unpaired == {"SECOND_PROPOSAL": 1, "OVERLAPS_GOLD": 0, "NO_GOLD_THERE": 0}
 
 
