@@ -30,6 +30,7 @@ import com.voleybolveveleybol.volleystat.model.AnalysisJob
 import com.voleybolveveleybol.volleystat.model.AnalysisSummary
 import com.voleybolveveleybol.volleystat.model.Coverage
 import com.voleybolveveleybol.volleystat.model.Draft
+import com.voleybolveveleybol.volleystat.model.MatchRules
 import com.voleybolveveleybol.volleystat.model.LocalVideo
 import com.voleybolveveleybol.volleystat.model.MatchKind
 import com.voleybolveveleybol.volleystat.model.MatchRecord
@@ -57,6 +58,7 @@ import com.voleybolveveleybol.volleystat.ui.screens.ProfileScreen
 import com.voleybolveveleybol.volleystat.ui.screens.RecordOverlay
 import com.voleybolveveleybol.volleystat.ui.screens.RecordPermissionScreen
 import com.voleybolveveleybol.volleystat.ui.screens.RecordUi
+import com.voleybolveveleybol.volleystat.ui.screens.MatchRulesScreen
 import com.voleybolveveleybol.volleystat.ui.screens.ReportScreen
 import com.voleybolveveleybol.volleystat.ui.screens.ReviewScreen
 import com.voleybolveveleybol.volleystat.ui.screens.StatusScreen
@@ -127,6 +129,7 @@ class ScreenshotTest {
         players = listOf(PlayerLine(true, 4, 6, 5, 1, 0), PlayerLine(true, 7, 4, 2, 1, 1), PlayerLine(true, 9, 3, 3, 0, 0), PlayerLine(false, 3, 5, 4, 0, 1)),
         unattributedHome = 15, unattributedAway = 20,
         coverage = listOf(Coverage("RALLY_WINNER", 40, 30), Coverage("TERMINAL_ACTION", 30, 22), Coverage("SCORER", 18, 13)),
+        rules = MatchRules.FIVB,
     )
 
     private fun shot(name: String, dark: Boolean = false, content: @Composable () -> Unit) {
@@ -152,6 +155,8 @@ class ScreenshotTest {
         shot("02_ana_ekran") { HomeScreen(state, {}, {}, {}, {}, {}) }
         shot("02_ana_ekran_bos") { HomeScreen(AppUiState(), {}, {}, {}, {}, {}) }
         shot("02_ana_ekran_koyu", dark = true) { HomeScreen(state, {}, {}, {}, {}, {}) }
+        // A setup the user left with nothing but a rule: its card names the rule.
+        shot("02_ana_ekran_yarim_kurulum_kural") { HomeScreen(AppUiState(draft = Draft(rules = MatchRules(2, 21, 15))), {}, {}, {}, {}, {}) }
     }
 
     @Test fun tabs() {
@@ -165,10 +170,23 @@ class ScreenshotTest {
 
     @Test fun s03_s04_s05_newMatch() {
         shot("03_mac_olustur") { MatchCreateScreen(Draft(name = "Hazırlık Maçı", venue = "Örnek Salon"), "2026-11-12", {}, {}, {}) }
+        shot("03_mac_olustur_kural") { MatchCreateScreen(Draft(name = "Hazırlık Maçı", venue = "Örnek Salon", rules = MatchRules(2, 21, 15)), "2026-11-12", {}, {}, {}) }
+        shot("03_mac_olustur_koyu", dark = true) { MatchCreateScreen(Draft(name = "Hazırlık Maçı", venue = "Örnek Salon"), "2026-11-12", {}, {}, {}) }
+        shotOn("kucuk_03_mac_olustur", "+w320dp-h568dp-port") { MatchCreateScreen(Draft(name = "Hazırlık Maçı", venue = "Örnek Salon"), "2026-11-12", {}, {}, {}) }
+        shotOn("buyuk_yazi_03_mac_olustur", "+w411dp-h891dp-port", fontScale = 1.5f) { MatchCreateScreen(Draft(name = "Hazırlık Maçı", venue = "Örnek Salon"), "2026-11-12", {}, {}, {}) }
+        // The narrowest phone with large text: the date card and the rule card put their action under the choice.
+        // A tall window keeps both cards in the picture.
+        shotOn("kucuk_buyuk_yazi_03_mac_olustur_kural", "+w320dp-h1200dp-port", fontScale = 1.5f) {
+            MatchCreateScreen(Draft(name = "Hazırlık Maçı", venue = "Örnek Salon", rules = MatchRules(2, 21, 15)), "2026-11-12", {}, {}, {})
+        }
         shot("04_takim_kadro") { MatchTeamsScreen(Draft(homeTeam = "A Takımı", awayTeam = "B Takımı", homeTeamId = "t1", awayTeamId = "t2"), teams, { _, _ -> }, { null }, {}, {}, {}) }
         shot("04_takim_kadro_bos") { MatchTeamsScreen(Draft(), emptyList(), { _, _ -> }, { null }, {}, {}, {}) }
         shot("05_video_kaynagi") { VideoSourceScreen(cameraSelected = true, reading = false, problem = null, onSelect = {}, onGo = {}, onOpenGuide = {}, onBack = {}) }
         shot("05_video_kontrol") { VideoCheckScreen(video, rightsAccepted = true, serverConfigured = true, onRights = {}, onStart = {}, onChangeVideo = {}, onBack = {}) }
+        // The rule card stands above the rights box at the end of the screen, so a tall window keeps it in the picture.
+        shotOn("05_video_kontrol_kural", "+w411dp-h1500dp-port") {
+            VideoCheckScreen(video, rightsAccepted = false, serverConfigured = true, onRights = {}, onStart = {}, onChangeVideo = {}, onBack = {}, rules = MatchRules(2, 21, 15))
+        }
         shot("cekim_rehberi") { GuideScreen {} }
     }
 
@@ -252,8 +270,12 @@ class ScreenshotTest {
         shot("11_ralli_listesi_onayli", content = screen(listState(decidedList.copy(confirmed = true))))
         shot("11_ralli_listesi_demo", content = screen(listState(decidedList, mock = true)))
         shot("11_ralli_listesi_koyu", dark = true, content = screen(listState(waitingList)))
+        // The server counts this list with a best of three to 21, and the card names that rule.
+        shot("11_ralli_listesi_kural", content = screen(listState(decidedList.copy(rules = MatchRules(2, 21, 15)))))
         shotOn("kucuk_11_ralli_listesi", "+w320dp-h568dp-port", content = screen(listState(waitingList)))
         shotOn("buyuk_yazi_11_ralli_listesi", "+w411dp-h891dp-port", fontScale = 1.5f, content = screen(listState(waitingList)))
+        shotOn("kucuk_buyuk_yazi_11_ralli_listesi_kural", "+w320dp-h568dp-port", fontScale = 1.5f, content = screen(listState(decidedList.copy(rules = MatchRules(2, 21, 15)))))
+        // The same phone after a confirmation: RallyScreensTest keeps those two pictures, because the list moves there.
     }
 
     @Test fun s12_editor() {
@@ -293,6 +315,30 @@ class ScreenshotTest {
         shot("09_mac_raporu_kararsiz_ralli") { ReportScreen(finished, ReportLoad.READY, report.copy(scoreStoppedAtRally = 29), {}, {}, {}, {}, {}) }
         shot("09_mac_raporu_koyu", dark = true) { ReportScreen(finished, ReportLoad.READY, report, {}, {}, {}, {}, {}) }
         shot("09_mac_raporu_demo") { ReportScreen(finished, ReportLoad.READY, report.copy(mock = true, analyzerId = "demo", analyzerKind = "MOCK"), {}, {}, {}, {}, {}) }
+        // The rule line closes the last card of the report, so a tall window keeps it in the picture.
+        shotOn("09_mac_raporu_kural", "+w411dp-h2400dp-port") {
+            // Set scores a server counting to 21 could give.
+            ReportScreen(finished, ReportLoad.READY, report.copy(rules = MatchRules(2, 21, 15), sets = listOf(SetScore(1, 21, 18, true), SetScore(2, 3, 4, false))), {}, {}, {}, {}, {})
+        }
         shot("10_oyuncu_istatistik") { PlayersScreen(finished, report, players, teams[1].players) {} }
+    }
+
+    @Test fun s13_rules() {
+        val chosen = MatchRules(2, 21, 15)
+        shot("13_mac_kurali") { MatchRulesScreen(MatchRules.FIVB, {}, {}) }
+        shot("13_mac_kurali_secim") { MatchRulesScreen(MatchRules.FIVB, {}, {}, initial = chosen) }
+        shot("13_mac_kurali_liste_onayli") { MatchRulesScreen(MatchRules.FIVB, {}, {}, onList = true, listConfirmed = true, initial = chosen) }
+        shot("13_mac_kurali_gonderiliyor") { MatchRulesScreen(MatchRules.FIVB, {}, {}, onList = true, sending = true, initial = chosen) }
+        shot("13_mac_kurali_ret") { MatchRulesScreen(MatchRules.FIVB, {}, {}, onList = true, problem = CorrectionProblem.REFUSED, initial = chosen) }
+        shot("13_mac_kurali_eski_kural") { MatchRulesScreen(MatchRules(2, 25, 25), {}, {}, onList = true, problem = CorrectionProblem.STALE, initial = chosen) }
+        shot("13_mac_kurali_koyu", dark = true) { MatchRulesScreen(MatchRules.FIVB, {}, {}) }
+        shotOn("kucuk_13_mac_kurali_liste_onayli", "+w320dp-h568dp-port") {
+            MatchRulesScreen(MatchRules.FIVB, {}, {}, onList = true, listConfirmed = true, initial = chosen)
+        }
+        shotOn("buyuk_yazi_13_mac_kurali_secim", "+w411dp-h891dp-port", fontScale = 1.5f) { MatchRulesScreen(MatchRules.FIVB, {}, {}, initial = chosen) }
+        // The longest notice of the screen where it has the least room: the narrowest phone with large text.
+        shotOn("kucuk_buyuk_yazi_13_mac_kurali_eski_kural", "+w320dp-h568dp-port", fontScale = 1.5f) {
+            MatchRulesScreen(MatchRules(2, 25, 15), {}, {}, onList = true, problem = CorrectionProblem.STALE, initial = chosen)
+        }
     }
 }

@@ -16,6 +16,8 @@ class FakeServer(var maxVideoBytes: Long = 4L * 1024 * 1024 * 1024) : AutoClosea
 
     /** The ids the phone created matches under, in the order they arrived. */
     val matchIds = mutableListOf<String>()
+    /** The body of every request that created or repeated a match, in the order they arrived. */
+    val matchBodies = mutableListOf<JSONObject>()
     val matchesCreated get() = matchIds.size
     /** Number of match requests the server stores and then answers by dropping the connection. */
     var loseMatchAnswers = 0
@@ -57,6 +59,7 @@ class FakeServer(var maxVideoBytes: Long = 4L * 1024 * 1024 * 1024) : AutoClosea
                 reply(200, JSONObject().put("status", "ok").put("mediaProbe", "available").put("maxVideoBytes", maxVideoBytes))
             method == "PUT" && path.startsWith("/matches/") && path.count { it == '/' } == 2 -> {
                 val id = path.removePrefix("/matches/")
+                matchBodies += JSONObject(request.body.readUtf8())
                 val known = id in matchIds
                 if (!known) matchIds += id
                 when {

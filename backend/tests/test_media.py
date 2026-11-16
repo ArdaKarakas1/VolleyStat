@@ -12,8 +12,8 @@ from tests.test_api import create_match, create_upload
 FASTSTART = ("-movflags", "+faststart")
 
 
-def store(client, data, name="match.mp4", mime="video/mp4"):
-    match_id = create_match(client)
+def store(client, data, name="match.mp4", mime="video/mp4", match_id=None):
+    match_id = match_id or create_match(client)
     upload = create_upload(
         client, match_id, size=len(data), fileName=name, mimeType=mime,
         clientSha256=hashlib.sha256(data).hexdigest(),

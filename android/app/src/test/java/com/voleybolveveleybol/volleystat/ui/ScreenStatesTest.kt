@@ -1,13 +1,19 @@
 package com.voleybolveveleybol.volleystat.ui
 
 import android.content.Context
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
@@ -16,6 +22,8 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.voleybolveveleybol.volleystat.AnalysisUi
@@ -32,6 +40,7 @@ import com.voleybolveveleybol.volleystat.model.Coverage
 import com.voleybolveveleybol.volleystat.model.Draft
 import com.voleybolveveleybol.volleystat.model.LocalVideo
 import com.voleybolveveleybol.volleystat.model.MatchRecord
+import com.voleybolveveleybol.volleystat.model.MatchRules
 import com.voleybolveveleybol.volleystat.model.MatchReport
 import com.voleybolveveleybol.volleystat.model.ReviewCard
 import com.voleybolveveleybol.volleystat.model.ReviewDeck
@@ -41,11 +50,14 @@ import com.voleybolveveleybol.volleystat.model.TeamStats
 import com.voleybolveveleybol.volleystat.model.VideoCheck
 import com.voleybolveveleybol.volleystat.model.VideoSource
 import com.voleybolveveleybol.volleystat.ui.screens.ClipPlaceholder
+import com.voleybolveveleybol.volleystat.ui.screens.HomeScreen
+import com.voleybolveveleybol.volleystat.ui.screens.MatchCreateScreen
 import com.voleybolveveleybol.volleystat.ui.screens.PlayersScreen
 import com.voleybolveveleybol.volleystat.ui.screens.ProfileScreen
 import com.voleybolveveleybol.volleystat.ui.screens.ReportScreen
 import com.voleybolveveleybol.volleystat.ui.screens.ReviewScreen
 import com.voleybolveveleybol.volleystat.ui.screens.StatusScreen
+import com.voleybolveveleybol.volleystat.ui.screens.VideoCheckScreen
 import com.voleybolveveleybol.volleystat.ui.screens.WelcomeScreen
 import com.voleybolveveleybol.volleystat.ui.theme.VolleyStatTheme
 import org.junit.Assert.assertEquals
@@ -355,5 +367,104 @@ class ScreenStatesTest {
             RuntimeEnvironment.setFontScale(1f)
             RuntimeEnvironment.setQualifiers("+w411dp-h891dp-port")
         }
+    }
+
+    // ----- the match rule (ADR-0115) -----
+
+    @Test fun theNewMatchScreenNamesTheFivbRuleAndContinuesWithoutATouch() {
+        var continues = 0
+        var opens = 0
+        show { MatchCreateScreen(Draft(), "2026-11-14", {}, onContinue = { continues++ }, onBack = {}, onOpenRules = { opens++ }) }
+        compose.onNodeWithText(text(R.string.rule_name_fivb)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.rule_detail, 3, 25, 5, 15)).assertIsDisplayed()
+        // A standard match needs no touch on the rule.
+        compose.onNodeWithText(text(R.string.action_continue)).performClick()
+        assertEquals(1 to 0, continues to opens)
+    }
+
+    @Test fun aChosenRuleIsNamedOnTheNewMatchScreen() {
+        var opens = 0
+        show { MatchCreateScreen(Draft(rules = MatchRules(2, 21, 21)), "2026-11-14", {}, onContinue = {}, onBack = {}, onOpenRules = { opens++ }) }
+        compose.onNodeWithText(text(R.string.rule_name_custom)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.rule_detail_same, 2, 21)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.rule_card_change)).performClick()
+        assertEquals(1, opens)
+    }
+
+    @Test fun homeNamesTheRuleAnUnfinishedSetupHolds() {
+        var opens = 0
+        show { HomeScreen(AppUiState(draft = Draft(rules = MatchRules(2, 21, 15))), { opens++ }, {}, {}, {}, {}) }
+        // The big "Yeni Maç" card opens this same setup, so the card of the setup says which rule goes with it.
+        compose.onNodeWithText(text(R.string.home_draft_title)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.rule_name_custom)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.rule_detail, 2, 21, 3, 15)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.home_draft_title)).performClick()
+        assertEquals(1, opens)
+    }
+
+    @Test fun homeNamesNoRuleForASetupWithTheStandardRule() {
+        show { HomeScreen(AppUiState(draft = Draft(name = "Hazırlık Maçı")), {}, {}, {}, {}, {}) }
+        compose.onNodeWithText(text(R.string.home_draft_title)).performScrollTo().assertIsDisplayed()
+        assertEquals(false, shown(text(R.string.rule_card_label)))
+        assertEquals(false, shown(text(R.string.rule_name_fivb)))
+    }
+
+    @Test fun theLastScreenBeforeTheUploadNamesARuleThatIsNotTheStandardOne() {
+        var opens = 0
+        show {
+            VideoCheckScreen(video, rightsAccepted = false, serverConfigured = true, onRights = {}, onStart = {}, onChangeVideo = {}, onBack = {},
+                rules = MatchRules(2, 21, 15), onOpenRules = { opens++ })
+        }
+        compose.onNodeWithText(text(R.string.rule_name_custom)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.rule_detail, 2, 21, 3, 15)).assertIsDisplayed()
+        // The rule stands right above the box the user has to tick before the upload can start.
+        val rule = compose.onNodeWithText(text(R.string.rule_detail, 2, 21, 3, 15), useUnmergedTree = true).getUnclippedBoundsInRoot()
+        val box = compose.onNodeWithText(text(R.string.check_rights), useUnmergedTree = true).getUnclippedBoundsInRoot()
+        assertTrue(rule.bottom <= box.top)
+        compose.onNodeWithText(text(R.string.rule_card_change)).performClick()
+        assertEquals(1, opens)
+    }
+
+    @Test fun theLastScreenBeforeTheUploadShowsNoRuleForAStandardMatch() {
+        show { VideoCheckScreen(video, rightsAccepted = false, serverConfigured = true, onRights = {}, onStart = {}, onChangeVideo = {}, onBack = {}) }
+        compose.onNodeWithText(text(R.string.check_rights)).performScrollTo().assertIsDisplayed()
+        assertEquals(false, shown(text(R.string.rule_card_label)))
+    }
+
+    @Test fun onANarrowPhoneWithLargeTextTheDateCardPutsItsActionUnderTheDate() {
+        // A 320 dp phone at 1.5x text. Beside the date, the action would leave the date so little room that it breaks.
+        var scale by mutableStateOf(1.5f)
+        var width by mutableStateOf(320.dp)
+        show {
+            CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, scale)) {
+                Box(Modifier.width(width)) { MatchCreateScreen(Draft(), "2026-08-14", {}, onContinue = {}, onBack = {}) }
+            }
+        }
+        fun bounds(label: String) = compose.onNodeWithText(label, useUnmergedTree = true).getUnclippedBoundsInRoot()
+        // The date itself, the last line of the card. The label above it ends higher than an action that
+        // stands beside a date broken over three lines, so a comparison with the label passes on both layouts.
+        val date = formatDay("2026-08-14")
+        val change = text(R.string.match_date_pick)
+        assertTrue("the action stands under the date", bounds(change).top >= bounds(date).bottom)
+
+        // A 411 dp phone at normal text has room for both on one line.
+        scale = 1f
+        width = 411.dp
+        compose.waitForIdle()
+        assertTrue("with room, the action stands beside the date", bounds(change).left >= bounds(date).right)
+    }
+
+    @Test fun theReportNamesTheRuleTheServerCountedWith() {
+        show { ReportScreen(match, ReportLoad.READY, report("PARTIAL").copy(rules = MatchRules(2, 21, 15)), {}, {}, {}, {}, {}) }
+        compose.onNodeWithText(text(R.string.report_rules, text(R.string.rule_counting, 21, 3, 15))).performScrollTo().assertIsDisplayed()
+        // The score above can hold a set played after a team had won, and the report says why.
+        compose.onNodeWithText(text(R.string.rule_no_match_end)).performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun aReportWithoutARuleLeavesTheRuleLineOut() {
+        show { ReportScreen(match, ReportLoad.READY, report("PARTIAL"), {}, {}, {}, {}, {}) }
+        // "Skor kuralı:" with nothing after it would name no rule; the line is left out instead.
+        assertEquals(false, shown(text(R.string.report_rules, "").trim()))
+        assertEquals(false, shown(text(R.string.rule_no_match_end)))
     }
 }

@@ -151,7 +151,7 @@ def _record(db, job, correction_id: str, operation: str, before: str, after: str
 
 def _changed(db, job, correction_id: str | None, affected_ids: tuple[str, ...], removed_ids: tuple[str, ...],
              closing: dict[str, Any]) -> dict[str, Any]:
-    by_id = {rally["id"]: rally for rally in rally_payloads(db, job["id"])}
+    by_id = {rally["id"]: rally for rally in rally_payloads(db, job)}
     return {"correctionId": correction_id, "affected": [by_id[rally_id] for rally_id in affected_ids],
             "removed": list(removed_ids), **closing}
 

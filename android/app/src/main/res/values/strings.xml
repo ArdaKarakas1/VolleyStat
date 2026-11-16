@@ -348,17 +348,17 @@
     <string name="rallies_gap">%1$s boşluk</string>
     <string name="rallies_gap_add">Ralli ekle</string>
     <string name="rallies_confirm_sending">Uygulama onayı sunucuya gönderiyor</string>
-    <string name="rallies_confirmed">Sen bu listenin videodaki bütün rallileri içerdiğini onayladın. Listeyi ya da bir kazananı değiştirirsen onay düşer.</string>
+    <string name="rallies_confirmed">Sen bu listenin videodaki bütün rallileri içerdiğini onayladın. Listeyi, bir kazananı ya da maç kuralını değiştirirsen onay düşer.</string>
     <string name="rallies_demo">Uygulama deneme analizinin listesini onaylatmaz. Sunucu bu aralıkları uydurdu, bu yüzden buradaki skorlar gerçek maç hakkında bilgi vermez.</string>
     <string name="rallies_not_ready">Skoru denetlemek için önce her rallinin kazananını seç. %1$d ralli kararını bekliyor.</string>
-    <string name="rallies_no_hint">Skor tutmuyorsa listede eksik ya da fazla bir ralli vardır. Skorun bozulduğu ilk sete bak. Uzun bir boşluk kaçan bir ralliyi, uzun bir ralli birleşmiş iki ralliyi gösterebilir. Hakem bir ralliyi tekrarlattıysa o ralliye dokun, \"%1$s\" düğmesine bas ve \"%2$s\" yanıtını ver.</string>
+    <string name="rallies_no_hint">Skor tutmuyorsa önce maç kuralına bak. Takımlar maçı başka bir kuralla oynadıysa \"%1$s\" düğmesine bas. Kural doğruysa skorun bozulduğu ilk sete bak. O sette listede bir ralli eksik ya da fazla olabilir ya da sen bir rallinin kazananını yanlış seçmiş olabilirsin. Uzun bir boşluk kaçan bir ralliyi, uzun bir ralli birleşmiş iki ralliyi gösterebilir. Bir kazananı değiştirmek için o ralliye dokun ve \"%2$s\" düğmesine bas. Hakem bir ralliyi tekrarlattıysa aynı düğmeyle \"%3$s\" yanıtını ver.</string>
     <string name="action_check_score">Skoru Denetle</string>
     <string name="action_go_review">Doğrulamaya Git</string>
     <string name="score_check_title">Set skorları doğru mu?</string>
     <string name="score_check_intro">Sunucu listedeki rallileri şu skorla saydı:</string>
     <string name="score_check_set">%1$d. set: %2$d - %3$d</string>
     <string name="score_check_set_open">%1$d. set: %2$d - %3$d (kurala göre bitmedi)</string>
-    <string name="score_check_rule">Sunucu seti 25 sayıda, beşinci seti 15 sayıda ve iki farkla bitirir. Maçı başka bir kuralla oynadıysan bu skorlar tutmaz.</string>
+    <string name="score_check_rule">%1$s Takımlar maçı başka bir kuralla oynadıysa bu skorlar tutmayabilir.</string>
     <string name="score_check_question">Bu skorlar maçta oynanan skorlarla aynı mı?</string>
     <string name="score_check_yes">Evet, Aynı</string>
     <string name="score_check_no">Hayır</string>
@@ -395,7 +395,7 @@
     <string name="merge_body_previous_answer">Sunucu %1$d. ralli için verdiğin kararı siler.</string>
     <string name="merge_body_reopens">Sunucu %1$d. ralli için verdiğin \"Bu bir ralli değil\" yanıtını da siler ve o rallinin kazanan sorusunu yeniden açar.</string>
     <string name="merge_confirm">Birleştir</string>
-    <string name="correction_stale">Liste bu ekran açıldıktan sonra değişti. Uygulama listeyi yeniden yükledi. Düzeltmeyi yeniden yap.</string>
+    <string name="correction_stale">Sunucudaki liste değişmiş. Uygulama listeyi yeniden yükledi. Düzeltmeyi yeniden yap.</string>
     <string name="correction_overlap">Bu aralık %1$d. ralliyle çakışıyor.</string>
     <string name="correction_overlap_unknown">Bu aralık başka bir ralliyle çakışıyor.</string>
     <string name="correction_outside">Bu konum izin verilen aralığın dışında kalıyor.</string>
@@ -403,6 +403,9 @@
     <string name="correction_demo">Sunucu deneme analizinde liste onayını kaydetmez.</string>
     <string name="correction_unreachable">Uygulama sunucuya ulaşamadı. Sunucunun açık olduğunu denetle ve yeniden dene.</string>
     <string name="correction_refused">Sunucu bu düzeltmeyi kabul etmedi.</string>
+    <!-- The rally list sends a confirmation, not a correction. Its refusals name the step the user repeats there. -->
+    <string name="rallies_confirm_stale">Sunucudaki liste değişmiş. Uygulama listeyi yeniden yükledi. Skoru yeniden denetle.</string>
+    <string name="rallies_confirm_refused">Sunucu onayını kaydetmedi.</string>
     <string name="definitions_open">Sayı türlerinin tanımlarını aç</string>
     <string name="definitions_title">Sayı Türleri</string>
     <string name="define_attack">Takım sayıyı hücum vuruşuyla doğrudan alır. Top bloğa çarpıp dışarı çıkarsa ya da rakip savunduğu topu oyunda tutamazsa sayı yine hücum sayısıdır.</string>
@@ -419,7 +422,7 @@
     <string name="report_verification_draft">Taslak</string>
     <string name="report_verification_partial">Bir kısmını doğruladın</string>
     <string name="report_verification_done">Senin kararlarınla tamamlandı</string>
-    <string name="report_rules">Skor kuralı: Set 25 sayıda, beşinci set 15 sayıda ve iki farkla biter.</string>
+    <string name="report_rules">Skor kuralı: %1$s</string>
     <string name="report_set_open">%1$d. set sürüyor</string>
     <string name="report_may_miss">Rapor yalnızca listedeki rallileri sayar. Listede olmayan bir rallinin sayısı raporda yoktur. Sen ralli listesini onaylayınca set skorunun ve \"Sayı\" satırının artı işareti kalkar. Sayı türü satırlarının artı işareti, sen her sayının türünü seçince kalkar.</string>
     <string name="report_may_miss_demo">Rapor yalnızca listedeki rallileri sayar. Sunucu bu aralıkları uydurdu, bu yüzden sayılar gerçek maç hakkında bilgi vermez.</string>
@@ -508,4 +511,38 @@
     <string name="recording_delete_title">Bu kaydı sileyim mi?</string>
     <string name="recording_delete_body">Uygulama %1$s dosyasını telefondan siler. Dosyanın başka kopyası yoksa kayıt geri gelmez.</string>
     <string name="profile_version">Sürüm %1$s</string>
+
+    <!-- 13: the match rule (ADR-0115). The server counts the sets with it; the phone counts nothing. -->
+    <string name="rule_card_label">Maç kuralı</string>
+    <string name="rule_card_change">Kuralı değiştir</string>
+    <string name="rule_name_fivb">FIVB kuralı</string>
+    <string name="rule_name_custom">Senin seçtiğin kural</string>
+    <!-- A number stays on the line of its noun (no-break spaces), so a narrow card breaks the line only between the parts. -->
+    <string name="rule_detail">%1$d\u00A0set alan kazanır · Set\u00A0%2$d\u00A0sayı · %3$d.\u00A0set\u00A0%4$d\u00A0sayı</string>
+    <string name="rule_detail_same">%1$d\u00A0set alan kazanır · Her set\u00A0%2$d\u00A0sayı</string>
+    <string name="rule_title">Maç Kuralı</string>
+    <string name="rule_intro">Sunucu set skorlarını maçın kuralına göre sayar.</string>
+    <string name="rule_later">Kuralı analizden sonra ralli listesinden de değiştirebilirsin.</string>
+    <string name="rule_keeps_answers">Verdiğin kararlar ve yaptığın düzeltmeler kalır. Sunucu setleri yeni kurala göre yeniden sayar.</string>
+    <string name="rule_drops_confirmation">Sen bu listeyi onayladın. Kuralı değiştirirsen onay düşer ve rapordaki sayılar yeniden alt sınır olur.</string>
+    <string name="rule_sets_question">Maçı kaç set alan takım kazanır?</string>
+    <string name="rule_sets_option">%1$d set</string>
+    <string name="rule_sets_option_fivb">%1$d set (FIVB)</string>
+    <string name="rule_points_question">Set kaç sayıda biter?</string>
+    <string name="rule_deciding_question">Karar seti (%1$d. set) kaç sayıda biter?</string>
+    <string name="rule_points_option">%1$d sayı</string>
+    <string name="rule_points_option_fivb">%1$d sayı (FIVB)</string>
+    <string name="rule_counting">Sunucu seti %1$d sayıda, %2$d. seti %3$d sayıda ve iki farkla bitirir.</string>
+    <string name="rule_counting_same">Sunucu her seti %1$d sayıda ve iki farkla bitirir.</string>
+    <!-- A choice the user has not saved: the server counts with it only after Save. -->
+    <string name="rule_counting_if_saved">Kaydedersen sunucu seti %1$d sayıda, %2$d. seti %3$d sayıda ve iki farkla bitirir.</string>
+    <string name="rule_counting_same_if_saved">Kaydedersen sunucu her seti %1$d sayıda ve iki farkla bitirir.</string>
+    <!-- The server never ends a match (ADR-0112), so a set played after a team has won counts too. -->
+    <string name="rule_no_match_end">Sunucu maçı bitirmez ve bir takım maçı aldıktan sonra oynanan setleri de sayar.</string>
+    <string name="action_save_rule">Kuralı Kaydet</string>
+    <string name="rule_sending">Uygulama kuralı sunucuya gönderiyor</string>
+    <!-- The server accepts every rule the app offers, so a refusal never blames the rule. -->
+    <string name="rule_refused">Sunucu kuralı kaydetmedi. Sunucunun güncel sürümle çalıştığını denetle ve yeniden dene.</string>
+    <!-- %1$s: the whole rule the server has now, as the rule card writes it (rule_detail). The user checks the choice against it. -->
+    <string name="rule_stale">Sunucudaki kural değişmiş. Sunucu şimdi \"%1$s\" kuralıyla sayıyor. Seçimini denetle ve yeniden kaydet.</string>
 </resources>

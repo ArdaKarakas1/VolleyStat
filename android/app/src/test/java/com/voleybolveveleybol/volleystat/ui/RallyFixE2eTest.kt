@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.remember
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
@@ -23,6 +24,7 @@ import com.voleybolveveleybol.volleystat.data.UploadEngine
 import com.voleybolveveleybol.volleystat.data.VideoBytes
 import com.voleybolveveleybol.volleystat.model.LocalVideo
 import com.voleybolveveleybol.volleystat.model.MatchRecord
+import com.voleybolveveleybol.volleystat.model.MatchRules
 import com.voleybolveveleybol.volleystat.model.Rally
 import com.voleybolveveleybol.volleystat.model.ServerTarget
 import com.voleybolveveleybol.volleystat.model.Settings
@@ -56,6 +58,9 @@ private const val AWAY_TEAM = "Düzeltme Misafir"
  * picture where a user would have stopped it. Real playback is the device test's business. The
  * intervals are the demo analyzer's inventions and the clip is a test pattern, so this proves
  * the plumbing and nothing about any match. It runs under the same conditions as AppFlowE2eTest.
+ *
+ * The rule of the match changes through screen 13 the same way. The demo job's rallies reach no
+ * set boundary, so that test sees the rule named, not sets counted with it: the server tests count them.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -213,5 +218,45 @@ class RallyFixE2eTest {
         assertEquals("move, split, merge and add", 4, report.corrections)
         assertEquals(1, report.ralliesUserCreated)
         assertTrue("a demo list stays unconfirmed, so every count stays a lower bound", report.ralliesMayBeMissing)
+    }
+
+    @Test fun theRuleChangesFromTheListAndAChangeMadeMeanwhileIsCaught() {
+        app.setContent { VolleyStatTheme { VolleyStatApp(editorVideo = { _, startMs -> remember { control.positionMs = startMs; control.video } }) } }
+        val api = ApiClient(url!!)
+        app.onAllNodesWithText(text(R.string.nav_matches)).onFirst().performClick()
+        app.onNodeWithText("$HOME_TEAM - $AWAY_TEAM").performClick()
+        waitFor(text(R.string.action_open_report))
+        tap(R.string.action_open_report)
+        // The app created the match with the FIVB rule, the one a new match starts with, and the report says so.
+        waitFor(text(R.string.report_rules, text(R.string.rule_counting, 25, 5, 15)))
+        val job = api.latestAnalysis(videoId!!)!!
+        app.onNodeWithText(text(R.string.rallies_title)).performScrollTo().performClick()
+        waitFor(text(R.string.rule_name_fivb))
+
+        app.onNodeWithText(text(R.string.rule_card_change)).performScrollTo().performClick()
+        waitFor(text(R.string.rule_sets_question))
+        // While the screen is open, the rule changes elsewhere: the server ends every set at 25 now.
+        api.putMatchRules(matchId!!, MatchRules(2, 25, 25), seen = MatchRules.FIVB)
+        app.onNodeWithText(text(R.string.rule_sets_option, 2)).performScrollTo().performClick()
+        app.onAllNodesWithText(text(R.string.rule_points_option, 21))[0].performScrollTo().performClick()
+        tap(R.string.action_save_rule)
+
+        // The request names the rule the screen showed. The server refuses it, so the late change does
+        // not undo the one made meanwhile, and the screen says so and keeps the choice.
+        // The notice names the rule the server has now, which this screen had not shown before.
+        waitFor(text(R.string.rule_stale, text(R.string.rule_detail_same, 2, 25)))
+        assertEquals(MatchRules(2, 25, 25), api.rallies(job.id).rules)
+        app.onNodeWithText(text(R.string.rule_sets_option, 2)).performScrollTo().assertIsSelected()
+
+        // Saved again on the rule of now, the change lands, the screen closes and the list names the rule.
+        tap(R.string.action_save_rule)
+        waitFor(text(R.string.rule_name_custom))
+        app.onNodeWithText(text(R.string.rule_detail, 2, 21, 3, 15)).assertIsDisplayed()
+        assertEquals(MatchRules(2, 21, 15), api.rallies(job.id).rules)
+
+        // The report names it too.
+        app.runOnUiThread { app.activity.onBackPressedDispatcher.onBackPressed() }
+        waitFor(text(R.string.report_rules, text(R.string.rule_counting, 21, 3, 15)))
+        assertEquals(MatchRules(2, 21, 15), api.report(matchId!!)!!.rules)
     }
 }

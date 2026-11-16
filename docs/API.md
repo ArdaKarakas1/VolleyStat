@@ -1,4 +1,4 @@
-# Yerel geliştirme API'si (v0.5)
+# Yerel geliştirme API'si (v0.6)
 
 **Kök:** `http://127.0.0.1:8000/v1`. Android emülatöründen `http://10.0.2.2:8000/v1`.
 **Kapsam:** Yalnızca yerel geliştirme. Hesap sistemi ve TLS yoktur.
@@ -11,12 +11,15 @@ Sürüm 0.4.1 `PUT /matches/{id}` ve `DELETE /matches/{id}` uçlarını ekler. D
 
 Sürüm 0.5.0 ralli düzeltme uçlarını ve liste onayını ekler ([API_V1.md](API_V1.md), bölüm 9). Ralli listesi yanıtı o sürümün set skorlarını, rapor da kullanıcının düzeltme sayısını taşır. Android uygulamasının 0.5.0 sürümü bu uçları kullanır ve bu yüzden sunucunun 0.5.0 sürümünü ister.
 
+Sürüm 0.6.0 maç kuralını ekler (`rules` alanı ve `PUT /matches/{id}/rules`, [API_V1.md](API_V1.md) bölüm 1). Android uygulamasının 0.6.0 sürümü sunucunun 0.6.0 sürümünü ister. Daha eski bir sunucu `rules` alanını yok sayar ve maçı FIVB kuralıyla sayar. Uygulama o sunucunun ralli listesini okuyamaz ve bunu ralli listesi ekranında söyler.
+
 | Uç | Görev | Başarı | Hatalar |
 |---|---|---|---|
 | `GET /health` | Sunucu, model ve ffprobe durumu, boyut sınırları | 200 | |
 | `POST /matches` | İki farklı takım adıyla maç açar. Sunucu kimliği üretir | 201 | 422 |
 | `PUT /matches/{id}` | Maçı istemcinin seçtiği kimlikle açar ya da o kimlikteki maçı döner | 201, 200 | 422 |
 | `GET /matches/{id}` | Maçı okur | 200 | 404 |
+| `PUT /matches/{id}/rules` | Sunucunun maçın setlerini saydığı kuralı değiştirir. İstek istemcinin sunucudan son okuduğu kuralı da taşır | 200 | 404, 409, 422 |
 | `DELETE /matches/{id}` | Maçı ve sunucunun o maç için tuttuğu her şeyi siler | 204 | 404, 409 |
 | `POST /matches/{id}/uploads` | Yükleme oturumu açar | 201 | 404, 422 |
 | `GET /uploads/{id}` | Sunucudaki offset ve durumu verir (devam için) | 200 | 404 |

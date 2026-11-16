@@ -8,6 +8,8 @@ import com.voleybolveveleybol.volleystat.data.StoredState
 import com.voleybolveveleybol.volleystat.model.Draft
 import com.voleybolveveleybol.volleystat.model.LocalVideo
 import com.voleybolveveleybol.volleystat.model.MatchRecord
+import com.voleybolveveleybol.volleystat.model.MatchReport
+import com.voleybolveveleybol.volleystat.model.MatchRules
 import com.voleybolveveleybol.volleystat.model.UploadSession
 import com.voleybolveveleybol.volleystat.model.VideoCheck
 import com.voleybolveveleybol.volleystat.model.VideoSource
@@ -87,8 +89,28 @@ class AppViewModelTest {
         .put("sequence", sequence).put("startMs", startMs).put("endMs", endMs).put("origin", "ANALYZER").put("status", status)
         .put("proposedWinner", "UNKNOWN").put("winner", JSONObject.NULL).put("scoreAfter", JSONObject.NULL)
 
-    private fun rallies(version: Int, vararg list: JSONObject, confirmed: Boolean = false) = JSONObject().put("rallies", JSONArray(list.toList()))
-        .put("rallyListVersion", version).put("listConfirmed", confirmed).put("videoDurationMs", 60_000).put("sets", JSONArray())
+    private fun rulesJson(rules: MatchRules) = JSONObject().put("setsToWin", rules.setsToWin).put("setTarget", rules.setTarget)
+        .put("decidingSetTarget", rules.decidingSetTarget).put("winBy", 2).put("decidingSetNumber", rules.decidingSetNumber)
+
+    private fun rallies(version: Int, vararg list: JSONObject, confirmed: Boolean = false, rules: MatchRules = MatchRules.FIVB) = JSONObject()
+        .put("rallies", JSONArray(list.toList())).put("rallyListVersion", version).put("listConfirmed", confirmed)
+        .put("videoDurationMs", 60_000).put("sets", JSONArray()).put("rules", rulesJson(rules))
+
+    private fun unknownTeam() = JSONObject().apply {
+        listOf("points", "attackPoints", "blockPoints", "aces", "opponentErrors").forEach { put(it, JSONObject().put("value", JSONObject.NULL).put("status", "UNKNOWN")) }
+    }
+
+    /** A report of nothing decided yet, with [rules] as the server sent them (or none). */
+    private fun report(rules: JSONObject?) = JSONObject().put("matchId", "server-A").put("jobId", "J").put("revision", 1)
+        .put("analyzer", JSONObject().put("id", "demo").put("version", "0.1").put("kind", "MOCK")).put("mock", true)
+        .put("rallyList", JSONObject().put("confirmed", false).put("confirmedAt", JSONObject.NULL).put("corrections", 0))
+        .put("verificationStatus", "DRAFT")
+        .put("rallies", JSONObject().put("proposed", 2).put("total", 2).put("userCreated", 0).put("verified", 0).put("rejected", 0).put("unresolved", 0).put("open", 2))
+        .put("ralliesMayBeMissing", true).putOpt("rules", rules)
+        .put("score", JSONObject().put("status", "UNKNOWN").put("setsWon", JSONObject().put("home", JSONObject.NULL).put("away", JSONObject.NULL))
+            .put("sets", JSONArray()).put("stoppedAtRally", 1))
+        .put("teams", JSONObject().put("home", unknownTeam()).put("away", unknownTeam())).put("players", JSONArray())
+        .put("unattributed", JSONObject().put("home", JSONObject.NULL).put("away", JSONObject.NULL)).put("coverage", JSONArray())
 
     private fun corrected(job: JSONObject, vararg affected: JSONObject) = JSONObject().put("correctionId", "correction-1")
         .put("affected", JSONArray(affected.toList())).put("removed", JSONArray()).put("job", job).put("reportRevision", 5)
@@ -995,5 +1017,236 @@ class AppViewModelTest {
             await("the failure") { vm.analysis.value.ralliesLoad != RalliesLoad.LOADING }
             assertEquals(RalliesLoad.UNREACHABLE, vm.analysis.value.ralliesLoad)
         }
+    }
+
+    // ----- The match rule (ADR-0115) -----
+
+    private fun draftWithRule(rules: MatchRules): StoredState {
+        val file = File(context.filesDir, "draft.mp4").apply { writeBytes(ByteArray(10) { it.toByte() }) }
+        return StoredState(draft = Draft(homeTeam = "Ev", awayTeam = "Misafir", video = video(file.path), rules = rules))
+    }
+
+    private fun rulesOf(body: JSONObject) = listOf(body.getInt("setsToWin"), body.getInt("setTarget"), body.getInt("decidingSetTarget"))
+
+    @Test fun theRuleChosenOnTheDraftTravelsWithTheMatchToTheServer() {
+        val bodies = CopyOnWriteArrayList<JSONObject>()
+        on("GET /health") { ok(JSONObject().put("status", "ok").put("mediaProbe", "available").put("maxVideoBytes", 4L * 1024 * 1024 * 1024)) }
+        onMatching("PUT /matches/[0-9a-f-]+") { request -> bodies += JSONObject(request.body.readUtf8()); ok(JSONObject()) }
+        val vm = viewModel(draftWithRule(MatchRules(2, 21, 15)))
+        val id = vm.startUpload()!!
+        assertEquals(MatchRules(2, 21, 15), vm.state.value.matches.single { it.localId == id }.rules)
+        await("the request that creates the match") { bodies.isNotEmpty() }
+        assertEquals(listOf(2, 21, 15), rulesOf(bodies.first().getJSONObject("rules")))
+    }
+
+    @Test fun theDraftAfterAStartedMatchHasTheFivbRuleAgain() {
+        // Only a started match empties the draft. A setup the user leaves stays, and Home offers it (MatchRulesTest).
+        val vm = viewModel(draftWithRule(MatchRules(2, 21, 15)))
+        vm.startUpload()
+        assertEquals(MatchRules.FIVB, vm.state.value.draft.rules)
+    }
+
+    @Test fun theRallyListBringsTheRuleItsSetsWereCountedWith() {
+        val vm = withRallyList { rallies(3, rally("r1", 1, 2_000, 9_000), rules = MatchRules(2, 21, 15)) }
+        assertEquals(MatchRules(2, 21, 15), vm.analysis.value.rallies!!.rules)
+    }
+
+    @Test fun aRallyListWithoutARuleIsTheAnswerOfAnOlderServer() {
+        on("GET /videos/video-A/analyses/latest") { ok(job("J", "video-A", "NEEDS_REVIEW")) }
+        // Server 0.5 sends the sets of the list and no rule: it counts every match with the FIVB rule.
+        on("GET /analyses/J/rallies") { ok(rallies(3, rally("r1", 1, 2_000, 9_000)).apply { remove("rules") }) }
+        val vm = viewModel(StoredState(matches = listOf(accepted("A"))))
+        vm.watchAnalysis("A", startIfMissing = false)
+        await("the job") { vm.analysis.value.job != null }
+        vm.loadRallies("A")
+        await("the answer") { vm.analysis.value.ralliesLoad != RalliesLoad.LOADING }
+        assertEquals(RalliesLoad.OUTDATED, vm.analysis.value.ralliesLoad)
+        assertNull(vm.analysis.value.rallies)
+    }
+
+    private fun reportWith(rules: JSONObject?): MatchReport? {
+        on("GET /matches/server-A/report") { ok(report(rules)) }
+        val vm = viewModel(StoredState(matches = listOf(accepted("A"))))
+        vm.loadReport("A")
+        await("the report") { vm.analysis.value.reportLoad != ReportLoad.LOADING }
+        assertEquals(ReportLoad.READY, vm.analysis.value.reportLoad)
+        return vm.analysis.value.report
+    }
+
+    @Test fun aReportBringsTheRuleItWasCountedWith() {
+        assertEquals(MatchRules(2, 21, 15), reportWith(rulesJson(MatchRules(2, 21, 15)))!!.rules)
+    }
+
+    @Test fun aReportOfAServerBeforeMatchRulesNamesItsRuleFromTheDecidingSet() {
+        // Server 0.5 named its fixed rule without setsToWin. The deciding set number tells it.
+        val fixed = JSONObject().put("setTarget", 25).put("decidingSetTarget", 15).put("winBy", 2).put("decidingSetNumber", 5)
+        assertEquals(MatchRules.FIVB, reportWith(fixed)!!.rules)
+    }
+
+    @Test fun aReportWithoutRulesStillLoads() {
+        assertNull(reportWith(null)!!.rules)
+        assertNull("a rule the app can not read is no rule, and the report still shows", reportWith(JSONObject().put("setTarget", "kısa"))!!.rules)
+    }
+
+    @Test fun changingTheRuleSendsTheWholeRuleAndShowsTheListCountedWithIt() {
+        // The list on screen was counted with a rule that is not the FIVB rule.
+        var rules = MatchRules(3, 21, 25)
+        var version = 3
+        val vm = withRallyList { rallies(version, rally("r1", 1, 2_000, 9_000), rules = rules) }
+        val bodies = CopyOnWriteArrayList<JSONObject>()
+        on("PUT /matches/server-A/rules") { request ->
+            bodies += JSONObject(request.body.readUtf8())
+            rules = MatchRules(2, 21, 15)
+            version = 4
+            ok(JSONObject().put("id", "server-A"))
+        }
+        var done = 0
+        vm.changeMatchRules(MatchRules(2, 21, 15)) { done++ }
+        await("the change") { done > 0 }
+        settle()
+        assertEquals("the screen closes once", 1, done)
+        // The rule touches no card, so the cards are not read again: the user waits for the list only.
+        assertEquals(listOf("PUT /matches/server-A/rules", "GET /analyses/J/rallies", "GET /videos/video-A/analyses/latest"), requests.toList())
+        assertEquals(setOf("setsToWin", "setTarget", "decidingSetTarget", "expectedRules"), bodies.single().keys().asSequence().toSet())
+        assertEquals(listOf(2, 21, 15), rulesOf(bodies.single()))
+        // The request names the rule of the list on screen, whatever rule that is.
+        assertEquals(listOf(3, 21, 25), rulesOf(bodies.single().getJSONObject("expectedRules")))
+        val shown = vm.analysis.value
+        assertEquals(MatchRules(2, 21, 15), shown.rallies!!.rules)
+        assertEquals(4, shown.rallies!!.version)
+        assertFalse(shown.correcting)
+        assertNull(shown.correctionProblem)
+    }
+
+    @Test fun aRuleChangeWhoseAnswerWasLostIsFoundOnTheList() {
+        var rules = MatchRules.FIVB
+        val vm = withRallyList { rallies(3, rally("r1", 1, 2_000, 9_000), rules = rules) }
+        on("PUT /matches/server-A/rules") { rules = MatchRules(2, 21, 15); lost() }
+        var done = false
+        vm.changeMatchRules(MatchRules(2, 21, 15)) { done = true }
+        await("the change") { done }
+        assertNull(vm.analysis.value.correctionProblem)
+        assertEquals(MatchRules(2, 21, 15), vm.analysis.value.rallies!!.rules)
+        assertEquals("the app never sends the rule a second time by itself", 1, requests.count { it == "PUT /matches/server-A/rules" })
+    }
+
+    @Test fun aRuleChangeThatNeverReachedTheServerSaysSo() {
+        val vm = withRallyList { rallies(3, rally("r1", 1, 2_000, 9_000)) }
+        on("PUT /matches/server-A/rules") { lost() }
+        vm.changeMatchRules(MatchRules(2, 21, 15)) { fail("the list still names the old rule") }
+        await("the outcome") { vm.analysis.value.correctionProblem != null }
+        assertEquals(CorrectionProblem.UNREACHABLE, vm.analysis.value.correctionProblem)
+        assertFalse(vm.analysis.value.correcting)
+    }
+
+    @Test fun aRefusedRuleChangeSaysSoAndKeepsTheList() {
+        val vm = withRallyList { rallies(3, rally("r1", 1, 2_000, 9_000)) }
+        on("PUT /matches/server-A/rules") { refuse(422, "VALIDATION_ERROR") }
+        vm.changeMatchRules(MatchRules(2, 21, 15)) { fail("the server refused") }
+        await("the refusal") { vm.analysis.value.correctionProblem != null }
+        assertEquals(CorrectionProblem.REFUSED, vm.analysis.value.correctionProblem)
+        assertEquals(MatchRules.FIVB, vm.analysis.value.rallies!!.rules)
+    }
+
+    @Test fun aRuleChangeMadeOnARuleTheMatchNoLongerHasIsStaleAndTheListShowsTheRuleOfNow() {
+        var rules = MatchRules.FIVB
+        var version = 3
+        val vm = withRallyList { rallies(version, rally("r1", 1, 2_000, 9_000), rules = rules) }
+        // A change the app gave up on reached the server after all. The list on screen still names FIVB.
+        rules = MatchRules(2, 25, 25)
+        version = 4
+        on("PUT /matches/server-A/rules") { refuse(409, "MATCH_RULES_STALE") }
+        vm.changeMatchRules(MatchRules(2, 21, 15)) { fail("the server refused the change") }
+        await("the refusal") { vm.analysis.value.correctionProblem != null }
+        assertEquals(CorrectionProblem.STALE, vm.analysis.value.correctionProblem)
+        assertEquals("the app read the list again and shows the rule the server has", MatchRules(2, 25, 25), vm.analysis.value.rallies!!.rules)
+        assertFalse(vm.analysis.value.correcting)
+        assertEquals("the app never sends the rule a second time by itself", 1, requests.count { it == "PUT /matches/server-A/rules" })
+
+        // The user saves again. The request now names the rule the app read with the list of now.
+        val bodies = CopyOnWriteArrayList<JSONObject>()
+        on("PUT /matches/server-A/rules") { request ->
+            bodies += JSONObject(request.body.readUtf8())
+            rules = MatchRules(2, 21, 15)
+            version = 5
+            ok(JSONObject().put("id", "server-A"))
+        }
+        var done = false
+        vm.changeMatchRules(MatchRules(2, 21, 15)) { done = true }
+        await("the second save") { done }
+        assertEquals(listOf(2, 25, 25), rulesOf(bodies.single().getJSONObject("expectedRules")))
+        assertEquals(MatchRules(2, 21, 15), vm.analysis.value.rallies!!.rules)
+    }
+
+    @Test fun aStaleRuleChangeWhoseListDoesNotArriveIsUnreachable() {
+        val vm = withRallyList { rallies(3, rally("r1", 1, 2_000, 9_000)) }
+        on("PUT /matches/server-A/rules") { refuse(409, "MATCH_RULES_STALE") }
+        on("GET /analyses/J/rallies") { lost() }
+        vm.changeMatchRules(MatchRules(2, 21, 15)) { fail("the server refused the change") }
+        await("the outcome") { vm.analysis.value.correctionProblem != null }
+        // Without the list of now there is no rule to choose against, so the screen asks for the connection.
+        assertEquals(CorrectionProblem.UNREACHABLE, vm.analysis.value.correctionProblem)
+    }
+
+    @Test fun anOlderServerWithoutTheRuleRouteRefusesTheChange() {
+        // Nothing is scripted for the rule route: a server before 0.6 answers 404 there.
+        val vm = withRallyList { rallies(3, rally("r1", 1, 2_000, 9_000)) }
+        vm.changeMatchRules(MatchRules(2, 21, 15)) { fail("the server has no such route") }
+        await("the refusal") { vm.analysis.value.correctionProblem != null }
+        assertEquals(CorrectionProblem.REFUSED, vm.analysis.value.correctionProblem)
+    }
+
+    @Test fun aRuleChangeIsNotSentWhileACorrectionIsOnItsWay() {
+        val release = CountDownLatch(1)
+        val vm = withRallyList { rallies(3, rally("r1", 1, 2_000, 9_000)) }
+        on("POST /rallies/r1/move") {
+            release.await(5, TimeUnit.SECONDS)
+            ok(corrected(job("J", "video-A", "NEEDS_REVIEW").put("rallyListVersion", 4), rally("r1", 1, 2_000, 10_000)))
+        }
+        vm.moveRally("r1", 2_000, 10_000) {}
+        await("the move on its way") { vm.analysis.value.correcting }
+        vm.changeMatchRules(MatchRules(2, 21, 15)) { fail("one change at a time") }
+        release.countDown()
+        await("the move") { !vm.analysis.value.correcting }
+        settle()
+        assertEquals(0, requests.count { it == "PUT /matches/server-A/rules" })
+    }
+
+    @Test fun aCorrectionIsNotSentWhileARuleChangeIsOnItsWay() {
+        val release = CountDownLatch(1)
+        var rules = MatchRules.FIVB
+        val vm = withRallyList { rallies(3, rally("r1", 1, 2_000, 9_000), rules = rules) }
+        on("PUT /matches/server-A/rules") {
+            release.await(5, TimeUnit.SECONDS)
+            rules = MatchRules(2, 21, 15)
+            ok(JSONObject())
+        }
+        vm.changeMatchRules(MatchRules(2, 21, 15)) {}
+        await("the rule on its way") { vm.analysis.value.correcting }
+        vm.moveRally("r1", 2_000, 10_000) { fail("one change at a time") }
+        release.countDown()
+        await("the rule") { !vm.analysis.value.correcting }
+        settle()
+        assertEquals(0, requests.count { it == "POST /rallies/r1/move" })
+    }
+
+    @Test fun aRuleChangeWhoseAnswerDoesNotComeGivesUpAfterItsShortWait() {
+        val vm = withRallyList { rallies(3, rally("r1", 1, 2_000, 9_000)) }
+        vm.correctionTimeoutMs = 400
+        on("PUT /matches/server-A/rules") { silent() }
+        vm.changeMatchRules(MatchRules(2, 21, 15)) { fail("the list does not show the rule") }
+        await("the outcome") { vm.analysis.value.correctionProblem != null }
+        assertFalse(vm.analysis.value.correcting)
+        assertEquals(CorrectionProblem.UNREACHABLE, vm.analysis.value.correctionProblem)
+    }
+
+    @Test fun aRuleChangeAnswerWithoutABodyCountsAsApplied() {
+        var rules = MatchRules.FIVB
+        val vm = withRallyList { rallies(3, rally("r1", 1, 2_000, 9_000), rules = rules) }
+        on("PUT /matches/server-A/rules") { rules = MatchRules(2, 21, 15); MockResponse().setResponseCode(200) }
+        var done = false
+        vm.changeMatchRules(MatchRules(2, 21, 15)) { done = true }
+        await("the change") { done }
+        assertNull(vm.analysis.value.correctionProblem)
     }
 }

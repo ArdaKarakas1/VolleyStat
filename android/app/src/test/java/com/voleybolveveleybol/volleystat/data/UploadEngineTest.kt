@@ -1,5 +1,6 @@
 package com.voleybolveveleybol.volleystat.data
 
+import com.voleybolveveleybol.volleystat.model.MatchRules
 import com.voleybolveveleybol.volleystat.model.UploadSession
 import com.voleybolveveleybol.volleystat.model.VideoCheck
 import org.junit.After
@@ -27,9 +28,9 @@ class UploadEngineTest {
 
     @After fun stop() = server.close()
 
-    private fun run(initial: UploadSession = UploadSession(), cancelled: () -> Boolean = { false }): VideoCheck =
+    private fun run(initial: UploadSession = UploadSession(), cancelled: () -> Boolean = { false }, rules: MatchRules = MatchRules.FIVB): VideoCheck =
         UploadEngine(ApiClient(server.baseUrl)).run(
-            initial, MatchInfo("A Takımı", "B Takımı"), "video.mp4", "video/mp4", bytes,
+            initial, MatchInfo("A Takımı", "B Takımı", rules = rules), "video.mp4", "video/mp4", bytes,
             onSession = { sessions += it },
             onProgress = { phase, _, _ -> if (phases.lastOrNull() != phase) phases += phase },
             cancelled = cancelled,
@@ -75,6 +76,23 @@ class UploadEngineTest {
         assertEquals(VideoCheck.READY, check.status)
         assertEquals("the repeat found the match and created no second one", 1, server.matchesCreated)
         assertEquals(saved.serverMatchId, sessions.last().serverMatchId)
+    }
+
+    @Test fun theMatchIsCreatedWithItsRule() {
+        run(rules = MatchRules(2, 21, 15))
+        // The whole rule, under the names of the contract and nothing more: the server refuses any other key.
+        val sent = server.matchBodies.single().getJSONObject("rules")
+        assertEquals(setOf("setsToWin", "setTarget", "decidingSetTarget"), sent.keys().asSequence().toSet())
+        assertEquals(listOf(2, 21, 15), listOf(sent.getInt("setsToWin"), sent.getInt("setTarget"), sent.getInt("decidingSetTarget")))
+    }
+
+    @Test fun aMatchRequestRepeatedAfterALostAnswerCarriesTheSameRule() {
+        server.loseMatchAnswers = 1
+        assertThrows(UploadException::class.java) { run(rules = MatchRules(2, 15, 15)) }
+        run(sessions.last(), rules = MatchRules(2, 15, 15))
+        assertEquals(2, server.matchBodies.size)
+        assertEquals(server.matchBodies[0].getJSONObject("rules").toString(), server.matchBodies[1].getJSONObject("rules").toString())
+        assertEquals(15, server.matchBodies[1].getJSONObject("rules").getInt("setTarget"))
     }
 
     @Test fun aMatchTheServerLostIsCreatedAgainUnderTheSameIdBeforeTheUploadOpens() {

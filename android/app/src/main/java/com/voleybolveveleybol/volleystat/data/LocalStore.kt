@@ -5,6 +5,7 @@ import com.voleybolveveleybol.volleystat.model.Draft
 import com.voleybolveveleybol.volleystat.model.LocalVideo
 import com.voleybolveveleybol.volleystat.model.MatchKind
 import com.voleybolveveleybol.volleystat.model.MatchRecord
+import com.voleybolveveleybol.volleystat.model.MatchRules
 import com.voleybolveveleybol.volleystat.model.Player
 import com.voleybolveveleybol.volleystat.model.ServerTarget
 import com.voleybolveveleybol.volleystat.model.Settings
@@ -64,6 +65,7 @@ class LocalStore(private val file: File) {
                 .putOpt("homeTeamId", homeTeamId).putOpt("awayTeamId", awayTeamId)
                 .putOpt("video", video?.let(::encodeVideo))
                 .putOpt("pendingCapturePath", pendingCapturePath)
+                .put("rules", encodeRules(rules))
         })
         .put("teams", JSONArray(state.teams.map { team ->
             JSONObject().put("id", team.id).put("name", team.name)
@@ -88,7 +90,19 @@ class LocalStore(private val file: File) {
                     JSONObject().put("jobId", it.jobId).put("state", it.state).put("mock", it.mock)
                         .put("reviewOpen", it.reviewOpen).put("reviewTotal", it.reviewTotal).putOpt("failureCode", it.failureCode)
                 })
+                .put("rules", encodeRules(match.rules))
         }))
+
+    private fun encodeRules(rules: MatchRules) = JSONObject()
+        .put("setsToWin", rules.setsToWin).put("setTarget", rules.setTarget).put("decidingSetTarget", rules.decidingSetTarget)
+
+    /**
+     * A file written before the rule existed has none, and that match was counted with the FIVB rule.
+     * A rule the server would refuse also becomes FIVB: it could never be sent, so the upload would be stuck.
+     */
+    private fun decodeRules(json: JSONObject?): MatchRules = json
+        ?.let { MatchRules(it.optInt("setsToWin", -1), it.optInt("setTarget", -1), it.optInt("decidingSetTarget", -1)) }
+        ?.takeIf { it.isOffered } ?: MatchRules.FIVB
 
     private fun encodeVideo(video: LocalVideo) = JSONObject()
         .put("location", video.location).put("source", video.source.name)
@@ -123,6 +137,7 @@ class LocalStore(private val file: File) {
                 homeTeamId = draft.string("homeTeamId"), awayTeamId = draft.string("awayTeamId"),
                 video = draft.optJSONObject("video")?.let(::decodeVideo),
                 pendingCapturePath = draft.string("pendingCapturePath"),
+                rules = decodeRules(draft.optJSONObject("rules")),
             ),
             teams = List(teams.length()) { index ->
                 val team = teams.getJSONObject(index)
@@ -161,6 +176,7 @@ class LocalStore(private val file: File) {
                             reviewOpen = it.optInt("reviewOpen", 0), reviewTotal = it.optInt("reviewTotal", 0), failureCode = it.string("failureCode"),
                         )
                     },
+                    rules = decodeRules(match.optJSONObject("rules")),
                 )
             },
         )

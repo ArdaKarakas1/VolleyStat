@@ -1,6 +1,6 @@
 # Fark analizi: gereksinimler ve mevcut kod
 
-**Tarih:** 14 Kasım 2026 · **Kod sürümü:** 0.5.0 · **Kaynaklar:** V4 devir raporu ve ekleri, UI Tasarım V1 paketi
+**Tarih:** 15 Kasım 2026 · **Kod sürümü:** 0.6.0 · **Kaynaklar:** V4 devir raporu ve ekleri, UI Tasarım V1 paketi
 
 Durum etiketleri:
 
@@ -12,7 +12,7 @@ Durum etiketleri:
 
 Depoda eğitilmiş model yok. Kimse hiçbir yapay zekâ bileşeninin doğruluğunu ölçmedi. G0–G8 kapılarının hepsi `NOT_MEASURED` durumundadır. Uygulama bugün gerçek maç istatistiğini kendiliğinden çıkarmaz: Kullanıcı her rallinin kazananını kendisi seçer ve rapor bu kararlardan oluşur.
 
-**En önemli sınır:** Kullanıcı ralli listesini sürüm 0.5.0 ile düzeltebilir: Kaçan ralliyi ekler, birleşmiş ralliyi böler, iki parçayı birleştirir ve sınırı taşır. Rapordaki her sayı yine de kullanıcı listeyi onaylayana kadar alt sınırdır. Onay kullanıcının beyanıdır ve sunucu listenin eksiksiz olduğunu doğrulayamaz. Kimse bu akışı gerçek bir maçta denemedi ve kimse bir maçı düzeltmenin kaç dakika sürdüğünü ölçmedi. Set kuralı sabittir (25 sayı, beşinci set 15 sayı, iki fark), bu yüzden sunucu takımların başka bir kuralla oynadığı maçın set sayısını yanlış hesaplar (ADR-0114).
+**En önemli sınır:** Kullanıcı ralli listesini sürüm 0.5.0 ile düzeltebilir: Kaçan ralliyi ekler, birleşmiş ralliyi böler, iki parçayı birleştirir ve sınırı taşır. Rapordaki her sayı yine de kullanıcı listeyi onaylayana kadar alt sınırdır. Onay kullanıcının beyanıdır ve sunucu listenin eksiksiz olduğunu doğrulayamaz. Kimse bu akışı gerçek bir maçta denemedi ve kimse bir maçı düzeltmenin kaç dakika sürdüğünü ölçmedi. Kullanıcı maçın kuralını seçer (ADR-0115). Sunucu süreyle biten seti tanımaz ve maçı bitirmez.
 
 ## 1. Fonksiyonel gereksinimler (FR-01 … FR-20)
 
@@ -29,7 +29,7 @@ Depoda eğitilmiş model yok. Kimse hiçbir yapay zekâ bileşeninin doğruluğu
 | FR-09 | Ralli tahmini | P0 | KISMEN + DIŞ BAĞIMLILIK | Hareket enerjisi baseline'ı var ve sentetik kliplerle testli. Gerçek maçta ölçüm izinli video ve gold etiket ister. |
 | FR-10 | Olası takım kazananı | P0 | DIŞ BAĞIMLILIK | Hiçbir analizör kazanan önermiyor. Plan `docs/AI_PLAN.md` 2.7 bölümünde. |
 | FR-11 | Doğrulama kuyruğu | P0 | KISMEN | Kartlar, sürüm denetimli karar, geri alma ve denetim kaydı TEST EDİLDİ. Ekran: klip, tek soru, tek dokunuş. Kullanıcı ralli listesini düzeltir: ekleme, taşıma, bölme ve birleştirme TEST EDİLDİ (JVM, gerçek sunucu). Kullanıcı listeyi skor denetimiyle onaylar. Testler akışı yalnız DEMO analizörle ve betikli sunucuyla denedi. Kimse düzeltmenin süresini ölçmedi. |
-| FR-12 | İki takım raporu | P0 | KISMEN | Sunucu raporu yalnız kullanıcı kararlarından hesaplar (TEST EDİLDİ). Her değer `MEASURED`, `PARTIAL` ya da `UNKNOWN` durumu taşır. Bir değer ancak kullanıcı ralli listesini onayladıktan sonra `MEASURED` olur. Set sayımı kazananı belli olmayan ilk rallide durur. Set kuralı sabittir: Sunucu üç setlik maçın 15 sayılık karar setini ve 21 sayılık seti tanımaz. |
+| FR-12 | İki takım raporu | P0 | KISMEN | Sunucu raporu yalnız kullanıcı kararlarından hesaplar (TEST EDİLDİ). Her değer `MEASURED`, `PARTIAL` ya da `UNKNOWN` durumu taşır. Bir değer ancak kullanıcı ralli listesini onayladıktan sonra `MEASURED` olur. Set sayımı kazananı belli olmayan ilk rallide durur. Sunucu seti kullanıcının seçtiği kurala göre kapatır (TEST EDİLDİ): Kural maçı kaç set alan takımın kazandığını, setin ve karar setinin kaç sayıda bittiğini söyler. Sunucu maçı bitirmez ve süreyle biten seti tanımaz. |
 | FR-13 | Ralli bazında video oynatma | P0 | KISMEN | Sunucu videoyu `Range` isteğiyle sunar (TEST EDİLDİ). Media3 oynatıcı CI emülatöründe klibi sunucudan parça parça istedi ve hata vermeden oynattı. Test görüntünün doğru kareyi gösterdiğini denetlemez. |
 | FR-14 | Oyuncu eşlemesi | P1 | KISMEN | Kullanıcı sayıyı alan oyuncuyu forma numarasıyla seçer. Otomatik eşleme DIŞ BAĞIMLILIK'tır. |
 | FR-15 | Tam aksiyon çıkarımı | P1 | DIŞ BAĞIMLILIK | Kullanıcı yalnız ralliyi bitiren aksiyonu seçebilir. |
@@ -44,17 +44,18 @@ Depoda eğitilmiş model yok. Kimse hiçbir yapay zekâ bileşeninin doğruluğu
 | # | Ekran | Durum | Açıklama |
 |---|---|---|---|
 | 01 | Açılış | TEST EDİLDİ (JVM) | Yalnız ilk açılışta görünür. |
-| 02 | Ana ekran | TEST EDİLDİ (JVM) | Yeni maç kartı, devam eden maçlar, dört liste satırı. Sayılar gerçek kayıtlardan gelir. |
-| 03 | Maç oluştur | TEST EDİLDİ (JVM) | Ad, tarih, salon ve tür isteğe bağlıdır. |
+| 02 | Ana ekran | TEST EDİLDİ (JVM) | Yeni maç kartı, devam eden maçlar, dört liste satırı. Sayılar gerçek kayıtlardan gelir. Yarım kalan kurulumun kartı FIVB dışındaki kuralı adıyla yazar. |
+| 03 | Maç oluştur | TEST EDİLDİ (JVM) | Ad, tarih, salon ve tür isteğe bağlıdır. Maç kuralı FIVB seçili gelir. |
 | 04 | Takım ve kadro | TEST EDİLDİ (JVM) | Kayıtlı takımdan seçim, yeni takım, kadro. |
-| 05 | Video kaynağı | TEST EDİLDİ (JVM) | Kamera ya da galeri. Ardından telefonun okuduğu dosya bilgileri ve hak beyanı. |
+| 05 | Video kaynağı | TEST EDİLDİ (JVM) | Kamera ya da galeri. Ardından telefonun okuduğu dosya bilgileri ve hak beyanı. Maçın kuralı FIVB kuralı değilse kural kartı hak beyanının hemen üstünde durur. |
 | 06 | Maç kaydı | TEST EDİLDİ (JVM, CI emülatörü) | Çizim ve izin akışı JVM'de, kayıt emülatörde testli. Gerçek telefonda deneme yok. |
 | 07 | Yükleme ve analiz durumu | TEST EDİLDİ (JVM, gerçek sunucu) | |
 | 08 | Belirsiz olay doğrulama | TEST EDİLDİ (JVM, gerçek sunucu, CI emülatörü) | Klip oynatma emülatörde testli. |
 | 09 | Maç raporu | TEST EDİLDİ (JVM, gerçek sunucu) | |
 | 10 | Oyuncu istatistikleri | TEST EDİLDİ (JVM, gerçek sunucu) | Savunma sütunu ölçümsüzdür ve boş kalır. |
-| 11 | Ralli listesi | TEST EDİLDİ (JVM, gerçek sunucu) | Ralliler, aralarındaki boşluklar, set başlıkları, skor denetimi ve liste onayı. UI Tasarım V1 paketinde yoktur (ADR-0114). Testler onayı ekrandan yalnız betikli sunucuyla dener, çünkü gerçek sunucu deneme analizörünün listesini onaylamaz. |
+| 11 | Ralli listesi | TEST EDİLDİ (JVM, gerçek sunucu) | Ralliler, aralarındaki boşluklar, set başlıkları, maç kuralı, skor denetimi ve liste onayı. UI Tasarım V1 paketinde yoktur (ADR-0114). Testler onayı ekrandan yalnız betikli sunucuyla dener, çünkü gerçek sunucu deneme analizörünün listesini onaylamaz. |
 | 12 | Ralli düzenleyici | TEST EDİLDİ (JVM, gerçek sunucu) | Video, konum çubuğu, adım düğmeleri ve işaretler. JVM testlerinde oynatıcının yerinde bir vekil durur. Gerçek oynatıcıyı yalnız CI emülatöründeki cihaz testi dener. |
+| 13 | Maç kuralı | TEST EDİLDİ (JVM, gerçek sunucu) | Maçı kaç set alan takımın kazandığını, setin ve karar setinin kaç sayıda bittiğini seçtirir. Yeni maçta seçim taslağa gider. Ralli listesinden açılan ekran kuralı sunucuya gönderir ve yanıt gelene kadar açık kalır. Bir test ekranı gerçek sunucuya karşı sürer: Kullanıcı kuralı listeden değiştirir. Test, ekran açıkken kuralı başka bir istekle değiştirir. Sunucu ekranın isteğini reddeder. Ekran kuralın değiştiğini söyler ve sunucunun şimdiki kuralını yazar. Öbür ekran testleri betikli sunucuyla çalışır. UI Tasarım V1 paketinde yoktur (ADR-0115). |
 | | Maçlar, Takımlar, Profil, Çekim rehberi | TEST EDİLDİ (JVM) | |
 
 V4 raporundaki şu ekranlar yok: hesap ve gizlilik onayı (S01), saha bölgesi seçimi (S07'nin dört nokta adımı), oyuncu eşleştirme (S12), paylaşım (S14).
@@ -63,7 +64,7 @@ V4 raporundaki şu ekranlar yok: hesap ve gizlilik onayı (S01), saha bölgesi s
 
 | Rota | Durum |
 |---|---|
-| `POST /matches`, `PUT /matches/{id}`, `GET /matches/{id}`, `DELETE /matches/{id}` | TEST EDİLDİ |
+| `POST /matches`, `PUT /matches/{id}`, `GET /matches/{id}`, `PUT /matches/{id}/rules`, `DELETE /matches/{id}` | TEST EDİLDİ |
 | `POST /matches/{id}/uploads`, `PUT /uploads/{id}/chunks`, `GET /uploads/{id}`, `POST /uploads/{id}/complete`, `DELETE /uploads/{id}` | TEST EDİLDİ |
 | `GET /videos/{id}`, `GET` ve `POST /videos/{id}/quality`, `DELETE /videos/{id}` | TEST EDİLDİ. Sahne ölçümleri `NOT_MEASURED`. |
 | `GET /videos/{id}/content` (`Range`) | TEST EDİLDİ |
@@ -113,11 +114,12 @@ Sayılar son yerel koşudan gelir. CI aynı testleri her PR'da çalıştırır.
 
 | Kanıt | Sonuç |
 |---|---|
-| Arka uç `pytest` | 460 test geçti (yerelde Python 3.13, CI'da Python 3.12) |
+| Arka uç `pytest` | 585 test geçti (yerelde Python 3.13). CI aynı testleri Python 3.12 ile çalıştırır. |
 | `ml` `pytest` | 239 test geçti (yerel ve CI) |
-| Android JVM testleri (`:core:test`, `:app:testDebugUnitTest`) | 196 test geçti, hiçbiri atlanmadı (yerel): `:core` 5, `:app` 191. Testler 66 ekran görüntüsü üretti. |
-| Uygulama gerçek sunucuya karşı (JVM) | 9 test geçti (yerel): `BackendE2eTest` 6, `AppFlowE2eTest` 1, `AppUploadFlowE2eTest` 1, `RallyFixE2eTest` 1. Bu dokuz test yukarıdaki 196 testin içindedir. İkisi ralli düzeltmeyi dener: biri API istemcisinden, öbürü ekranlardan. |
+| Android JVM testleri (`:core:test`, `:app:testDebugUnitTest`) | 269 test geçti, hiçbiri atlanmadı (yerel): `:core` 5, `:app` 264. Testler 89 ekran görüntüsü üretti. |
+| Uygulama gerçek sunucuya karşı (JVM) | 11 test geçti (yerel): `BackendE2eTest` 7, `AppFlowE2eTest` 1, `AppUploadFlowE2eTest` 1, `RallyFixE2eTest` 2. Bu on bir test yukarıdaki 269 testin içindedir. İkisi ralli düzeltmeyi dener: biri API istemcisinden, öbürü ekranlardan. İkisi maç kuralını dener. Biri API istemcisinden gider: Kural maçla gider, sunucu sunulan 18 kuralın hepsini kabul eder, listede yeni kuralı verir ve eski kurala dayanan geç bir isteği reddeder. Öbürü kuralı ekranlardan değiştirir. Bu iki test hiçbir set sınırına ulaşmaz. Setleri kuralla sayan rotaları sunucu testleri dener. |
 | Lint | 0 hata |
+| Mutasyon sınaması (sürüm 0.6.0) | Oturum maç kuralının sunucudaki 47 kuralını ve uygulamadaki 100 kuralını tek tek bozdu. Testler son kodda sunucudaki 47 bozmanın hepsini ve uygulamadaki 100 bozmanın 99'unu yakalar. Kalan bozma kural ekranından geri dönerken ret uyarısını temizlemeyi atlar. Ralli listesi o uyarıyı açılırken kendisi temizler, bu yüzden uyarı yalnız bir kare görünür ve hiçbir test o kareyi göremez. Testler dokuz bozmayı ilk koşusunda yakalamadı ve bu bozmalar altı test boşluğunu gösterdi. Oturum o boşlukları kapattı. Son beşini üçüncü okuma buldu: Üç bozma kural karşılaştırmasını daraltıyordu, biri onay kutusunun işaretini kural ekranından dönüşte düşürüyordu, biri tarih kartının "değiştir" yazısını dar ekranda alt satıra indirmiyordu. |
 | Mutasyon sınaması (sürüm 0.5.0) | Oturum ralli düzeltmenin uygulamadaki 161 kuralını ve sunucudaki 9 kuralını tek tek bozdu. Testler son kodda bozmaların hepsini yakalar. Beş bozma ilk koşusunda yakalanmadı ve dört test boşluğunu gösterdi. Oturum o boşlukları kapattı. |
 | Emülatörde cihaz testleri (CI, API 34) | 2 test: kamera kaydı ve baştan sona akış (yeni maç, kayıt, yükleme, dosya kontrolü, deneme analizi, sunucudan klip, ralli düzenleyicide gerçek oynatıcıyla bitiş taşıma, karar, rapor). İlk iki koşu kırmızıydı ve uygulamada gerçek bir gezinme hatasını gösterdi. Düzenleyici adımı sürüm 0.5.0 ile geldi. |
 | Gerçek telefonda deneme | **Yok.** |
@@ -136,7 +138,8 @@ Ayrı inceleyiciler üç parçayı ve yapay zekâ planını okudu. Ayrı bir do�
 | Yapay zekâ planı | 11 | 11 bulgu belgeye işlendi. |
 | Android uygulaması (sürüm 0.4.0) | 21 | Doğrulayıcı 19 bulguyu doğruladı ve 2 bulguyu reddetti. Doğrulanan 19 bulgu sürüm 0.4.1 ile düzeldi. Reddedilen bulgulardan biri metin kuralıydı ve o metinler de düzeldi. Öbürü uygulanmadı: "Oyuncusu belli olmayan sayı" alt sınır değildir, çünkü kullanıcı oyuncu seçtikçe bu sayı azalır. |
 | Maç silme, gizlilik satırları ve sayı türü tanımları (sürüm 0.4.2) | 19 | Doğrulayıcılar 11 bulguyu doğruladı, 5 bulguyu kısmen doğruladı ve 3 bulguyu reddetti. Tekrarlar ayıklanınca dokuz ayrı kusur kaldı ve dokuzu da düzeldi. Oturum her düzeltmeyi geri alıp ilgili testin kırıldığını gördü. Reddedilen 3 bulgu sözcük tercihiydi. |
-| Ralli düzeltme (sürüm 0.5.0), üç tur | 36 + 22 + 17 | Dört inceleyici 31 bulgu yazdı. Doğrulayıcılar 16 bulguyu doğruladı, 11 bulguyu kısmen doğruladı ve 4 bulguyu reddetti. Eksiklik denetçisi 5 bulgu daha ekledi. Oturum 32 bulguyu düzeltti. İkinci bir tur bu düzeltmeleri koda karşı yeniden denedi: 21 düzeltme tam, 11 düzeltme yarım çıktı ve tur 22 yeni nokta buldu. Oturum yarım kalan düzeltmeleri tamamladı ve yeni noktaları kapattı. Üçüncü tur ikinci turun düzeltmelerini okudu ve 17 nokta yazdı. Doğrulayıcılar 2 noktayı reddetti ve oturum kalan 15 noktayı kapattı. Açık kalan iki konu bu bölümün sonundadır. |
+| Ralli düzeltme (sürüm 0.5.0), üç tur | 36 + 22 + 17 | Dört inceleyici 31 bulgu yazdı. Doğrulayıcılar 16 bulguyu doğruladı, 11 bulguyu kısmen doğruladı ve 4 bulguyu reddetti. Eksiklik denetçisi 5 bulgu daha ekledi. Oturum 32 bulguyu düzeltti. İkinci bir tur bu düzeltmeleri koda karşı yeniden denedi: 21 düzeltme tam, 11 düzeltme yarım çıktı ve tur 22 yeni nokta buldu. Oturum yarım kalan düzeltmeleri tamamladı ve yeni noktaları kapattı. Üçüncü tur ikinci turun düzeltmelerini okudu ve 17 nokta yazdı. Doğrulayıcılar 2 noktayı reddetti ve oturum kalan 15 noktayı kapattı. Açık kalan iki konu bu inceleme listelerinin altındadır. |
+| Maç kuralı (sürüm 0.6.0), beş tur | 29 + 25 + 15 + 11 + 1 | Dört inceleyici 26 bulgu yazdı. Doğrulayıcılar 15 bulguyu doğruladı, 11 bulguyu kısmen doğruladı ve hiçbirini reddetmedi. Üç bulgu başka bir bulgunun tekrarıydı. Eksiklik denetçisi 3 bulgu daha ekledi. Oturum bir bulgu dışında hepsini kapattı. İkinci tur bu düzeltmeleri koda karşı yeniden denedi: Dört okuyucu 21 nokta yazdı. Doğrulayıcılar 13 noktayı doğruladı, 7 noktayı kısmen doğruladı ve 1 noktayı reddetti. Eksiklik denetçisi 4 nokta daha ekledi. Oturum bu noktaları kapattı. Biri bilinen sınır olarak kaldı. Üçüncü tur ikinci turun düzeltmelerini okudu: Üç okuyucu 23 düzeltmeyi yeniden denedi. 21 düzeltme tam, 2 düzeltme yarım çıktı. Okuyucular 12 yeni nokta yazdı. Doğrulayıcılar 8 noktayı doğruladı, 4 noktayı kısmen doğruladı ve hiçbirini reddetmedi. Eksiklik denetçisi 3 nokta daha ekledi. Oturum bu noktaları kapattı. Biri bilinen küçük sınır olarak kaldı. Dördüncü tur üçüncü turun düzeltmelerini okudu: İki okuyucu 11 nokta yazdı. Üç nokta başka bir noktanın tekrarıydı. Doğrulayıcılar kalan 8 noktanın 7'sini doğruladı ve 1'ini kısmen doğruladı. Oturum bu noktaları kapattı. Biri bilinen küçük sınır olarak kaldı. Beşinci tur dördüncü turun düzeltmelerini okudu: Bir okuyucu 1 nokta yazdı ve doğrulayıcı o noktayı kısmen doğruladı. Oturum noktayı bir testle kapattı. Açık kalan konular bu inceleme listelerinin altındadır. |
 
 Android incelemesinin bulduğu en ağır hatalar şunlardı:
 
@@ -191,13 +194,64 @@ Mutasyon sınaması bu turda üç bozmayla iki test boşluğu daha gösterdi: Hi
 - Uzun bir ret metni küçük telefonda çubuğu ve adım düğmelerini ekranın dışına itiyordu ve kullanıcı düzeltmeyi yinelerken orada kalıyordu. Ret artık kullanıcı görüntüyü hareket ettirince kalkar.
 - Belgeler deneme raporunun alt sınırdan söz etmediğini yazıyordu. Deneme raporu artı işaretlerini korur.
 
-Bu incelemeden iki konu açık kaldı. Hiçbir test gerçek oynatıcının bir hatadan sonra videoyu yeniden açtığını ve uygulama arka plana geçince durduğunu denemez. JVM testleri oynatıcıyı tutan sınıfı durumunu testin elle kurduğu bir oynatıcıyla dener ve bu iki davranış gerçek telefon denemesini bekler. Testler düzeltmenin bekleme süresini kısaltarak dener ve kimse 15 saniyenin gerçek bir ağda yeterli olduğunu ölçmedi.
+Ralli düzeltme incelemesinden iki konu açık kaldı. Hiçbir test gerçek oynatıcının bir hatadan sonra videoyu yeniden açtığını ve uygulama arka plana geçince durduğunu denemez. JVM testleri oynatıcıyı tutan sınıfı durumunu testin elle kurduğu bir oynatıcıyla dener ve bu iki davranış gerçek telefon denemesini bekler. Testler düzeltmenin bekleme süresini kısaltarak dener ve kimse 15 saniyenin gerçek bir ağda yeterli olduğunu ölçmedi.
+
+Maç kuralı incelemesinin (sürüm 0.6.0) bulduğu en ağır kusurlar şunlardı:
+
+- Kullanıcı yeni maç ekranında bir kural seçip kurulumu bıraktıysa kural taslakta kalıyordu ve ana ekran hiçbir şey göstermiyordu. Sonraki maç, standart bir maç bile, o kuralla açılıyordu.
+- Kural yoldayken gelen bir kazanan yanıtı kural ekranını bekleme ekranına çeviriyordu. Ekran kullanıcıyı tutmayı bırakıyordu ve seçimi siliyordu. Kural henüz gönderilmemişken de aynı yanıt kullanıcının seçimini sessizce siliyordu.
+- Uygulamanın beklemekten vazgeçtiği bir kural isteği sonradan sunucuya ulaşırsa kullanıcının sonraki seçimini geri alabiliyordu. Kural isteği artık telefonun sunucudan son okuduğu kuralı taşır. Maçın kuralı o kural değilse sunucu geç isteği reddeder.
+- Kural ekranı kullanıcının kaydetmediği seçimi sunucunun kuralı gibi düz cümleyle söylüyordu. Ret metni de kuralı suçluyordu, oysa sunucu uygulamanın sunduğu hiçbir kuralı reddetmez.
+- Sunucu maç isteğindeki bilinmeyen alanı sessizce düşürüyordu. Başka bir adla gelen kural FIVB kuralına dönüyordu.
+- 320 dp telefonda büyük yazıyla kural kartı "5. set 15 sayı" gibi parçaları sözcüğün ortasından bölüyordu. Tarih kartında da aynı sorun vardı.
+- Uygulama kuralın yolda olduğunu söyleyen satırı ve sunucunun reddini canlı bölge olarak işaretlemiyordu. Düzenleyicide ve ralli listesinde de aynı eksik vardı.
+- Skor denetimi, başka bir kuralın skorları her zaman bozduğunu söylüyordu. "Hayır" ipucu yanlış seçilmiş bir kazananı hiç anmıyordu. Onaylı listede kural ekranı sunucunun "yalnız setleri yeniden saydığını" yazıyordu, oysa onay da düşer.
+- Hiçbir test kural ekranını gerçek sunucuya karşı sürmüyordu, ama belge ekranı gerçek sunucuyla denenmiş gösteriyordu. Bu tur o testi ekledi.
+
+Maç kuralı incelemesinin ikinci turunun bulduğu kusurlar şunlardı:
+
+- Kural değişikliğinin geri alma testi isteği hiç göndermiyordu. İlk turun eklediği yardımcı önce maçı okuyordu ve test o okumada duruyordu. Yanıtı işlemin dışına taşıyan bir bozma bu yüzden bütün testlerden geçiyordu.
+- Sunucu kural değişikliğinde yalnız kuralları karşılaştırır. Belgeler ise geç gelen bir isteğin kullanıcının sonraki seçimini hiçbir durumda geri alamayacağını yazıyordu.
+- Sunucudaki kural ekran açıkken değiştiyse kural ekranı kullanıcıya seçimini denetlemesini söylüyordu, ama sunucunun şimdiki kuralını yazmıyordu.
+- Ana ekrandaki "Yeni Maç" kartı da yarım kalan kurulumu açıyordu. Küçük telefonda kural kartı yeni maç ekranının görünmeyen bölümünde kalıyordu ve yarım kurulumun kuralı yine sonraki maça görünmeden geçebiliyordu.
+- Küçük telefonda büyük yazıyla ralli listesi, onayın yolda olduğunu ve sunucunun reddini ekranın görünmeyen bölümünde gösteriyordu.
+- Üç test, oturum denediği düzeltmeyi geri aldığında da geçebiliyordu. Biri hangi yanıtın önce geldiğine bağlıydı, biri yalnız tek bir seçimi geri okuyordu, biri FIVB kuralını sabit bir değerden ayırt edemiyordu.
+
+İkinci tur bir soruyu ölçümle kapattı: İki ajan, ekranda yeni beliren bir canlı bölgeyi Android'in ekran okuyucuya bildirip bildirmediği konusunda ayrıştı. Oturum uygulamanın gönderdiği erişilebilirlik olaylarını bir testte ölçtü. Uygulama, satır belirince o satırdan bir değişiklik olayı gönderir. Testler artık bu olayı üç ekranda da denetler.
+
+Maç kuralı incelemesinin üçüncü turunun bulduğu kusurlar şunlardı:
+
+- Sunucunun eski kural denetimini deneyen test tek bir kural çifti kullanıyordu ve o çiftte kazanılacak set sayısı farklıydı. Karşılaştırmayı daraltan üç bozma bütün testlerden geçiyordu: Biri yalnız kazanılacak set sayısını karşılaştırıyordu, ikisi karşılaştırmadan bir alanı çıkarıyordu. Test artık sonraki değişikliği iki alanda birden ve her alanda tek tek dener.
+- Kural ekranının testi yalnız kullanıcının son dokunduğu sorunun bildirdiği kuralı denetliyordu. Öbür iki sorunun yanlış bildirdiği bir kural testten geçiyordu.
+- Hiçbir test, kullanıcı yüklemeden önceki ekrandan kural ekranına gidip döndüğünde onay kutusunun işaretli kaldığını ölçmüyordu.
+- Ralli listesinin ve düzenleyicinin uyarısı, listenin ekran açıldıktan sonra değiştiğini söylüyordu. Uygulama listenin ne zaman değiştiğini bilmez. İkinci tur aynı iddiayı kural ekranından çıkarmıştı.
+- Bu belgenin rota tablosu `PUT /matches/{id}/rules` rotasını listelemiyordu. Tasarım belgesi ve arayüz planı kural kartının yerini, eski kural uyarısını ve listedeki reddin ne zaman kalktığını ekranların gösterdiğinden farklı anlatıyordu. İki cümle ekran okuyucunun ne okuduğunu ölçülmüş gibi yazıyordu.
+- Tarih kartının dar ekran testi "değiştir" yazısını tarihle değil, tarihin üstündeki "Tarih" etiketiyle karşılaştırıyordu. Kartı hiç alt satıra indirmeyen bir bozma testten geçiyordu. Test artık tarihin kendisiyle karşılaştırır.
+- 320 dp genişlikte ve 568 dp yükseklikte telefonda 1,5 kat yazıyla "Skoru Denetle" düğmesi ilk ekranın alt kenarında durur. Onayın "gönderiyor" satırı ve sunucunun reddi düğmenin üstünde açılıyordu, düğmeyi aşağı itiyordu ve kendisi de ekranın altında kalıyordu. Liste artık, başı ekrandayken satır belirince satırı ve düğmesini ekrana getirir.
+- 320 dp genişlikte telefonda 1,5 kat yazıyla kural ekranının eski kural uyarısı ekranın çoğunu kaplıyordu. Doğrulayıcının hesabına göre uyarı üç soruya 87 ile 118 dp arasında yer bırakıyordu. Oturum uyarıyı kısalttı ve bu durumu bir ekran görüntüsüyle ve bir testle ölçtü.
+
+Üçüncü turun bir kusuru incelemenin kendisindeydi: Okuyucuların baktığı ekran görüntüleri incelenen commit'ten değil, oturumun o sırada üzerinde çalıştığı ağaçtan geliyordu. Eski kural uyarısının metni iki ağaçta farklıydı. Doğrulayıcı uyarının kapladığı yeri iki metin için de hesapladı ve oturum son metni testle ölçtü.
+
+Okuyucular bir yazım sorusu da açtı. Bu belgeler her cümlede özneyi adıyla söyler. Okuyucular, öznesi belli bir cümlenin içindeki edilgen sıfat-fiili de ("oynanan setler", "izin verilen aralık") kusur saydı. Oturum bu biçimi kusur saymadı ve yalnız aynı cümlenin üç belgede farklı yazıldığı altı yeri düzeltti. Ürün sahibi bu biçimi de istemezse tarama ekran metinlerini de kapsar.
+
+Maç kuralı incelemesinin dördüncü turunun bulduğu kusurlar şunlardı:
+
+- Üçüncü turun eklediği kaydırma, liste başının her çizilişinde çalışıyordu. Liste bir satırla açılırsa kendiliğinden kayıyordu. Kaydırmayı artık ekran yapar ve yalnız satır belirince ya da değişince yapar. Ekranın açılırken bulduğu satır listeyi kaydırmaz.
+- Üçüncü turun iki ekran görüntüsü listeyi kodun istediğinin iki katı kaymış gösteriyordu. O görüntüleri animasyonları kapatan ekran görüntüsü koşusu çekmişti. Test de kaymanın ne kadar olduğunu ölçmüyordu. Test artık düğmenin ekranın alt kenarında bittiğini ve kural kartının bütün kaldığını ölçer. İki görüntüyü de bu test çeker.
+- Ralli listesi yalnız onay gönderir, ama listedeki ret kullanıcıya "düzeltmeyi yeniden yap" diyordu. Liste artık kullanıcıya skoru yeniden denetlemesini söyler ve genel ret için "Sunucu onayını kaydetmedi" der.
+- Bu belgenin dört cümlesi koddan ya da kendi sayılarından ayrılıyordu: ekran 13 satırı eski uyarıyı anlatıyordu, bir madde testin denemediği bir durumu sayıyordu, bir cümle kimsenin ölçmediği bir ekran okuyucu davranışını yazıyordu ve inceleme satırı dört düzeltmeyi iki kez sayıyordu.
+
+Dördüncü turda üç doğrulayıcı kullanım sınırına takıldı. Onların noktaları, öbür doğrulayıcıların doğruladığı üç noktanın tekrarıydı.
+
+Beşinci tur tek nokta yazdı: Hiçbir test listenin kaymasını animasyonları kaldırılmış bir telefondaki yoldan ölçmüyordu. İki kat kayma yalnız o yolda görülmüştü. Yeni bir test aynı kaymayı animasyon ölçeği sıfırken ölçer ve liste orada da düğmenin alt kenarda bittiği yerde durur. İki kat kayma böylece yalnız ekran görüntüsü koşusunda kaldı. Kimse bu kaymayı gerçek telefonda ölçmedi.
+
+Maç kuralı incelemesinden beş konu açık kaldı. Kullanıcı onayın yanıtını beklerken ralli listesini aşağı kaydırdıysa liste yerinde kalır. Kullanıcı sunucunun reddini o durumda listenin başına dönünce görür. 320 dp genişlikte ve 568 dp yükseklikte bir telefonda "sunucudaki kural değişmiş" uyarısı 1,5 kat yazıyla 271 dp, 2 kat yazıyla 355 dp yer tutar. Üç soru o sırada kalan dar bölümde kayar ve ilk bakışta hiçbir yanıt satırı görünmez. Bir test iki yazı boyunda da Kaydet düğmesinin ekranda kaldığını ve kullanıcının bir yanıt satırına dokunabildiğini ölçer. Uygulama 0.6.0 eski bir 0.5 sunucusuyla çalışırsa sunucu seçilen kuralı yok sayar. Uygulama o sunucunun ralli listesini okuyamadığını söyler ve rapor sunucunun kullandığı kuralı yazar, ama uygulama seçilen kuralın düştüğünü ayrıca söylemez (ADR-0115). Sunucu kural değişikliğinde yalnız kuralları karşılaştırır: Telefonun beklemekten vazgeçtiği bir istek yoldayken kullanıcı kuralı iki kez daha değiştirip ilk kurala dönerse sunucu geç gelen isteği uygular (ADR-0115). Testler uygulamanın ekran okuyucuya gönderdiği olayı ölçer, ama kimse TalkBack'i gerçek telefonda dinlemedi.
 
 ## 7. Sıradaki dilimler
 
 Sıra bağımlılığa göredir. İlk dört iş gerçek video beklemez.
 
-1. **Set sonu ve düzeltme süresi:** Ralli düzeltme sürüm 0.5.0 ile geldi (ADR-0114). İki eksik kaldı. Set kuralı sabit olduğu için sunucu takımların başka bir kuralla oynadığı maçın set sayısını yanlış hesaplar. İki çözüm adayı ürün sahibinin kararını bekler (bölüm 8). Kimse düzeltmenin gerçek bir maçta kaç dakika sürdüğünü de ölçmedi. Ekip bu süreyi ilk gerçek maçta ölçer.
+1. **Düzeltme süresi:** Ralli düzeltme sürüm 0.5.0 ile, maç kuralı sürüm 0.6.0 ile geldi (ADR-0114, ADR-0115). Kimse düzeltmenin gerçek bir maçta kaç dakika sürdüğünü ölçmedi. Ekip bu süreyi ilk gerçek maçta ölçer.
 2. **Saha yarısı ve taraf değişimi:** Maç kaydı hangi takımın hangi yarıda başladığını ve takımların ne zaman yer değiştirdiğini taşımıyor. Kazanan önerisi ve oyuncu tarafı bu bilgiyi ister.
 3. **Saha bölgesi seçimi:** Kullanıcı bir karede sahanın köşelerine dokunur. Sunucu homografiyi saklar. Baseline hareketi saha içiyle sınırlar (deney B2'nin ön koşulu).
 4. **Arka plan yükleme:** WorkManager ve ön plan hizmeti. Gerçek telefonda deneme ister.
@@ -224,6 +278,7 @@ Doğrulayıcılar iki adayı reddetti. Önceki rallinin kazananından çıkarıl
 | Uygulama simgesi kararı | Suluboya logo küçük boyda zor okunur ve mor arayüzle aynı paleti paylaşmaz. |
 | Bulut ve GPU kararı | Ücretli hizmet onayı sende. O zamana kadar her şey yerelde çalışır. |
 | Depo görünürlüğü | Depo herkese açık. Kapalı olmasını istersen GitHub ayarından değiştirirsin. |
-| Set kuralı | Sunucu seti 25 sayıda, beşinci seti 15 sayıda bitirir. Sunucu üç setlik maçın 15 sayılık karar setinde takımların kazandığı set sayısını yanlış hesaplar. Sunucu 21 sayılık sette set skorlarını da yanlış hesaplar ve kullanıcı listeyi onaylayamaz. Birinci aday: Kullanıcı maçı açarken maç kuralını bir kez seçer (maçı kaç set kazanan alır, set kaç sayıda biter, karar seti kaç sayıda biter). Kullanıcı standart kuralla oynanan maçta hiçbir şeye dokunmaz. İkinci aday: Kullanıcı her setin son rallisini işaretler (maç başına üç ile beş dokunuş). Bu aday süreyle biten seti de karşılar. Öneri birinci adaydır. İki aday da yeni bir elle giriştir ve senin kararını ister (bölüm 7, 1. iş). |
+| Maçın bitişi | Sunucu maçı bitirmez. Takımlar 2-0 biten üç setlik maçta bir dostluk seti oynarsa sunucu o seti de karar seti olarak sayar ve kazanılan setlere katar (ADR-0115). Sunucu bir takım gereken seti alınca sayımı durdurabilir. Bu da o dostluk setini rapordan çıkarır. Karar senin. |
+| Kural değerleri | Kullanıcı setin ve karar setinin sayısı için yalnız 25, 21 ve 15 arasından seçer. Başka bir değer (30 sayı, sayı tavanı) gerekiyorsa sen söylersin. |
 | İzin cümlesinin hukuki onayı | Uygulama 14 Kasım kararınla şu cümleyi gösterir: "Bu videoyu yükleme hakkım var. Sahadaki oyuncular çekimi biliyor ve analiz için izin verdi." Hiçbir KVKK uzmanı bu cümleyi okumadı. Cümle kişisel veri konusudur ve son hâlini bir uzman onaylar. |
 | Geri bildirim adresi | Uygulama içinden geri bildirim için bir e-posta adresi gerekir. Adresi yalnız sen verebilirsin. |

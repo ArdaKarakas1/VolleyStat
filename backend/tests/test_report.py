@@ -4,13 +4,21 @@ The first part tests the pure function with hand-written rally records. The reco
 input, not results of any match. The second part reads the report through the route.
 """
 import copy
+import functools
+import itertools
+import random
 
 import pytest
 
+from app import report as report_module
 from app.analyzers.base import AnalyzerInfo, MODEL, RallyProposal
-from app.report import RULES, build_report
 from tests.helpers import ScriptedAnalyzer, card_of, decide, ready_video, request_job, reviewed_job, run_pending, serve
 from tests.test_api import create_match
+
+# The tests of the pure function count with the FIVB rule unless they name another one.
+build_report = functools.partial(report_module.build_report, rules=report_module.FIVB)
+MatchRules = report_module.MatchRules
+FIVB = report_module.FIVB
 
 HOME, AWAY = "HOME", "AWAY"
 OPEN = {"status": "PROPOSED", "proposed_winner": "UNKNOWN", "winner": None, "terminal_action": None, "scorer_jersey": None}
@@ -32,8 +40,8 @@ def partial(value):
     return {"value": value, "status": "PARTIAL"}
 
 
-def score(rallies):
-    return build_report(rallies)["score"]
+def score(rallies, rules=FIVB):
+    return report_module.build_report(rallies, rules=rules)["score"]
 
 
 def set_line(number, home, away, complete=True):
@@ -73,11 +81,23 @@ def test_unreviewed_rallies_give_a_draft_with_unknown_values_and_no_zero():
         ("RALLY_WINNER", 3, 0, 0, "UNKNOWN"), ("TERMINAL_ACTION", 3, 0, 0, "UNKNOWN"), ("SCORER", 3, 0, 0, "UNKNOWN")]
 
 
-def test_the_rules_in_use_are_part_of_the_report():
-    assert build_report([OPEN])["rules"] == {"setTarget": 25, "decidingSetTarget": 15, "winBy": 2, "decidingSetNumber": 5}
+def test_the_fivb_rule_is_the_default_and_its_payload_is_a_fresh_dict():
+    assert MatchRules() == FIVB
+    fivb = {"setsToWin": 3, "setTarget": 25, "decidingSetTarget": 15, "winBy": 2, "decidingSetNumber": 5}
+    assert FIVB.payload() == fivb
+    assert build_report([OPEN])["rules"] == fivb
     # A caller that edits its copy must not change the rules of the next report.
     build_report([OPEN])["rules"]["setTarget"] = 1
-    assert RULES["setTarget"] == 25
+    FIVB.payload()["decidingSetNumber"] = 9
+    assert build_report([OPEN])["rules"] == fivb
+
+
+def test_every_count_has_to_name_its_rule():
+    # A forgotten rule would count FIVB in silence, which is the very fault the rule fixes.
+    with pytest.raises(TypeError):
+        report_module.build_report([OPEN])
+    with pytest.raises(TypeError):
+        report_module.running_score([won(HOME)])
 
 
 def test_a_model_proposal_alone_scores_nothing():
@@ -228,6 +248,151 @@ def test_the_score_walk_skips_rejected_rallies_and_names_the_stop_by_its_sequenc
     # A record may carry its own sequence number; without one its position in the list counts.
     numbered = [{**rally, "sequence": 10 * position} for position, rally in enumerate([won(HOME), UNSURE, won(AWAY)], start=1)]
     assert score(numbered)["stoppedAtRally"] == 20
+
+
+# --- the match rule --------------------------------------------------------------------------
+
+BEST_OF_THREE = MatchRules(sets_to_win=2, set_target=25, deciding_set_target=15)
+TO_21 = MatchRules(sets_to_win=2, set_target=21, deciding_set_target=21)
+OFFERED = [MatchRules(sets, target, deciding) for sets, target, deciding
+           in itertools.product(report_module.SETS_TO_WIN, report_module.TARGETS, report_module.TARGETS)]
+
+
+def sets_of(*games):
+    """Rallies in match order, each game given as runs of (side, rallies that side won in a row)."""
+    rallies = []
+    for game in games:
+        for side, count in game:
+            rallies += [won(side)] * count
+    return rallies
+
+
+def test_the_offered_rules_are_best_of_three_or_five_with_three_set_lengths():
+    assert (report_module.SETS_TO_WIN, report_module.TARGETS, report_module.WIN_BY) == ((2, 3), (25, 21, 15), 2)
+    assert len(OFFERED) == 18 and FIVB in OFFERED
+
+
+def test_the_deciding_set_is_set_two_times_sets_to_win_minus_one():
+    assert MatchRules(sets_to_win=2).deciding_set_number == 3
+    assert MatchRules(sets_to_win=3).deciding_set_number == 5
+    assert BEST_OF_THREE.payload() == {"setsToWin": 2, "setTarget": 25, "decidingSetTarget": 15, "winBy": 2, "decidingSetNumber": 3}
+
+
+def test_a_set_of_a_21_point_rule_ends_at_21_with_a_two_point_lead():
+    rules = MatchRules(sets_to_win=2, set_target=21, deciding_set_target=15)
+    assert score([won(HOME)] * 20 + [won(AWAY)] * 19 + [won(HOME)], rules)["sets"] == [set_line(1, 21, 19)]
+    tied = [won(HOME)] * 20 + [won(AWAY)] * 20 + [won(HOME)]
+    assert score(tied, rules)["sets"] == [set_line(1, 21, 20, complete=False)]
+    assert score(tied + [won(HOME)], rules)["sets"] == [set_line(1, 22, 20)]
+    # 20 points close nothing, and under the FIVB rule 21 points close nothing either.
+    assert score([won(HOME)] * 20, rules)["sets"] == [set_line(1, 20, 0, complete=False)]
+    assert score([won(HOME)] * 21, FIVB)["sets"] == [set_line(1, 21, 0, complete=False)]
+
+
+def test_in_a_best_of_three_the_third_set_is_played_to_the_deciding_target():
+    rallies = sets_of(((AWAY, 20), (HOME, 25)), ((HOME, 22), (AWAY, 25)), ((AWAY, 12), (HOME, 15)))
+    assert score(rallies, BEST_OF_THREE) == {
+        "status": "MEASURED", "setsWon": {"home": 2, "away": 1}, "stoppedAtRally": None,
+        "sets": [set_line(1, 25, 20), set_line(2, 22, 25), set_line(3, 15, 12)]}
+    # The FIVB rule plays the third set to 25, so the same rallies leave it open: the fault this rule fixes.
+    assert score(rallies, FIVB) == {
+        "status": "MEASURED", "setsWon": {"home": 1, "away": 1}, "stoppedAtRally": None,
+        "sets": [set_line(1, 25, 20), set_line(2, 22, 25), set_line(3, 15, 12, complete=False)]}
+
+
+def test_with_21_point_sets_every_set_boundary_follows_the_rule():
+    rallies = sets_of(((AWAY, 15), (HOME, 21)), ((HOME, 19), (AWAY, 21)), ((AWAY, 17), (HOME, 21)))
+    assert score(rallies, TO_21) == {
+        "status": "MEASURED", "setsWon": {"home": 2, "away": 1}, "stoppedAtRally": None,
+        "sets": [set_line(1, 21, 15), set_line(2, 19, 21), set_line(3, 21, 17)]}
+    # Counted to 25, every set boundary moves and no set score is the one the teams played.
+    assert score(rallies, FIVB)["sets"] == [set_line(1, 25, 15), set_line(2, 15, 25), set_line(3, 21, 13, complete=False)]
+
+
+@pytest.mark.parametrize("rules", OFFERED, ids=lambda r: f"{r.sets_to_win}-{r.set_target}-{r.deciding_set_target}")
+def test_the_deciding_set_needs_a_two_point_lead_under_every_rule(rules):
+    deciding, target = rules.deciding_set_number, rules.deciding_set_target
+    before = []
+    for number in range(1, deciding):
+        before += [won(HOME if number % 2 else AWAY)] * rules.set_target
+    tied = before + [won(HOME)] * (target - 1) + [won(AWAY)] * (target - 1)
+    assert score(tied, rules)["sets"][-1] == set_line(deciding, target - 1, target - 1, complete=False)
+    assert score(tied + [won(HOME)], rules)["sets"][-1] == set_line(deciding, target, target - 1, complete=False)
+    decided = score(tied + [won(HOME)] * 2, rules)
+    assert decided["sets"][-1] == set_line(deciding, target + 1, target - 1)
+    assert decided["setsWon"] == {"home": rules.sets_to_win, "away": rules.sets_to_win - 1}
+
+
+@pytest.mark.parametrize("rules", [MatchRules(2, 21, 15), FIVB, MatchRules(2, 15, 21)], ids=["2-21-15", "fivb", "2-15-21"])
+def test_a_set_after_the_deciding_set_is_played_to_the_set_target_again(rules):
+    played = []
+    for number in range(1, rules.deciding_set_number):
+        played += [won(HOME if number % 2 else AWAY)] * rules.set_target
+    played += [won(HOME)] * rules.deciding_set_target
+    result = score(played, rules)
+    assert result["sets"][-1] == set_line(rules.deciding_set_number, rules.deciding_set_target, 0)
+    assert result["setsWon"] == {"home": rules.sets_to_win, "away": rules.sets_to_win - 1}
+    after = rules.deciding_set_number + 1
+    shorter = min(rules.set_target, rules.deciding_set_target)
+    if shorter < rules.set_target:
+        # The deciding target closes the deciding set only.
+        assert score(played + [won(AWAY)] * shorter, rules)["sets"][-1] == set_line(after, 0, shorter, complete=False)
+    later = score(played + [won(AWAY)] * rules.set_target, rules)
+    assert later["sets"][-1] == set_line(after, 0, rules.set_target)
+    assert later["setsWon"] == {"home": rules.sets_to_win, "away": rules.sets_to_win}
+
+
+def test_won_sets_never_end_the_match_under_any_rule():
+    # Best of three at 2-0, and the teams play on: the third set is still the deciding set.
+    rallies = sets_of(((AWAY, 20), (HOME, 25)), ((AWAY, 18), (HOME, 25)), ((HOME, 21), (AWAY, 25)))
+    assert score(rallies, BEST_OF_THREE) == {
+        "status": "MEASURED", "setsWon": {"home": 3, "away": 1}, "stoppedAtRally": None,
+        "sets": [set_line(1, 25, 20), set_line(2, 25, 18), set_line(3, 15, 0), set_line(4, 6, 25)]}
+    # With every set to 25 the same rallies give the sets the teams played.
+    assert score(rallies, MatchRules(2, 25, 25))["sets"] == [set_line(1, 25, 20), set_line(2, 25, 18), set_line(3, 21, 25)]
+
+
+def _set_ends_by_the_rule(entry, target):
+    high, low = max(entry["home"], entry["away"]), min(entry["home"], entry["away"])
+    return (high == target and low <= target - 2) or (high > target and high - low == 2)
+
+
+@pytest.mark.parametrize("rules", OFFERED, ids=lambda r: f"{r.sets_to_win}-{r.set_target}-{r.deciding_set_target}")
+def test_every_offered_rule_closes_each_set_exactly_when_the_rule_says(rules):
+    draw = random.Random(f"{rules.sets_to_win}-{rules.set_target}-{rules.deciding_set_target}")
+    rallies = [NOT_A_RALLY if draw.random() < 0.05 else won(draw.choice((HOME, AWAY))) for _ in range(400)]
+    result = score(rallies, rules)
+    sets = result["sets"]
+    assert result["status"] == "MEASURED" and len(sets) >= 3
+    for position, entry in enumerate(sets):
+        target = rules.deciding_set_target if entry["number"] == rules.deciding_set_number else rules.set_target
+        assert entry["number"] == position + 1
+        if entry["complete"]:
+            assert _set_ends_by_the_rule(entry, target), entry
+        else:
+            # Only the last set may be open, and an open set has not met the rule.
+            assert position == len(sets) - 1 and not _set_ends_by_the_rule(entry, target), entry
+    for side in ("home", "away"):
+        assert result["setsWon"][side] == sum(entry["complete"] and entry[side] > entry["away" if side == "home" else "home"]
+                                               for entry in sets)
+        assert sum(entry[side] for entry in sets) == sum(rally["winner"] == side.upper() for rally in rallies)
+
+
+def test_the_running_score_and_the_report_count_with_the_same_rule():
+    rules = MatchRules(2, 21, 15)
+    rallies = [{**rally, "sequence": position} for position, rally in
+               enumerate(sets_of(((AWAY, 19), (HOME, 21)), ((HOME, 10), (AWAY, 21)), ((HOME, 9),)), start=1)]
+    sets, after = report_module.running_score(rallies, rules=rules)
+    assert sets == report_module.build_report(rallies, rules=rules, rallies_may_be_missing=True)["score"]["sets"]
+    assert sets == [set_line(1, 21, 19), set_line(2, 10, 21), set_line(3, 9, 0, complete=False)]
+    assert after[40] == {"set": 1, "home": 21, "away": 19} and after[41] == {"set": 2, "home": 1, "away": 0}
+    assert after[len(rallies)] == {"set": 3, "home": 9, "away": 0}
+
+
+def test_a_rule_touches_only_the_set_score_and_the_rules():
+    rallies = sets_of(((AWAY, 15), (HOME, 21)), ((HOME, 19), (AWAY, 21))) + [won(HOME, "ACE", 7), UNSURE, NOT_A_RALLY]
+    fivb, other = (report_module.build_report(rallies, rules=rules) for rules in (FIVB, TO_21))
+    assert {key for key in fivb if fivb[key] != other[key]} == {"rules", "score"}
 
 
 # --- rejected rallies ------------------------------------------------------------------------

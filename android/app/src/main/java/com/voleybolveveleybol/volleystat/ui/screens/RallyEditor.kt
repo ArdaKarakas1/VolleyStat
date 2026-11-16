@@ -209,8 +209,7 @@ fun RallyEditorScreen(
         actions = {
             // What became of a tap stands next to the button that was tapped. Further up it would lie below the
             // edge of a small screen, and a refused correction would look like a tap that did nothing.
-            CorrectionProgress(analysis, R.string.correction_sending)
-            CorrectionProblemNotice(analysis)
+            CorrectionStatus(analysis, R.string.correction_sending)
             if (rally != null) {
                 // The end comes first: the winner is judged on what the clip shows at the end of a rally.
                 PrimaryButton(

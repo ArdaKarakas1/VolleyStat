@@ -26,6 +26,7 @@ import com.voleybolveveleybol.volleystat.model.RallyList
 import com.voleybolveveleybol.volleystat.model.ReviewCard
 import com.voleybolveveleybol.volleystat.model.ReviewDeck
 import com.voleybolveveleybol.volleystat.model.MatchRecord
+import com.voleybolveveleybol.volleystat.model.MatchRules
 import com.voleybolveveleybol.volleystat.model.Player
 import com.voleybolveveleybol.volleystat.model.ServerTarget
 import com.voleybolveveleybol.volleystat.model.Settings
@@ -281,6 +282,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             playedOn = draft.playedOn.ifBlank { LocalDate.now().toString() },
             venue = draft.venue.trim().ifBlank { null },
             kind = draft.kind, homeTeamId = draft.homeTeamId, awayTeamId = draft.awayTeamId,
+            rules = draft.rules,
         )
         change { it.copy(matches = listOf(match) + it.matches, draft = Draft()) }
         resumeUpload(match.localId)
@@ -301,7 +303,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     if (format == null) throw UploadException(UploadFailure.SOURCE_UNREADABLE)
                     val check = UploadEngine(api()).run(
                         initial = match.session,
-                        match = MatchInfo(match.homeTeam, match.awayTeam, match.name, match.playedOn, match.venue, match.kind.name),
+                        match = MatchInfo(match.homeTeam, match.awayTeam, match.name, match.playedOn, match.venue, match.kind.name, match.rules),
                         fileName = "video.${format.extension}", mimeType = format.mimeType,
                         bytes = VideoBytes(total) { inspector.open(match.video) },
                         onSession = { session -> change { state -> state.copy(matches = state.matches.map { m -> if (m.localId == matchId) m.copy(session = session) else m }) } },
@@ -667,6 +669,23 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             Correction(emptyList(), emptyList(), api.confirmRallyList(jobId, version))
         }
 
+    /**
+     * Sets the rule the server counts the sets of the open match with. The server recounts the
+     * list and moves it on, so a confirmation given under the old rule lapses. Answers and
+     * corrections stay, so the cards are not read again. A lost answer is found on the list: the
+     * list names the rule it was counted with.
+     */
+    fun changeMatchRules(rules: MatchRules, onDone: () -> Unit) {
+        val matchId = _analysis.value.matchId ?: return
+        val serverMatchId = _state.value.matches.firstOrNull { it.localId == matchId }?.session?.serverMatchId ?: return
+        // The request names the rule of the list the app last read: the one the list on screen was counted with.
+        val seen = _analysis.value.rallies?.rules ?: return
+        correct(onDone, found = { list -> emptyList<String>().takeIf { list.rules == rules } }, readsCards = false) { api, _, _ ->
+            api.putMatchRules(serverMatchId, rules, seen)
+            Correction(emptyList(), emptyList(), job = null)
+        }
+    }
+
     fun clearCorrectionProblem() = _analysis.update { it.copy(correctionProblem = null, overlapsRally = null) }
 
     /**
@@ -680,7 +699,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
      * that is the answer to a second attempt whose first attempt got through unseen, and telling
      * the user to redo the correction would apply it to another rally.
      */
-    private fun correct(onDone: () -> Unit, found: (RallyList) -> List<String>?, send: (ApiClient, String, Int) -> Correction) {
+    private fun correct(
+        onDone: () -> Unit,
+        found: (RallyList) -> List<String>?,
+        readsCards: Boolean = true,
+        send: (ApiClient, String, Int) -> Correction,
+    ) {
         val ui = _analysis.value
         val matchId = ui.matchId ?: return
         val jobId = ui.job?.id ?: return
@@ -700,15 +724,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val reloaded = withContext(Dispatchers.IO) { runCatching { api().rallies(jobId, wait) }.getOrNull() }
             val error = sent.exceptionOrNull()
             val refusal = (error as? ApiException)?.code
-            val onList = if (sent.isFailure && (refusal == null || refusal == "RALLY_LIST_STALE")) reloaded?.let(found) else null
+            // The list, or the rule it was counted with, moved on since the screen read it.
+            val stale = refusal == "RALLY_LIST_STALE" || refusal == "MATCH_RULES_STALE"
+            val onList = if (sent.isFailure && (refusal == null || stale)) reloaded?.let(found) else null
             val applied = sent.isSuccess || onList != null
             val problem = when {
                 applied -> null
                 refusal == null -> CorrectionProblem.UNREACHABLE
                 // The list moved on and the list of now did not arrive: there is nothing to redo the correction on.
-                refusal == "RALLY_LIST_STALE" && reloaded == null -> CorrectionProblem.UNREACHABLE
+                stale && reloaded == null -> CorrectionProblem.UNREACHABLE
+                stale -> CorrectionProblem.STALE
                 else -> when (refusal) {
-                    "RALLY_LIST_STALE" -> CorrectionProblem.STALE
                     "RALLY_OVERLAP" -> CorrectionProblem.OVERLAP
                     "INVALID_INTERVAL", "SPLIT_POINT_OUTSIDE" -> CorrectionProblem.OUTSIDE
                     "LIST_NOT_READY" -> CorrectionProblem.NOT_READY
@@ -719,7 +745,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val blocker = (error as? ApiException)?.takeIf { problem == CorrectionProblem.OVERLAP }?.details?.optString("rallyId")
             val affected = sent.getOrNull()?.affected?.map { it.id } ?: onList.orEmpty()
             val job = sent.getOrNull()?.job
-            val deck = if (applied) withContext(Dispatchers.IO) { runCatching { api().reviewCards(jobId, if (ui.detail) "ALL" else "SCORE", wait) }.getOrNull() } else null
+            val deck = if (applied && readsCards) withContext(Dispatchers.IO) { runCatching { api().reviewCards(jobId, if (ui.detail) "ALL" else "SCORE", wait) }.getOrNull() } else null
             var shown = false
             _analysis.update { current ->
                 if (current.matchId != matchId || current.job?.id != jobId) return@update current

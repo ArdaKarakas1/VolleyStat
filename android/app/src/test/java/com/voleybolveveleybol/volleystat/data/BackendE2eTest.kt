@@ -2,6 +2,7 @@ package com.voleybolveveleybol.volleystat.data
 
 import com.voleybolveveleybol.volleystat.model.AnalysisJob
 import com.voleybolveveleybol.volleystat.model.AnalysisSummary
+import com.voleybolveveleybol.volleystat.model.MatchRules
 import com.voleybolveveleybol.volleystat.model.Rally
 import com.voleybolveveleybol.volleystat.model.ReviewCard
 import com.voleybolveveleybol.volleystat.model.StatValue
@@ -37,12 +38,17 @@ class BackendE2eTest {
     private val url = System.getenv("VOLLEYSTAT_E2E_URL")
     private val clip = System.getenv("VOLLEYSTAT_E2E_VIDEO")?.let(::File)
 
-    private fun upload(file: File, session: UploadSession = UploadSession(), stopAfterChunks: Int = Int.MAX_VALUE): Pair<UploadSession, VideoCheck?> {
+    private fun upload(
+        file: File,
+        session: UploadSession = UploadSession(),
+        stopAfterChunks: Int = Int.MAX_VALUE,
+        rules: MatchRules = MatchRules.FIVB,
+    ): Pair<UploadSession, VideoCheck?> {
         var saved = session
         var chunks = 0
         val check = try {
             UploadEngine(ApiClient(url!!)).run(
-                session, MatchInfo("E2E A Takımı", "E2E B Takımı", name = "E2E", playedOn = "2026-11-12", kind = "TRAINING"), "e2e.mp4", "video/mp4",
+                session, MatchInfo("E2E A Takımı", "E2E B Takımı", name = "E2E", playedOn = "2026-11-12", kind = "TRAINING", rules = rules), "e2e.mp4", "video/mp4",
                 VideoBytes(file.length()) { file.inputStream() },
                 onSession = { if (it.sentBytes > saved.sentBytes) chunks++; saved = it },
                 onProgress = { _, _, _ -> },
@@ -210,8 +216,8 @@ class BackendE2eTest {
             val made = added.affected.single()
             assertFalse(made.fromAnalyzer)
             assertEquals(listOf(pause.windowStartMs + 100, pause.windowStartMs + 900), listOf(made.startMs, made.endMs))
-            assertEquals(job.reviewOpen + 1, added.job.reviewOpen)
-            assertEquals(first.version + 1, added.job.rallyListVersion)
+            assertEquals(job.reviewOpen + 1, added.job!!.reviewOpen)
+            assertEquals(first.version + 1, added.job!!.rallyListVersion)
             var list = api.rallies(job.id)
             assertEquals(first.rallies.size + 1, list.rallies.size)
             assertEquals("the list stays in match order", list.rallies.map { it.startMs }.sorted(), list.rallies.map { it.startMs })
@@ -236,12 +242,12 @@ class BackendE2eTest {
             assertEquals(first.rallies.size + 2, api.rallies(job.id).rallies.size)
 
             // Joining the two parts again removes the earlier one.
-            val joined = api.mergeWithPrevious(whole.id, cut.job.rallyListVersion)
+            val joined = api.mergeWithPrevious(whole.id, cut.job!!.rallyListVersion)
             assertEquals(listOf(cut.affected.first().id), joined.removed)
             assertEquals(whole.startMs to whole.endMs, joined.affected.single().let { it.startMs to it.endMs })
 
             // Every rally gets a winner. The invented intervals of a demo job still can not be confirmed.
-            var done = joined.job
+            var done = joined.job!!
             api.reviewCards(job.id, "SCORE").cards.forEach { card -> done = api.decide(card.id, ReviewCard.HOME, card.version, "e2e-fix-${card.id}") }
             assertEquals(AnalysisSummary.COMPLETE, done.state)
             list = api.rallies(job.id)
@@ -258,6 +264,51 @@ class BackendE2eTest {
             assertEquals(listOf(first.rallies.size + 1, first.rallies.size), listOf(report.ralliesTotal, report.ralliesProposed))
             assertEquals(listOf(first.rallies.size + 1, first.rallies.size), api.latestAnalysis(check.videoId)!!.let { listOf(it.rallies, it.proposed) })
             assertEquals(StatValue(list.rallies.size, StatValue.PARTIAL), report.home.points)
+        } finally {
+            api.deleteMatch(matchId)
+        }
+    }
+
+    /**
+     * The demo job of the CI clip has five rallies, and no set reaches even 15 points, so this test
+     * sees the rule named and the list moved on, not sets counted with it. The server tests count them.
+     */
+    @Test fun theMatchRuleTravelsWithTheMatchAndTheRealServerNamesEveryChange() {
+        assumeTrue(url != null && clip != null && clip.isFile)
+        val api = ApiClient(url!!)
+        val chosen = MatchRules(2, 21, 15)
+        val (session, check) = upload(clip!!, rules = chosen)
+        val matchId = session.serverMatchId!!
+        try {
+            val job = demoJob(api, check!!.videoId)
+            // The rule went with the request that created the match, and the list and the report name it.
+            assertEquals(chosen, api.rallies(job.id).rules)
+            assertEquals(chosen, api.report(matchId)!!.rules)
+
+            val before = api.rallies(job.id).version
+            api.putMatchRules(matchId, MatchRules.FIVB, seen = chosen)
+            val after = api.rallies(job.id)
+            assertEquals(MatchRules.FIVB, after.rules)
+            assertEquals("a new rule moves the list on", before + 1, after.version)
+            assertEquals(MatchRules.FIVB, api.report(matchId)!!.rules)
+            // The same rule again changes nothing, so a repeat after a lost answer is harmless,
+            // even though the repeat names the rule the phone read before the first attempt.
+            api.putMatchRules(matchId, MatchRules.FIVB, seen = chosen)
+            assertEquals(after.version, api.rallies(job.id).version)
+
+            // Every rule the app offers is one the server accepts, and the list names it back.
+            var seen = MatchRules.FIVB
+            for (sets in MatchRules.SETS_TO_WIN) for (target in MatchRules.TARGETS) for (deciding in MatchRules.TARGETS) {
+                val rules = MatchRules(sets, target, deciding)
+                api.putMatchRules(matchId, rules, seen)
+                assertEquals(rules, api.rallies(job.id).rules)
+                seen = rules
+            }
+            // A request that names a rule the match no longer has came before a later change and must not undo it.
+            refused("MATCH_RULES_STALE") { api.putMatchRules(matchId, MatchRules.FIVB, seen = chosen) }
+            assertEquals(seen, api.rallies(job.id).rules)
+            refused("VALIDATION_ERROR") { api.putMatchRules(matchId, MatchRules(4, 25, 15), seen) }
+            refused("MATCH_NOT_FOUND") { api.putMatchRules("no-such-match", MatchRules.FIVB, MatchRules.FIVB) }
         } finally {
             api.deleteMatch(matchId)
         }

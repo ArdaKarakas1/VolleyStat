@@ -5,15 +5,23 @@ import androidx.activity.OnBackPressedDispatcher
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasScrollToNodeAction
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.StateRestorationTester
@@ -24,8 +32,11 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.voleybolveveleybol.volleystat.AnalysisUi
@@ -38,6 +49,7 @@ import com.voleybolveveleybol.volleystat.model.AnalysisSummary
 import com.voleybolveveleybol.volleystat.model.EditTarget
 import com.voleybolveveleybol.volleystat.model.LocalVideo
 import com.voleybolveveleybol.volleystat.model.MatchRecord
+import com.voleybolveveleybol.volleystat.model.MatchRules
 import com.voleybolveveleybol.volleystat.model.Rally
 import com.voleybolveveleybol.volleystat.model.RallyList
 import com.voleybolveveleybol.volleystat.model.SetPoint
@@ -73,6 +85,8 @@ class RallyScreensTest {
     private val context get() = ApplicationProvider.getApplicationContext<Context>()
     private fun text(id: Int, vararg arguments: Any) = context.getString(id, *arguments)
     private fun shown(text: String) = compose.onAllNodesWithText(text, substring = true).fetchSemanticsNodes().isNotEmpty()
+    /** A line a screen reader says when it appears. */
+    private val announced = SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite)
     private fun show(content: @Composable () -> Unit) = compose.setContent { VolleyStatTheme(dark = false) { content() } }
 
     private val video = LocalVideo("/data/kayit.mp4", VideoSource.CAMERA, "kayit.mp4", 1_000, "video/mp4", 60_000, 1920, 1080, null)
@@ -113,6 +127,7 @@ class RallyScreensTest {
         val reviews = mutableListOf<String>()
         var confirms = 0
         var retries = 0
+        var ruleChanges = 0
     }
 
     private fun list(analysis: AnalysisUi): ListTaps {
@@ -121,13 +136,14 @@ class RallyScreensTest {
             RalliesScreen(
                 match, analysis, onOpenRally = { taps.rallies += it.id }, onOpenGap = { taps.gaps += it }, onConfirm = { taps.confirms++ },
                 onOpenReview = { taps.reviews += it.id }, onRetry = { taps.retries++ }, onBack = {},
+                onChangeRules = { taps.ruleChanges++ },
             )
         }
         return taps
     }
 
     /** The hint as the screen shows it: with the labels of the button and of the answer it sends the user to. */
-    private val hint get() = text(R.string.rallies_no_hint, text(R.string.action_choose_winner), text(R.string.review_not_a_rally))
+    private val hint get() = text(R.string.rallies_no_hint, text(R.string.rule_card_change), text(R.string.action_choose_winner), text(R.string.review_not_a_rally))
 
     /** The list builds only the rows on screen, so a row further down has to be scrolled to before it exists. */
     private fun reach(text: String) = compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasText(text, substring = true))
@@ -175,7 +191,8 @@ class RallyScreensTest {
         compose.onNodeWithText(check).performClick()
         compose.onNodeWithText(text(R.string.score_check_set, 1, 25, 21)).assertIsDisplayed()
         compose.onNodeWithText(text(R.string.score_check_set_open, 2, 3, 1)).assertIsDisplayed()
-        compose.onNodeWithText(text(R.string.score_check_rule)).assertIsDisplayed()
+        // The decided list was counted with the FIVB rule, and the question names it.
+        compose.onNodeWithText(text(R.string.score_check_rule, text(R.string.rule_counting, 25, 5, 15))).assertIsDisplayed()
         // A dialog is its own window, so the screenshot run can not reach it; this run keeps its picture.
         compose.onNode(isDialog()).captureRoboImage("build/outputs/roborazzi/11_ralli_listesi_skor_denetimi.png")
         compose.onNodeWithText(text(R.string.score_check_unknown)).performClick()
@@ -268,13 +285,160 @@ class RallyScreensTest {
 
     @Test fun aRefusedConfirmationNamesItsCauseOnTheList() {
         list(state(decided, problem = CorrectionProblem.STALE))
+        // A screen reader says the refusal when it appears.
+        compose.onNodeWithText(text(R.string.rallies_confirm_stale)).assertIsDisplayed().assert(announced)
+    }
+
+    @Test fun theListWordsARefusalAsAConfirmationAndNotAsACorrection() {
+        // The list sends one thing, the confirmation. A line that says "redo the correction" would send the user
+        // back to a split or a merge the server has already applied.
+        var problem by mutableStateOf(CorrectionProblem.STALE)
+        show { RalliesScreen(match, state(decided, problem = problem), onOpenRally = {}, onOpenGap = {}, onConfirm = {}, onOpenReview = {}, onRetry = {}, onBack = {}) }
+        compose.onNodeWithText(text(R.string.rallies_confirm_stale)).assertIsDisplayed()
+        assertFalse(shown(text(R.string.correction_stale)))
+
+        problem = CorrectionProblem.REFUSED
+        compose.waitForIdle()
+        compose.onNodeWithText(text(R.string.rallies_confirm_refused)).assertIsDisplayed()
+        assertFalse(shown(text(R.string.correction_refused)))
+    }
+
+    @Test fun theEditorWordsAStaleListAndARefusalAsACorrection() {
+        var problem by mutableStateOf(CorrectionProblem.STALE)
+        show { RallyEditorScreen(rallyTarget(four, "r2")!!, state(four, problem = problem), FakeControl(20_000).video, { _, _ -> }, {}, {}, { _, _ -> }, onBack = {}) }
         compose.onNodeWithText(text(R.string.correction_stale)).assertIsDisplayed()
+        assertFalse(shown(text(R.string.rallies_confirm_stale)))
+
+        problem = CorrectionProblem.REFUSED
+        compose.waitForIdle()
+        compose.onNodeWithText(text(R.string.correction_refused)).assertIsDisplayed()
+        assertFalse(shown(text(R.string.rallies_confirm_refused)))
+    }
+
+    @Test fun theListSaysWhatBecameOfTheConfirmationNextToItsButtonAndReportsItToAScreenReader() {
+        val announcements = Announcements(compose)
+        var correcting by mutableStateOf(false)
+        var problem by mutableStateOf<CorrectionProblem?>(null)
+        leavesBy { RalliesScreen(match, state(decided, correcting = correcting, problem = problem), onOpenRally = {}, onOpenGap = {}, onConfirm = {}, onOpenReview = {}, onRetry = {}, onBack = {}) }
+        announcements.reset()
+        correcting = true
+        assertEquals(listOf(text(R.string.rallies_confirm_sending)), announcements.heard())
+        // The line stands between the rule card and the button the user tapped, not at the top of the list:
+        // on a small screen with large text that button stands at the bottom edge of the first screen.
+        val line = compose.onNodeWithText(text(R.string.rallies_confirm_sending)).getUnclippedBoundsInRoot()
+        assertTrue(line.top >= compose.onNode(ruleCard).getUnclippedBoundsInRoot().bottom)
+        assertTrue(line.bottom <= compose.onNodeWithText(text(R.string.action_check_score)).getUnclippedBoundsInRoot().top)
+
+        announcements.reset()
+        correcting = false
+        problem = CorrectionProblem.STALE
+        assertEquals(listOf(text(R.string.rallies_confirm_stale)), announcements.heard())
+        val refusal = compose.onNodeWithText(text(R.string.rallies_confirm_stale)).getUnclippedBoundsInRoot()
+        assertTrue(refusal.top >= compose.onNode(ruleCard).getUnclippedBoundsInRoot().bottom)
+        assertTrue(refusal.bottom <= compose.onNodeWithText(text(R.string.action_check_score)).getUnclippedBoundsInRoot().top)
+    }
+
+    /**
+     * The list on a 320x568 dp phone at 1.5x text, with a rule whose name is long. The bottom edge of the
+     * first screen cuts the "Skoru Denetle" button there.
+     */
+    private fun smallList(analysis: () -> AnalysisUi) = show {
+        CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, 1.5f)) {
+            RalliesScreen(match, analysis(), onOpenRally = {}, onOpenGap = {}, onConfirm = {}, onOpenReview = {}, onRetry = {}, onBack = {})
+        }
+    }
+    private val custom get() = decided.copy(rules = MatchRules(2, 21, 15))
+    private fun place(label: String) = compose.onNodeWithText(label).getUnclippedBoundsInRoot()
+    private val listTop get() = compose.onNode(hasScrollToNodeAction()).getUnclippedBoundsInRoot().top
+    private val firstLine get() = text(R.string.rallies_count_rejected, 3, 1)
+
+    @Config(sdk = [35], qualifiers = "w320dp-h568dp-xhdpi")
+    @Test fun onASmallPhoneWithLargeTextTheListBringsWhatBecameOfTheConfirmationOntoTheScreen() {
+        // A line that opens above the button pushes the button down, and most of itself with it.
+        var correcting by mutableStateOf(false)
+        var problem by mutableStateOf<CorrectionProblem?>(null)
+        smallList { state(custom, correcting = correcting, problem = problem) }
+        val screen = compose.onRoot().getUnclippedBoundsInRoot()
+        val button = text(R.string.action_check_score)
+        assertTrue("the test starts where the bottom edge cuts the button", place(button).bottom > screen.bottom)
+
+        // The list moves as far as the line and its button need and no further.
+        fun settled(line: String) {
+            assertTrue("the whole line is on the screen", place(line).top >= listTop)
+            assertEquals("the button ends at the bottom edge", screen.bottom.value, place(button).bottom.value, 1f)
+            assertTrue("the rule card above the line stays whole", compose.onNode(ruleCard).getUnclippedBoundsInRoot().top >= listTop)
+        }
+        correcting = true
+        compose.waitForIdle()
+        settled(text(R.string.rallies_confirm_sending))
+        // The screenshot run draws a screen once, so it can not show a list that moved. This run keeps the pictures.
+        compose.onRoot().captureRoboImage("build/outputs/roborazzi/kucuk_buyuk_yazi_11_ralli_listesi_gonderiliyor.png")
+
+        correcting = false
+        problem = CorrectionProblem.STALE
+        compose.waitForIdle()
+        settled(text(R.string.rallies_confirm_stale))
+        compose.onRoot().captureRoboImage("build/outputs/roborazzi/kucuk_buyuk_yazi_11_ralli_listesi_ret.png")
+    }
+
+    @Config(sdk = [35], qualifiers = "w320dp-h568dp-xhdpi")
+    @Test fun aListThatOpensWithALineStaysAtItsTopAndALineThatGoesMovesNothing() {
+        // The editor can leave a refusal behind for the frame in which the list opens. Nothing happened on
+        // this screen, so the list shows its top, as it does on every other opening.
+        var problem by mutableStateOf<CorrectionProblem?>(CorrectionProblem.STALE)
+        smallList { state(custom, problem = problem) }
+        val screen = compose.onRoot().getUnclippedBoundsInRoot()
+        val start = place(firstLine).top
+        assertTrue("the list shows its top", start >= listTop)
+        assertTrue("the refusal lies under the bottom edge", place(text(R.string.rallies_confirm_stale)).bottom > screen.bottom)
+
+        problem = null
+        compose.waitForIdle()
+        assertEquals("the list has not moved", start.value, place(firstLine).top.value, 0.5f)
+        assertTrue("the bottom edge still cuts the button", place(text(R.string.action_check_score)).bottom > screen.bottom)
+    }
+
+    @Config(sdk = [35], qualifiers = "w320dp-h568dp-xhdpi")
+    @Test fun aUserWhoScrolledAwayIsLeftAloneAndFindsTheRefusalAtTheTopOfTheList() {
+        var correcting by mutableStateOf(false)
+        var problem by mutableStateOf<CorrectionProblem?>(null)
+        smallList { state(custom, correcting = correcting, problem = problem) }
+        correcting = true
+        compose.waitForIdle()
+        // While the answer is on its way the user scrolls down to the last rally, and the head leaves the list.
+        val lastRow = "00:48 · 8 sn"
+        reach(lastRow)
+        assertFalse("the head is not built any more", shown(firstLine))
+        val row = place(lastRow).top
+
+        correcting = false
+        problem = CorrectionProblem.STALE
+        compose.waitForIdle()
+        assertEquals("the list stays where the user put it", row.value, place(lastRow).top.value, 0.5f)
+
+        // Back at the top the refusal waits above its button.
+        reach(firstLine)
+        compose.waitForIdle()
+        compose.onNodeWithText(text(R.string.rallies_confirm_stale)).assertExists()
+    }
+
+    @Test fun theEditorReportsACorrectionOnItsWayAndItsRefusalToAScreenReader() {
+        val announcements = Announcements(compose)
+        var shown by mutableStateOf(state(four))
+        leavesBy { RallyEditorScreen(rallyTarget(four, "r2")!!, shown, FakeControl(20_000).video, { _, _ -> }, {}, {}, { _, _ -> }, onBack = {}) }
+        announcements.reset()
+        shown = state(four, correcting = true)
+        assertEquals(listOf(text(R.string.correction_sending)), announcements.heard())
+
+        announcements.reset()
+        shown = state(four, problem = CorrectionProblem.OUTSIDE)
+        assertEquals(listOf(text(R.string.correction_outside)), announcements.heard())
     }
 
     @Test fun theListStaysOpenUntilTheAnswerOfTheConfirmationIsThere() {
         var correcting by mutableStateOf(true)
         val leaves = leavesBy { RalliesScreen(match, state(decided, correcting = correcting), onOpenRally = {}, onOpenGap = {}, onConfirm = {}, onOpenReview = {}, onRetry = {}, onBack = {}) }
-        compose.onNodeWithText(text(R.string.rallies_confirm_sending)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.rallies_confirm_sending)).assertIsDisplayed().assert(announced)
         compose.onNodeWithContentDescription(text(R.string.action_back)).assertIsNotEnabled()
         pressBack()
         assertEquals("a refusal of the confirmation would be shown to nobody", 0, leaves())
@@ -637,7 +801,7 @@ class RallyScreensTest {
         val leaves = leavesBy { RallyEditorScreen(rallyTarget(four, "r2")!!, state(four, correcting = true), control.video, { _, _ -> }, {}, {}, { _, _ -> }, onBack = {}) }
         // The user sees that something is on its way, and can not walk away from how it ends: a refusal
         // would otherwise be shown to nobody.
-        compose.onNodeWithText(text(R.string.correction_sending)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.correction_sending)).assertIsDisplayed().assert(announced)
         compose.onNodeWithContentDescription(text(R.string.action_back)).assertIsNotEnabled()
         pressBack()
         assertEquals(0, leaves())
@@ -764,5 +928,55 @@ class RallyScreensTest {
         compose.onNodeWithText(text(R.string.rallies_load_failed)).assertIsDisplayed()
         compose.onNodeWithText(text(R.string.action_retry)).performClick()
         assertEquals(1, retries)
+    }
+
+    // ----- the match rule on the list (ADR-0115) -----
+
+    private val toTwentyOne = MatchRules(2, 21, 15)
+    /** The card merges the texts inside it into itself, so the card is the clickable node that carries its button label. */
+    private val ruleCard get() = hasClickAction() and hasText(text(R.string.rule_card_change), substring = true)
+
+    @Test fun theListNamesTheRuleTheServerCountedWith() {
+        // The match was created with the FIVB rule. The list says the server counts it with another one now, and the list wins.
+        val taps = list(state(decided.copy(rules = toTwentyOne)))
+        reach(text(R.string.rule_card_label))
+        compose.onNodeWithText(text(R.string.rule_name_custom)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.rule_detail, 2, 21, 3, 15)).assertIsDisplayed()
+        assertFalse(shown(text(R.string.rule_name_fivb)))
+        compose.onNode(ruleCard).performClick()
+        assertEquals(1, taps.ruleChanges)
+    }
+
+    @Test fun theRuleCanNotBeChangedWhileSomethingIsOnItsWay() {
+        val taps = list(state(decided, correcting = true))
+        reach(text(R.string.rule_card_label))
+        compose.onNode(ruleCard).assertIsNotEnabled().performClick()
+        assertEquals(0, taps.ruleChanges)
+    }
+
+    @Test fun theScoreCheckNamesTheRuleOfTheListItShows() {
+        val counted = decided.copy(rules = toTwentyOne, sets = listOf(SetScore(1, 21, 18, true), SetScore(2, 3, 1, false)))
+        list(state(counted))
+        compose.onNodeWithText(text(R.string.action_check_score)).performScrollTo().performClick()
+        compose.onNodeWithText(text(R.string.score_check_rule, text(R.string.rule_counting, 21, 3, 15))).assertIsDisplayed()
+        assertFalse("the question never names a rule the list was not counted with", shown(text(R.string.rule_counting, 25, 5, 15)))
+        compose.onNode(isDialog()).captureRoboImage("build/outputs/roborazzi/11_ralli_listesi_skor_denetimi_kural.png")
+    }
+
+    @Test fun afterNoTheHintSendsTheUserToTheRuleFirst() {
+        list(state(decided))
+        compose.onNodeWithText(text(R.string.action_check_score)).performScrollTo().performClick()
+        compose.onNodeWithText(text(R.string.score_check_no)).performClick()
+        compose.onNodeWithText(hint).performScrollTo().assertIsDisplayed()
+        // The hint quotes the button of the rule card by the label the card carries.
+        assertTrue(hint.contains("\"${text(R.string.rule_card_change)}\""))
+        assertTrue(hint.indexOf(text(R.string.rule_card_change)) < hint.indexOf(text(R.string.action_choose_winner)))
+    }
+
+    @Test fun theListOfADemoAnalysisOffersTheRuleToo() {
+        val taps = list(state(decided, mock = true))
+        reach(text(R.string.rule_card_label))
+        compose.onNode(ruleCard).assertIsEnabled().performClick()
+        assertEquals(1, taps.ruleChanges)
     }
 }

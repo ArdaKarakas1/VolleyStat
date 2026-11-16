@@ -125,7 +125,7 @@ def revision(storage, job_id):
 def test_the_rally_list_carries_its_version_the_video_length_and_where_each_rally_came_from(match):
     client, job_id, _ = match
     found = listing(client, job_id)
-    assert set(found) == {"rallies", "rallyListVersion", "listConfirmed", "videoDurationMs", "sets"}
+    assert set(found) == {"rallies", "rallyListVersion", "listConfirmed", "videoDurationMs", "sets", "rules"}
     assert (found["rallyListVersion"], found["listConfirmed"], found["videoDurationMs"]) == (0, False, VIDEO_MS)
     assert [(item["sequence"], item["origin"], item["scoreAfter"]) for item in found["rallies"]] == [
         (1, "ANALYZER", None), (2, "ANALYZER", None), (3, "ANALYZER", None), (4, "ANALYZER", None)]
@@ -811,6 +811,22 @@ def test_storage_written_by_version_0_4_gets_its_new_columns_and_its_proposals_a
         assert [item["origin"] for item in listing(client, job_id)["rallies"]] == ["ANALYZER", "USER", "ANALYZER", "ANALYZER", "ANALYZER"]
         counts = report_of(client, job_id)["rallies"]
         assert (counts["proposed"], counts["userCreated"]) == (4, 1)
+
+
+def test_no_comment_inside_a_table_definition_holds_a_comma():
+    """The storage tests drop columns to rebuild the storage of earlier versions. An older SQLite
+    (the one of Python 3.12 in CI) cuts a dropped last column back to the previous comma, and a
+    comma inside a comment there leaves the table definition unclosed. A newer SQLite hides this."""
+    from app.db import SCHEMA
+
+    def comments_with_a_comma(schema):
+        return [line for body in re.findall(r"CREATE TABLE IF NOT EXISTS \w+ \((.*?)\n\);", schema, re.S)
+                for line in body.splitlines() if "--" in line and "," in line.split("--", 1)[1]]
+
+    assert comments_with_a_comma(SCHEMA) == []
+    # The guard reads a comment on a line of its own and a comment behind a column, and no column list.
+    sample = "CREATE TABLE IF NOT EXISTS t (\n  -- one, two\n  a INTEGER, -- three, four\n  b INTEGER, c INTEGER -- five\n);"
+    assert comments_with_a_comma(sample) == ["  -- one, two", "  a INTEGER, -- three, four"]
 
 
 def test_an_analyzer_whose_rallies_overlap_fails_its_job(storage, make_clip):

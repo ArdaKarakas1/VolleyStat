@@ -57,3 +57,18 @@ def test_deleting_an_id_the_server_never_saw_answers_match_not_found(client):
     # What a phone does when the answer to its first request was lost and the request never arrived.
     missing = client.delete(f"/v1/matches/{uuid.uuid4()}")
     assert missing.status_code == 404 and missing.json()["error"]["code"] == "MATCH_NOT_FOUND"
+
+
+def test_a_repeat_with_another_rule_keeps_the_first_rule(client):
+    match_id = str(uuid.uuid4())
+    first = client.put(f"/v1/matches/{match_id}", json={**BODY, "rules": {"setsToWin": 2, "setTarget": 21, "decidingSetTarget": 15}}).json()
+    again = client.put(f"/v1/matches/{match_id}", json={**BODY, "rules": {"setsToWin": 3, "setTarget": 25, "decidingSetTarget": 15}})
+    assert again.status_code == 200 and again.json() == first
+    assert first["rules"]["setTarget"] == 21
+
+
+def test_the_body_app_0_5_sends_still_creates_a_fivb_match(client):
+    # App 0.5.0 sends no rule: its matches are counted the way every match was counted before.
+    created = client.put(f"/v1/matches/{uuid.uuid4()}", json=BODY)
+    assert created.status_code == 201
+    assert created.json()["rules"] == {"setsToWin": 3, "setTarget": 25, "decidingSetTarget": 15, "winBy": 2, "decidingSetNumber": 5}

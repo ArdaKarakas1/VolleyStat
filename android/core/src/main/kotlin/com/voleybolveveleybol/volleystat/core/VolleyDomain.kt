@@ -30,6 +30,10 @@ data class AttackStats(
     val efficiency: Double?
 )
 
+/**
+ * The app does not use these rules today. The server counts the sets of a match with the rule the
+ * user chose (backend/app/report.py, ADR-0115), and the phone counts nothing.
+ */
 object VolleyballRules {
     /** Standard indoor 6x6 rally scoring; target and minimum difference are configurable. */
     fun isSetFinished(homeScore: Int, awayScore: Int, target: Int = 25, minDifference: Int = 2): Boolean {

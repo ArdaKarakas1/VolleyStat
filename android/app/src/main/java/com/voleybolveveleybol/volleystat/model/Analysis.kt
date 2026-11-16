@@ -54,12 +54,20 @@ data class Rally(
 
 /**
  * The rally list of a job, with the version every correction has to name. [sets] are the set
- * scores of exactly this version, which is what the user compares with the match before confirming.
+ * scores of exactly this version, which is what the user compares with the match before confirming,
+ * and [rules] is the rule of the match the server counted them with.
  */
-data class RallyList(val rallies: List<Rally>, val version: Int, val confirmed: Boolean, val videoDurationMs: Long, val sets: List<SetScore> = emptyList())
+data class RallyList(
+    val rallies: List<Rally>,
+    val version: Int,
+    val confirmed: Boolean,
+    val videoDurationMs: Long,
+    val sets: List<SetScore> = emptyList(),
+    val rules: MatchRules = MatchRules.FIVB,
+)
 
-/** What a correction changed: the rallies it wrote, the ids it removed and the job after it. */
-data class Correction(val affected: List<Rally>, val removed: List<String>, val job: AnalysisJob)
+/** What a correction changed: the rallies it wrote, the ids it removed and the job after it, when the answer carries one. */
+data class Correction(val affected: List<Rally>, val removed: List<String>, val job: AnalysisJob?)
 
 data class ReviewCard(
     val id: String,
@@ -154,4 +162,6 @@ data class MatchReport(
     val unattributedHome: Int?,
     val unattributedAway: Int?,
     val coverage: List<Coverage>,
+    /** The rule the server counted the set score with. Null when the answer named none the app could read. */
+    val rules: MatchRules? = null,
 )

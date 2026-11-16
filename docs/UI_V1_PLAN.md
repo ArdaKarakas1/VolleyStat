@@ -12,7 +12,7 @@ Tasarım paketinde Figma dosyası yok. Uygulama PNG görsellerini görsel hedef,
 |---|---|---|---|---|
 | 01 | Açılış | Yok | Mor geçişli karşılama, "Başla" | Yeni. Yalnız ilk açılışta görünür. |
 | 02 | Ana ekran | Var, krem tema, 3 sekme | Karşılama satırı, mor "Yeni Maç" kartı, dört liste satırı, 4 sekme | Yeniden düzenlenir. Sayılar gerçek kayıtlardan gelir. |
-| 03 | Maç oluştur | Yalnız iki takım adı | Maç adı, tarih, salon, maç türü | Alanlar eklenir. Hepsi isteğe bağlı ya da varsayılanlıdır. |
+| 03 | Maç oluştur | Yalnız iki takım adı | Maç adı, tarih, salon, maç türü | Alanlar eklenir. Hepsi isteğe bağlı ya da varsayılanlıdır. Maç kuralı (FIVB seçili) ADR-0115 ile geldi. |
 | 04 | Takım ve kadro | İki metin alanı | Kayıtlı takımdan seçim, isteğe bağlı kadro | Yerel takım ve kadro kaydı eklenir. |
 | 05 | Video kaynağı | İki kart, ayrı rehber | Radyo kartları, önerilen ayarlar, tek düğme | Yeniden düzenlenir. Dosya kontrol adımı korunur. |
 | 06 | Kamera kaydı | Sistem kamera uygulaması | Uygulama içi kayıt: süre, duraklat, bitir, kamera değiştir | CameraX ile yeni ekran. |
@@ -63,7 +63,7 @@ Bileşenler (`ui/components/`): `VsCard`, `HeroCard`, `ListRow`, `PrimaryButton`
 ## 4. Mimari
 
 ```
-android/core        Saf Kotlin: kurallar, rapor modeli (Android bağımlılığı yok)
+android/core        Saf Kotlin kuralları. Uygulama bugün kullanmaz, set skorunu sunucu sayar (ADR-0115)
 android/app
   data/             ApiClient, UploadEngine, LocalStore, VideoInspector, AnalysisRepository
   model/            Uygulama modelleri
@@ -122,12 +122,12 @@ Ek ekranlar (V4): Maçlar listesi, Takımlar ve kadro yönetimi, Profil (gizlili
 
 | Katman | Araç | Kapsam | Nerede |
 |---|---|---|---|
-| Kural ve rapor mantığı | JUnit (saf Kotlin) | Skor, set, kapsama, bilinmeyen ≠ 0 | Yerel ve CI |
+| `android/core` kuralları | JUnit (saf Kotlin) | Skor, set, kapsama, bilinmeyen ≠ 0. Uygulama bu modülü bugün kullanmaz ve bu testler yalnız modülün kendi kurallarını dener. | Yerel ve CI |
 | Veri katmanı | Robolectric + MockWebServer | Yükleme protokolü, kesinti, sağlama, yerel kayıt | Yerel ve CI |
 | İstemci–sunucu | `BackendE2eTest` | Gerçek FastAPI sunucusuna yükleme, sürdürme, iş, kart, rapor | Yerel ve CI |
 | Görsel | Roborazzi | Her ekranın her durumu, açık ve koyu tema, büyük yazı | Yerel ve CI (görüntüler artefakt) |
 | Cihaz akışı | Compose UI testleri, emülatör | Gezinme, form, izin akışı, kamera kaydı | Yalnız CI |
-| Arka uç | pytest | Yükleme, dosya kontrolü, iş, kart, karar, rapor | Yerel ve CI |
+| Arka uç | pytest | Yükleme, dosya kontrolü, iş, kart, karar, rapor, maç kuralıyla set sayımı | Yerel ve CI |
 | Analiz | pytest, sentetik video | Ralli bölütleme ölçüleri, etiket doğrulama | Yerel ve CI |
 
 Bir test koşmadıysa raporda "koşmadı" yazar.
@@ -166,6 +166,7 @@ Ekip bu bölümü 13 Kasım 2026'da, kodu yazdıktan sonra ekledi. Üstteki böl
 | Rapor | Kararsız ralli uyarısı | Sunucu set skorunu kazananı belli olmayan ilk rallide durdurur. Ekran bunu söyler. |
 | Rapor | "Sayılar alt sınırdır" uyarısı | Analizör ralli kaçırabilir. Sunucu kullanıcı ralli listesini onaylayana kadar raporu `ralliesMayBeMissing` ile işaretler ve ekran bunu yazar. |
 | Ralli listesi ve ralli düzenleyici | UI Tasarım V1 paketinde olmayan iki ekran | Ürün sahibi 14 Kasım 2026'da kullanıcının ralli listesini düzeltmesine izin verdi (ADR-0114). Oturum ekranları mevcut bileşenlerle kurdu. |
+| Maç kuralı ekranı | UI Tasarım V1 paketinde olmayan bir ekran ve bir kural kartı | Ürün sahibi 14 Kasım 2026'da kullanıcının maç kuralını seçmesine karar verdi (ADR-0115). Oturum ekranı mevcut bileşenlerle kurdu. Kart yeni maç ekranında ve ralli listesinde durur. Kural FIVB kuralı değilse kart yüklemeden önceki son ekranda da durur ve ana ekrandaki kurulum kartı kuralı adıyla yazar. |
 | Ralli düzenleyici | İşaret düğmeleri sabit durur, birleştirme düğmesi kayan bölümdedir | 320 dp telefonda dört sabit düğme konum çubuğunu ve adım düğmelerini ekranın dışına itiyordu. |
 | Ralli düzenleyici | Adım düğmesinin birimi büyük yazıda alt satıra iner | 1,5 kat yazıda "+0,2 sn" yazısı düğmeden taşıyordu. |
 | Yükleme sonrası gezinme | Uygulama analiz ekranında kalır | Cihaz testi şunu buldu: Kontrol ekranı yükleme başlayınca kullanıcıyı ana ekrana atıyordu ve analiz izlenmiyordu. |

@@ -77,9 +77,11 @@ import com.voleybolveveleybol.volleystat.model.Draft
 import com.voleybolveveleybol.volleystat.model.LocalVideo
 import com.voleybolveveleybol.volleystat.model.MAX_VIDEO_BYTES
 import com.voleybolveveleybol.volleystat.model.MatchKind
+import com.voleybolveveleybol.volleystat.model.MatchRules
 import com.voleybolveveleybol.volleystat.model.Team
 import com.voleybolveveleybol.volleystat.model.teamNamesValid
 import com.voleybolveveleybol.volleystat.model.uploadFormat
+import com.voleybolveveleybol.volleystat.ui.components.ChoiceCard
 import com.voleybolveveleybol.volleystat.ui.components.FactRow
 import com.voleybolveveleybol.volleystat.ui.components.ListRow
 import com.voleybolveveleybol.volleystat.ui.components.Notice
@@ -148,7 +150,15 @@ fun FlowScaffold(
 /** 03: only defaults and optional details. Nothing here blocks the user. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MatchCreateScreen(draft: Draft, today: String, onEdit: ((Draft) -> Draft) -> Unit, onContinue: () -> Unit, onBack: () -> Unit) {
+fun MatchCreateScreen(
+    draft: Draft,
+    today: String,
+    onEdit: ((Draft) -> Draft) -> Unit,
+    onContinue: () -> Unit,
+    onBack: () -> Unit,
+    /** Opens screen 13. The FIVB rule is chosen already, so a standard match never needs it. */
+    onOpenRules: () -> Unit = {},
+) {
     var pickingDate by rememberSaveable { mutableStateOf(false) }
     val day = draft.playedOn.ifBlank { today }
     FlowScaffold(
@@ -163,15 +173,9 @@ fun MatchCreateScreen(draft: Draft, today: String, onEdit: ((Draft) -> Draft) ->
             keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Next),
         )
         // The date is a button, not a text field: nobody types a date by hand.
-        VsCard(onClick = { pickingDate = true }, padding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Icon(painterResource(R.drawable.ic_calendar_today), contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                Column(Modifier.weight(1f)) {
-                    Text(stringResource(R.string.match_date), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(formatDay(day), style = MaterialTheme.typography.titleSmall)
-                }
-                Text(stringResource(R.string.match_date_pick), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-            }
+        ChoiceCard(R.drawable.ic_calendar_today, stringResource(R.string.match_date_pick), onClick = { pickingDate = true }) {
+            Text(stringResource(R.string.match_date), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(formatDay(day), style = MaterialTheme.typography.titleSmall)
         }
         OutlinedTextField(
             value = draft.venue, onValueChange = { text -> onEdit { it.copy(venue = text.take(80)) } },
@@ -188,6 +192,7 @@ fun MatchCreateScreen(draft: Draft, today: String, onEdit: ((Draft) -> Draft) ->
             )
             Text(stringResource(R.string.match_kind_note), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        MatchRulesCard(draft.rules, onOpenRules)
         StatusChip(stringResource(R.string.match_rules), Tone.NEUTRAL)
     }
     if (pickingDate) {
@@ -464,6 +469,9 @@ fun VideoCheckScreen(
     onStart: () -> Unit,
     onChangeVideo: () -> Unit,
     onBack: () -> Unit,
+    /** The rule the match will be created with. */
+    rules: MatchRules = MatchRules.FIVB,
+    onOpenRules: () -> Unit = {},
 ) {
     val format = uploadFormat(video.mimeType, video.fileName)
     val tooLarge = video.sizeBytes > MAX_VIDEO_BYTES
@@ -513,6 +521,10 @@ fun VideoCheckScreen(
         }
 
         if (!blocked) {
+            // A rule other than the standard one counts every set of this match. It stands next to the box the
+            // user has to tick, so the user sees it before the upload starts, on the smallest phone too. A rule
+            // left over from a setup the user gave up would otherwise first show on the rally list.
+            if (rules != MatchRules.FIVB) MatchRulesCard(rules, onOpenRules)
             Row(
                 Modifier.fillMaxWidth().heightIn(min = 56.dp).toggleable(value = rightsAccepted, role = Role.Checkbox, onValueChange = onRights),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),

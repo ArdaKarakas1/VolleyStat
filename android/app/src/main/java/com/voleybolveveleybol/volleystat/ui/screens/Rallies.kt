@@ -18,6 +18,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -33,10 +35,15 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -52,6 +59,7 @@ import com.voleybolveveleybol.volleystat.CorrectionProblem
 import com.voleybolveveleybol.volleystat.R
 import com.voleybolveveleybol.volleystat.RalliesLoad
 import com.voleybolveveleybol.volleystat.model.MatchRecord
+import com.voleybolveveleybol.volleystat.model.MatchRules
 import com.voleybolveveleybol.volleystat.model.Rally
 import com.voleybolveveleybol.volleystat.model.RallyList
 import com.voleybolveveleybol.volleystat.model.ReviewCard
@@ -62,11 +70,13 @@ import com.voleybolveveleybol.volleystat.ui.components.Notice
 import com.voleybolveveleybol.volleystat.ui.components.PrimaryButton
 import com.voleybolveveleybol.volleystat.ui.components.SecondaryButton
 import com.voleybolveveleybol.volleystat.ui.components.Tone
+import com.voleybolveveleybol.volleystat.ui.components.announced
 import com.voleybolveveleybol.volleystat.ui.components.dashedOutline
 import com.voleybolveveleybol.volleystat.ui.formatClock
 import com.voleybolveveleybol.volleystat.ui.formatDuration
 import com.voleybolveveleybol.volleystat.ui.theme.Dimens
 import com.voleybolveveleybol.volleystat.ui.theme.LocalVsColors
+import kotlinx.coroutines.flow.drop
 
 /** One line of the rally list: the start of a set, the place where the count stops, a rally, or the time between two rallies. */
 private sealed interface Line {
@@ -101,23 +111,36 @@ private fun lines(list: RallyList): List<Line> = buildList {
     while (next < pauses.size) pauses[next++].let { add(Line.Gap(it.windowStartMs, it.windowEndMs)) }
 }
 
-/** What a correction problem says, on every screen that can run into one. */
+/**
+ * What a correction problem says, on every screen that can run into one. The rally list sends a
+ * confirmation and no correction, so it words the two general refusals for that step.
+ */
 @Composable
-fun correctionProblemText(analysis: AnalysisUi): String? = when (analysis.correctionProblem) {
+fun correctionProblemText(analysis: AnalysisUi, confirmation: Boolean = false): String? = when (analysis.correctionProblem) {
     null -> null
-    CorrectionProblem.STALE -> stringResource(R.string.correction_stale)
+    CorrectionProblem.STALE -> stringResource(if (confirmation) R.string.rallies_confirm_stale else R.string.correction_stale)
     CorrectionProblem.OVERLAP -> analysis.overlapsRally?.let { stringResource(R.string.correction_overlap, it) } ?: stringResource(R.string.correction_overlap_unknown)
     CorrectionProblem.OUTSIDE -> stringResource(R.string.correction_outside)
     CorrectionProblem.NOT_READY -> stringResource(R.string.correction_not_ready)
     CorrectionProblem.DEMO -> stringResource(R.string.correction_demo)
     CorrectionProblem.UNREACHABLE -> stringResource(R.string.correction_unreachable)
-    CorrectionProblem.REFUSED -> stringResource(R.string.correction_refused)
+    CorrectionProblem.REFUSED -> stringResource(if (confirmation) R.string.rallies_confirm_refused else R.string.correction_refused)
 }
 
 @Composable
-fun CorrectionProblemNotice(analysis: AnalysisUi) {
+private fun CorrectionProblemNotice(analysis: AnalysisUi, confirmation: Boolean) {
     // After STALE the app has already read the list again, so nothing is wrong any more: the user repeats the step.
-    correctionProblemText(analysis)?.let { Notice(it, if (analysis.correctionProblem == CorrectionProblem.STALE) Tone.CAUTION else Tone.NEGATIVE) }
+    correctionProblemText(analysis, confirmation)?.let { Notice(it, if (analysis.correctionProblem == CorrectionProblem.STALE) Tone.CAUTION else Tone.NEGATIVE, Modifier.announced()) }
+}
+
+/**
+ * What became of the last tap on a screen that sends corrections: the correction on its way, or
+ * why the server did not apply it. Each line is reported to a screen reader when it appears.
+ */
+@Composable
+fun CorrectionStatus(analysis: AnalysisUi, @StringRes sending: Int, confirmation: Boolean = false) {
+    if (analysis.correcting) ProgressLine(sending)
+    CorrectionProblemNotice(analysis, confirmation)
 }
 
 /** The words for a match that has no job to work on. */
@@ -141,11 +164,10 @@ fun JobProblemNotice(problem: JobLoad, onRetry: () -> Unit) {
     }
 }
 
-/** Says that a correction is on its way. The screen that sent it keeps the user until the answer is there. */
+/** A spinner and what is on its way. The screen that sent it keeps the user until the answer is there. */
 @Composable
-fun CorrectionProgress(analysis: AnalysisUi, @StringRes text: Int) {
-    if (!analysis.correcting) return
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+fun ProgressLine(@StringRes text: Int) {
+    Row(Modifier.announced(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
         Text(stringResource(text), style = MaterialTheme.typography.bodyMedium)
     }
@@ -169,13 +191,32 @@ fun RalliesScreen(
     onOpenReview: (Rally) -> Unit,
     onRetry: () -> Unit,
     onBack: () -> Unit,
+    /** Opens screen 13 on the rule the server counted this list with. */
+    onChangeRules: () -> Unit = {},
 ) {
     val list = analysis.rallies
     var checking by rememberSaveable { mutableStateOf(false) }
-    // An answer about one version of the list says nothing about the next one.
-    var scoresDiffer by rememberSaveable(list?.version) { mutableStateOf(false) }
+    // An answer about one version of the list says nothing about the next one. The version is kept with the
+    // answer: a screen that comes back from the back stack gets its saved state back whatever the list is now.
+    var noAt by rememberSaveable { mutableStateOf<Int?>(null) }
+    val scoresDiffer = list != null && noAt == list.version
     // The confirmation is sent from here. Until its answer is there the user stays, so a refusal is not lost.
     BackHandler(enabled = analysis.correcting) {}
+    // What becomes of the confirmation opens above the button that sent it. On a small screen with large text
+    // that button stands at the bottom edge, and the line would push the button, and most of itself, under
+    // that edge. So the list brings both onto the screen when the line appears or changes. A line the screen
+    // opened with is not news, and a user who scrolled the head away meanwhile is left where they are.
+    val statusPlace = remember { BringIntoViewRequester() }
+    val shown by rememberUpdatedState(analysis)
+    LaunchedEffect(Unit) {
+        snapshotFlow { shown.correcting to shown.correctionProblem }.drop(1).collect { (correcting, problem) ->
+            if (correcting || problem != null) {
+                // The line is measured in the frame after the one that composed it.
+                withFrameNanos { }
+                statusPlace.bringIntoView()
+            }
+        }
+    }
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
         containerColor = MaterialTheme.colorScheme.background,
@@ -221,7 +262,7 @@ fun RalliesScreen(
                     }
                 }
             } else {
-                item(key = "state") { ListState(list, analysis, scoresDiffer, onCheck = { checking = true }, onOpenReview = onOpenReview) }
+                item(key = "state") { ListState(list, analysis, scoresDiffer, statusPlace, onCheck = { checking = true }, onOpenReview = onOpenReview, onChangeRules = onChangeRules) }
                 items(lines(list), key = { line ->
                     when (line) {
                         is Line.SetStart -> "set-${line.number}"
@@ -242,9 +283,9 @@ fun RalliesScreen(
     }
     if (checking && list != null) {
         ScoreCheckDialog(
-            list.sets,
-            onYes = { checking = false; scoresDiffer = false; onConfirm() },
-            onNo = { checking = false; scoresDiffer = true },
+            list.sets, list.rules,
+            onYes = { checking = false; noAt = null; onConfirm() },
+            onNo = { checking = false; noAt = list.version },
             onUnknown = { checking = false },
         )
     }
@@ -257,13 +298,20 @@ private fun SectionLine(text: String) {
 
 /** The head of the list: how many rallies it holds, what the user can do here, and how far the list is from confirmed. */
 @Composable
-private fun ListState(list: RallyList, analysis: AnalysisUi, scoresDiffer: Boolean, onCheck: () -> Unit, onOpenReview: (Rally) -> Unit) {
+private fun ListState(
+    list: RallyList,
+    analysis: AnalysisUi,
+    scoresDiffer: Boolean,
+    /** Where the line about the confirmation and its button stand, for the screen to bring onto the screen. */
+    statusPlace: BringIntoViewRequester,
+    onCheck: () -> Unit,
+    onOpenReview: (Rally) -> Unit,
+    onChangeRules: () -> Unit,
+) {
     val waiting = list.rallies.filter { it.waits }
     // An interval the user called "not a rally" stays on the list, and it is not counted as a rally anywhere.
     val rejected = list.rallies.count { it.status == Rally.REJECTED }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        CorrectionProgress(analysis, R.string.rallies_confirm_sending)
-        CorrectionProblemNotice(analysis)
         Text(
             if (rejected == 0) stringResource(R.string.rallies_count, list.rallies.size)
             else stringResource(R.string.rallies_count_rejected, list.rallies.size - rejected, rejected),
@@ -276,19 +324,33 @@ private fun ListState(list: RallyList, analysis: AnalysisUi, scoresDiffer: Boole
         if (!list.confirmed && list.sets.isNotEmpty() && analysis.job?.mock != true) {
             Text(stringResource(R.string.rallies_scores_lower), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        when {
-            list.confirmed -> Notice(stringResource(R.string.rallies_confirmed), Tone.POSITIVE)
-            analysis.job?.mock == true -> Notice(stringResource(R.string.rallies_demo), Tone.NEUTRAL)
-            // A rally without a winner leaves the score open, so there is no score to compare yet.
-            waiting.isNotEmpty() -> {
-                Notice(stringResource(R.string.rallies_not_ready, waiting.size), Tone.CAUTION)
-                SecondaryButton(stringResource(R.string.action_go_review), onClick = { onOpenReview(waiting.first()) }, icon = R.drawable.ic_fact_check)
-            }
-            else -> {
-                // The hint sends the user to a button and to an answer. It quotes both by their own labels.
-                if (scoresDiffer) Notice(stringResource(R.string.rallies_no_hint, stringResource(R.string.action_choose_winner), stringResource(R.string.review_not_a_rally)), Tone.NEUTRAL)
-                // Without one counted rally the server has no set score to show, and it would refuse the confirmation.
-                PrimaryButton(stringResource(R.string.action_check_score), onCheck, enabled = !analysis.correcting && list.sets.isNotEmpty(), icon = R.drawable.ic_task_alt)
+        // The rule the server counted these scores with: the list's own, not the one the match was created with.
+        MatchRulesCard(list.rules, onChangeRules, enabled = !analysis.correcting)
+        // What became of the confirmation stands next to the button that sent it.
+        Column(Modifier.bringIntoViewRequester(statusPlace), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            CorrectionStatus(analysis, R.string.rallies_confirm_sending, confirmation = true)
+            when {
+                list.confirmed -> Notice(stringResource(R.string.rallies_confirmed), Tone.POSITIVE)
+                analysis.job?.mock == true -> Notice(stringResource(R.string.rallies_demo), Tone.NEUTRAL)
+                // A rally without a winner leaves the score open, so there is no score to compare yet.
+                waiting.isNotEmpty() -> {
+                    Notice(stringResource(R.string.rallies_not_ready, waiting.size), Tone.CAUTION)
+                    SecondaryButton(stringResource(R.string.action_go_review), onClick = { onOpenReview(waiting.first()) }, icon = R.drawable.ic_fact_check)
+                }
+                else -> {
+                    // The hint sends the user to the rule, to a button and to an answer. It quotes each by its own label.
+                    if (scoresDiffer) {
+                        Notice(
+                            stringResource(
+                                R.string.rallies_no_hint, stringResource(R.string.rule_card_change),
+                                stringResource(R.string.action_choose_winner), stringResource(R.string.review_not_a_rally),
+                            ),
+                            Tone.NEUTRAL,
+                        )
+                    }
+                    // Without one counted rally the server has no set score to show, and it would refuse the confirmation.
+                    PrimaryButton(stringResource(R.string.action_check_score), onCheck, enabled = !analysis.correcting && list.sets.isNotEmpty(), icon = R.drawable.ic_task_alt)
+                }
             }
         }
     }
@@ -354,7 +416,7 @@ private fun GapRow(gap: Line.Gap, enabled: Boolean, onClick: () -> Unit) {
  * confirms. "No" and "I do not know" leave every number a lower bound.
  */
 @Composable
-fun ScoreCheckDialog(sets: List<SetScore>, onYes: () -> Unit, onNo: () -> Unit, onUnknown: () -> Unit) {
+fun ScoreCheckDialog(sets: List<SetScore>, rules: MatchRules, onYes: () -> Unit, onNo: () -> Unit, onUnknown: () -> Unit) {
     AlertDialog(
         onDismissRequest = onUnknown,
         title = { Text(stringResource(R.string.score_check_title)) },
@@ -369,7 +431,8 @@ fun ScoreCheckDialog(sets: List<SetScore>, onYes: () -> Unit, onNo: () -> Unit, 
                         )
                     }
                 }
-                Text(stringResource(R.string.score_check_rule), style = MaterialTheme.typography.bodySmall)
+                // The rule of the list these scores were counted with, by name: a rule of another match would make the "yes" mean nothing.
+                Text(stringResource(R.string.score_check_rule, ruleCounting(rules)), style = MaterialTheme.typography.bodySmall)
                 Text(stringResource(R.string.score_check_question), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
             }
         },
