@@ -1,6 +1,6 @@
 # Fark analizi: gereksinimler ve mevcut kod
 
-**Tarih:** 13 Kasım 2026 · **Kod sürümü:** 0.4.1 · **Kaynaklar:** V4 devir raporu ve ekleri, UI Tasarım V1 paketi
+**Tarih:** 13 Kasım 2026 · **Kod sürümü:** 0.4.2 · **Kaynaklar:** V4 devir raporu ve ekleri, UI Tasarım V1 paketi
 
 Durum etiketleri:
 
@@ -34,7 +34,7 @@ Depoda eğitilmiş model yok. Kimse hiçbir yapay zekâ bileşeninin doğruluğu
 | FR-14 | Oyuncu eşlemesi | P1 | KISMEN | Kullanıcı sayıyı alan oyuncuyu forma numarasıyla seçer. Otomatik eşleme DIŞ BAĞIMLILIK'tır. |
 | FR-15 | Tam aksiyon çıkarımı | P1 | DIŞ BAĞIMLILIK | Kullanıcı yalnız ralliyi bitiren aksiyonu seçebilir. |
 | FR-16 | Eğitim kullanım izni | P0 | KISMEN | İzin varsayılan olarak kapalıdır ve sunucu `allowTraining: true` isteğini reddeder (TEST EDİLDİ). Ayrı onay ve geri çekme akışı yok. |
-| FR-17 | Veriyi ve videoyu silme | P0 | TEST EDİLDİ | Video silme işi, rallileri, kartları ve kararları da siler. Uygulama maçı ve telefondaki kaydı siler. |
+| FR-17 | Veriyi ve videoyu silme | P0 | TEST EDİLDİ | Maç silme (`DELETE /matches/{id}`) maç bilgilerini, yükleme kayıtlarını, videoyu, analiz işlerini, rallileri, kartları ve kararları tek veritabanı işleminde siler. Sunucu silinen satırların üzerine sıfır yazar. Uygulama maç kimliğini kendisi ürettiği için yanıtı kaybolan bir maçı da silebilir. Uygulama maçı telefondan yalnız sunucu sildikten sonra kaldırır ve telefondaki video dosyasına dokunmaz. Sunucuda süreye bağlı otomatik silme yok. Sunucu silinen video dosyasının disk bloklarının üzerine yazmaz. |
 | FR-18 | Canlı kamera analizi | P2 | Kapsam dışı | Kayıtlı video analizi kanıtlandıktan sonra. |
 | FR-19 | Cihaz üzerinde model | P2 | Kapsam dışı | |
 | FR-20 | Sosyal medya çıktısı | P1 | YOK | |
@@ -61,7 +61,7 @@ V4 raporundaki şu ekranlar yok: hesap ve gizlilik onayı (S01), saha bölgesi s
 
 | Rota | Durum |
 |---|---|
-| `POST /matches`, `GET /matches/{id}` | TEST EDİLDİ |
+| `POST /matches`, `PUT /matches/{id}`, `GET /matches/{id}`, `DELETE /matches/{id}` | TEST EDİLDİ |
 | `POST /matches/{id}/uploads`, `PUT /uploads/{id}/chunks`, `GET /uploads/{id}`, `POST /uploads/{id}/complete`, `DELETE /uploads/{id}` | TEST EDİLDİ |
 | `GET /videos/{id}`, `GET` ve `POST /videos/{id}/quality`, `DELETE /videos/{id}` | TEST EDİLDİ. Sahne ölçümleri `NOT_MEASURED`. |
 | `GET /videos/{id}/content` (`Range`) | TEST EDİLDİ |
@@ -110,10 +110,10 @@ Sayılar son yerel koşudan gelir. CI aynı testleri her PR'da çalıştırır.
 
 | Kanıt | Sonuç |
 |---|---|
-| Arka uç `pytest` | 402 test geçti (yerelde Python 3.13, CI'da Python 3.12) |
+| Arka uç `pytest` | 417 test geçti (yerelde Python 3.13, CI'da Python 3.12) |
 | `ml` `pytest` | 239 test geçti (yerel ve CI) |
-| Android JVM testleri (`:core:test`, `:app:testDebugUnitTest`) | 61 test geçti, hiçbiri atlanmadı (yerel). Testler 42 ekran görüntüsü üretti. |
-| Uygulama gerçek sunucuya karşı (JVM) | 6 test geçti (yerel ve CI): `BackendE2eTest` 4, `AppFlowE2eTest` 1, `AppUploadFlowE2eTest` 1. Bu altı test yukarıdaki 61 testin içindedir. |
+| Android JVM testleri (`:core:test`, `:app:testDebugUnitTest`) | 78 test geçti, hiçbiri atlanmadı (yerel). Testler 45 ekran görüntüsü üretti. |
+| Uygulama gerçek sunucuya karşı (JVM) | 7 test geçti (yerel): `BackendE2eTest` 5, `AppFlowE2eTest` 1, `AppUploadFlowE2eTest` 1. Bu yedi test yukarıdaki 78 testin içindedir. Koşudan sonra sunucunun veritabanında hiçbir satır, depolama klasöründe hiçbir dosya kalmadı. |
 | Lint | 0 hata |
 | Emülatörde cihaz testleri (CI, API 34) | 2 test geçti: kamera kaydı ve baştan sona akış (yeni maç, kayıt, yükleme, dosya kontrolü, deneme analizi, sunucudan klip, karar, rapor). İlk iki koşu kırmızıydı ve uygulamada gerçek bir gezinme hatasını gösterdi. |
 | Gerçek telefonda deneme | **Yok.** |
@@ -130,7 +130,8 @@ Ayrı inceleyiciler üç parçayı ve yapay zekâ planını okudu. Ayrı bir do�
 | Arka uç | 16 | 15 bulgu düzeldi. 1 bulgu tasarım gereğidir: `motion-baseline` modülü `ml` paketiyle gelir. Doğrulayıcının eklediği 4 küçük nokta da kapandı. |
 | `ml` paketi | 8 | 8 bulgu düzeldi. Oturum düzeltmeleri test paketinin dışındaki kliplerle ayrıca denedi. Sonradan gelen `agreement` komutunu ikinci bir inceleyici 30 denemeyle sınadı ve 3 kusur buldu. Üçü de düzeldi. |
 | Yapay zekâ planı | 11 | 11 bulgu belgeye işlendi. |
-| Android uygulaması | 21 | Doğrulayıcı 19 bulguyu doğruladı ve 2 bulguyu reddetti. Doğrulanan 19 bulgu sürüm 0.4.1 ile düzeldi. Reddedilen bulgulardan biri metin kuralıydı ve o metinler de düzeldi. Öbürü uygulanmadı: "Oyuncusu belli olmayan sayı" alt sınır değildir, çünkü kullanıcı oyuncu seçtikçe bu sayı azalır. |
+| Android uygulaması (sürüm 0.4.0) | 21 | Doğrulayıcı 19 bulguyu doğruladı ve 2 bulguyu reddetti. Doğrulanan 19 bulgu sürüm 0.4.1 ile düzeldi. Reddedilen bulgulardan biri metin kuralıydı ve o metinler de düzeldi. Öbürü uygulanmadı: "Oyuncusu belli olmayan sayı" alt sınır değildir, çünkü kullanıcı oyuncu seçtikçe bu sayı azalır. |
+| Maç silme, gizlilik satırları ve sayı türü tanımları (sürüm 0.4.2) | 19 | Doğrulayıcılar 11 bulguyu doğruladı, 5 bulguyu kısmen doğruladı ve 3 bulguyu reddetti. Tekrarlar ayıklanınca dokuz ayrı kusur kaldı ve dokuzu da düzeldi. Oturum her düzeltmeyi geri alıp ilgili testin kırıldığını gördü. Reddedilen 3 bulgu sözcük tercihiydi. |
 
 Android incelemesinin bulduğu en ağır hatalar şunlardı:
 
@@ -141,19 +142,36 @@ Android incelemesinin bulduğu en ağır hatalar şunlardı:
 - Kartların yenilenmesi başarısız olunca uygulama sunucunun kaydettiği kararı "kaydedemedi" diye gösteriyordu.
 - Uygulama iptal edilen işi hata olarak ve sunucunun hata kodlarını ekranda gösteriyordu.
 
+Son incelemenin (sürüm 0.4.2) bulduğu kusurlar şunlardı:
+
+- Sunucunun sildiği maçın takım adları veritabanı dosyasında okunabilir kalıyordu.
+- Maç açma yanıtı kaybolursa telefon o maçı sunucudan silemiyordu.
+- Uygulama her silme hatasında "sunucunun açık olduğunu denetle" diyordu. Sunucu videoyu denetlerken de aynı cümle çıkıyordu.
+- JSON olmayan bir yanıt uygulamayı kapatabiliyordu ve yanlış adresten gelen her başarılı yanıt silme sayılıyordu.
+- Sayı türü tanımları çakışıyordu: Servisi karşılarken yapılan çift vuruş hem servis asına hem rakip hatasına uyuyordu.
+- Tasarım belgesi her DEMO kartının kendi etiketini taşıdığını yazıyordu, rapor kartları taşımıyordu.
+
 Üç düzeltmenin otomatik testi yoktur: kamera izninin ayarlardan dönüşte yeniden okunması (cihaz ister), çift dokunmada aynı ekranın iki kez açılmaması ve video okunurken ekrandan ayrılan kullanıcıya kontrol ekranının kendiliğinden açılmaması. Bir bulgu yarım kapandı: Uygulama yerel kayıt dosyasını hâlâ çağıran iş parçacığında yazar. Yazma hatası artık uygulamayı kapatmaz ve ana ekran hatayı bildirir.
 
 ## 7. Sıradaki dilimler
 
 Sıra bağımlılığa göredir. İlk dört iş gerçek video beklemez.
 
-1. **Ralli düzeltme:** Kullanıcı kaçan ralliyi ekler, birleşmiş ralliyi böler, iki parçayı birleştirir ve sınırı düzeltir. Sözleşme, sunucu ve doğrulama ekranı bu işe girer. Bu iş bitmeden rapor yalnız alt sınır verir ve B1 ölçümünün sonucu ürüne yansımaz.
+1. **Ralli düzeltme:** Kullanıcı kaçan ralliyi ekler, birleşmiş ralliyi böler, iki parçayı birleştirir ve sınırı düzeltir. Sözleşme, sunucu ve doğrulama ekranı bu işe girer. Bu iş bitmeden rapor yalnız alt sınır verir ve B1 ölçümünün sonucu ürüne yansımaz. Bu iş "elle giriş yalnız belirsiz olayı doğrulamak içindir" kuralına bir istisna ister ve Arda'nın kararını bekler (bölüm 8).
 2. **Saha yarısı ve taraf değişimi:** Maç kaydı hangi takımın hangi yarıda başladığını ve takımların ne zaman yer değiştirdiğini taşımıyor. Kazanan önerisi ve oyuncu tarafı bu bilgiyi ister.
 3. **Saha bölgesi seçimi:** Kullanıcı bir karede sahanın köşelerine dokunur. Sunucu homografiyi saklar. Baseline hareketi saha içiyle sınırlar (deney B2'nin ön koşulu).
 4. **Arka plan yükleme:** WorkManager ve ön plan hizmeti. Gerçek telefonda deneme ister.
 5. **Eksik ölçüm araçları:** Kazanan metrikleri ve kalibrasyon. Anotatör uyumu aracı hazırdır (`agreement`).
 6. **B0 ve B1 deneyleri:** İzinli video ve iki etiketçi gelince. Ekip baseline'ı ilk kez gerçek maçta ölçer.
 7. **Üretim altyapısı:** Hesap, HTTPS, nesne depolama, iş kuyruğu. Bulut ve bütçe kararı ister.
+
+Benzer bir ürünün herkese açık sayfalarını inceleyen çalışma şu adayları ekledi. Bağımsız doğrulayıcılar her adayı VolleyStat'ın koduna karşı denedi.
+
+8. **Çekim öncesi kadraj denetimi:** Saha bölgesi seçimiyle (3) aynı işaretleme ekranını kullanır. Kullanıcı yanlış kadrajı maçtan önce görür (`docs/AI_PLAN.md` 2.3).
+9. **Oyuncu başına ralli klipleri:** Kullanıcı oyuncu tablosundan o oyuncuya yazdığı sayıların kliplerini açar. Sunucu klip aralıklarını zaten tutuyor. Sıra ilk gerçek maçtan sonradır, çünkü bu ekranın değerini yalnız gerçek bir maç gösterir.
+10. **Oyuncu adı taşımayan paylaşım görseli (FR-20):** Görsel skoru ve takım sayımlarını taşır, alt sınır ve DEMO etiketini de taşır. Sıra ralli düzeltmeden sonradır, çünkü o zamana kadar skor alt sınırdır.
+
+Doğrulayıcılar iki adayı reddetti. Önceki rallinin kazananından çıkarılan side-out ve break sayımı, bölümleme bir ralliyi kaçırdığında sonraki bütün rallileri yanlış sınıfa koyar. "Kullanıcı yalnız emin olunmayan ralliyi doğrular" diyen bir tanıtım metni de bugün doğru değildir, çünkü kullanıcı her ralliyi kendisi doğruluyor.
 
 ## 8. Arda'dan beklenenler
 
@@ -166,3 +184,6 @@ Sıra bağımlılığa göredir. İlk dört iş gerçek video beklemez.
 | Uygulama simgesi kararı | Suluboya logo küçük boyda zor okunur ve mor arayüzle aynı paleti paylaşmaz. |
 | Bulut ve GPU kararı | Ücretli hizmet onayı sende. O zamana kadar her şey yerelde çalışır. |
 | Depo görünürlüğü | Depo herkese açık. Kapalı olmasını istersen GitHub ayarından değiştirirsin. |
+| Ralli düzeltme istisnası | "Elle giriş yalnız belirsiz olayı doğrulamak içindir" kuralı kullanıcının kaçan ralliyi eklemesini kapsamıyor. Bu istisna olmadan rapor alt sınır olarak kalır (bölüm 7, 1. iş). |
+| Yükleme öncesi izin cümlesi | Uygulama bugün tek bir kutu gösterir: "Bu videoyu analiz için yükleme hakkım ve iznim var." Cümle sahadaki oyuncuların iznini açıkça sormuyor. Yeni metin kişisel veri konusudur ve son hâlini bir KVKK uzmanı onaylar. |
+| Geri bildirim adresi | Uygulama içinden geri bildirim için bir e-posta adresi gerekir. Adresi yalnız sen verebilirsin. |

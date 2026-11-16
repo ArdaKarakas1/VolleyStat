@@ -58,6 +58,12 @@ Bu kalıplar görsel etkiden önce gelir.
 - **Atlanan kart açık kalır.** Kullanıcı son karttan sonra atladığı kart varsa "karar bekleyen kart" sayısını görür. Ekran yalnız bütün kartlar yanıtlandığında "Bütün ralliler için karar verdin" der.
 - **Öneri seçili gelmez.** Sunucu bir kazanan önerirse ekran öneriyi ipucu olarak yazar. Kararı kullanıcı verir.
 - **Oyuncuya sayı yazmak karar ister.** Oyuncu tablosu yalnız kullanıcının doğrulamada forma numarası seçtiği sayıları içerir. Oyuncusu belli olmayan sayılar ayrı satırda durur.
+- **Uygulama yalnız doğrulanmış sayımı gösterir.** Bileşik performans puanı, yüzdelik dilim, oyuncu sıralaması, gelecek tahmini ve yapay zekânın yazdığı yorum bu uygulamada yoktur. Ekip bunlardan birini ancak arkasındaki ölçümün doğruluğunu gerçek maçlarda ölçtükten ve ürün sahibi onayladıktan sonra ekler.
+- **Uygulama ölçülmemiş güven değerini göstermez.** Uygulama bir karara "güven yüzdesi" yazmaz. Ekip bu değeri ancak kalibrasyonu kilitli test kümesinde ölçtükten sonra ekrana çıkarır (`docs/AI_PLAN.md` 2.7).
+- **Oran, sayımıyla birlikte durur.** Uygulama bir yüzde ya da oran gösterirse payı ve paydayı aynı ekrana yazar. Kullanıcı oranı ekrandaki sayılardan yeniden hesaplayabilir. Bugünkü rapor oran göstermez, yalnız sayım gösterir (`30 / 40`).
+- **Örnek etiketi öğenin üstündedir.** Uygulamanın DEMO veriyle çizdiği sayı kartı etiketi kendi başlığında taşır. Rapor ekranında "Takım İstatistikleri" ve "Veri Güvenilirliği" kartlarının başlığı DEMO yazar ve ekranın tepesindeki bant ayrıca durur. Kullanıcı tek bir kartın ekran görüntüsünü alsa da görüntü DEMO yazar. Ekip yeni bir sayı kartını, paylaşım görselini ve tanıtım görüntüsünü aynı kuralla çizer.
+- **Sayı türünün tek tanımı vardır.** Doğrulama kartı ve rapor aynı "Sayı Türleri" penceresini açar. Kullanıcının kararı ve rapordaki sayı aynı tanıma dayanır.
+- **Silme, sunucu sildikten sonra görünür.** Uygulama maçı listeden yalnız sunucu maçın bütün kayıtlarını sildiğini bildirince kaldırır. Sunucu silmediyse ekran nedenini yazar: Sunucu yanıt vermedi, sunucu videoyu hâlâ denetliyor ya da sunucu isteği reddetti. Profil sekmesindeki gizlilik satırları sunucunun gerçek davranışını yazar: neyin gittiğini, kimin görebildiğini, sunucunun ne kadar sakladığını ve silmenin neyi sildiğini.
 
 ## Durumlar
 

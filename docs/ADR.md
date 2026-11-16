@@ -124,3 +124,18 @@ Kararlar:
 
 Açık kalan iş: Kullanıcının kaçan ralliyi eklemesi, ralliyi bölmesi, birleştirmesi ve sınırını düzeltmesi. Bu iş `docs/GAP_ANALYSIS.md` 7. bölümün ilk maddesidir.
 
+## ADR-0113: Maç kimliğini telefon üretir ve silme sunucuda iz bırakmaz
+
+**Tarih:** 13 Kasım 2026 · **Durum:** Kabul edildi
+
+Bağımsız inceleme "Maçı sil" işinde üç boşluk buldu. Video silme çağrısı sunucudaki maç bilgilerini (takım adları, maç adı, tarih, salon) bırakıyordu. Sunucunun sildiği satırlar veritabanı dosyasında okunabilir kalıyordu. Maç açma yanıtı kaybolursa telefon maçın kimliğini hiç öğrenmiyor ve o maçı silemiyordu.
+
+Kararlar:
+
+- Sunucu `DELETE /matches/{id}` çağrısıyla maçın bütün kayıtlarını ve baytlarını tek veritabanı işleminde siler. Uygulama maçı telefondan yalnız sunucunun `204` ya da `404 MATCH_NOT_FOUND` yanıtından sonra kaldırır.
+- Telefon maç kimliğini kendisi üretir, kimliği diske yazar ve maçı `PUT /matches/{id}` ile açar. Çağrı yinelenebilir. Telefon böylece yanıtı kaybolan maçı da adresler.
+- Her veritabanı bağlantısı `PRAGMA secure_delete=ON` ile açılır. Sunucu silmeden sonra veritabanı günlüğünü boşaltır. Bir test silinen maçın adlarını veritabanı dosyalarında arar.
+- Sunucu dosyaları veritabanı işlemini onaylamadan önce kaldırır. Yarıda kalan bir silme geride dosya bırakmaz, dosyası eksik satır bırakabilir. İstemci çağrıyı yineleyince sunucu o satırları da siler.
+- Uygulama silinemeyen maç için nedeni ayırır: Sunucu yanıt vermedi, sunucu videoyu hâlâ denetliyor ya da sunucu isteği reddetti.
+
+Açık kalan sınır: Sunucu silinen video dosyasının disk bloklarının üzerine yazmaz. Sunucuda süreye bağlı otomatik silme de yok. Bu iki konu üretim altyapısı kararını bekler.

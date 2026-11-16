@@ -11,7 +11,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -22,7 +22,7 @@ from . import content, jobs, media, review
 from .analyzers import load_analyzer, require_known_kind
 from .analyzers.base import MODEL, Analyzer
 from .bodylimit import BodyLimit
-from .db import connector, find_video, migrate, new_id
+from .db import connector, empty_write_ahead_log, find_video, is_canonical_id, migrate, new_id
 from .errors import fail
 
 CHUNK_SIZE = 4 * 1024 * 1024
@@ -133,6 +133,10 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
             return storage / record["storage_key"]
         return storage / "videos" / f"{record['id']}.bin"  # layout of the 0.2 preview
 
+    def old_part_path(upload_id: str) -> Path:
+        """Where the 0.2 preview kept an unfinished upload. Nothing writes there now; a deletion still clears it."""
+        return storage / "uploads" / f"{upload_id}.part"
+
     def video_payload(record) -> dict[str, Any]:
         return {
             "id": record["id"], "videoId": record["id"], "matchId": record["match_id"],
@@ -173,7 +177,7 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
                 # Joining the thread can wait for a running analyzer to notice the stop signal.
                 await run_in_threadpool(worker.stop)
 
-    app = FastAPI(title="VolleyStat Local Development API", version="0.4.0", lifespan=lifespan,
+    app = FastAPI(title="VolleyStat Local Development API", version="0.4.1", lifespan=lifespan,
                   description="LOCAL TEST DATA ONLY. No authentication, no trained AI. Never expose to the internet.")
     app.state.worker = worker
     app.add_middleware(BodyLimit, exempt=is_chunk_upload)
@@ -201,15 +205,35 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
                 "mediaProbe": "available" if media.probe_available() else "unavailable",
                 "maxVideoBytes": MAX_VIDEO_BYTES, "chunkSizeBytes": CHUNK_SIZE}
 
+    def insert_match(db, match_id: str, payload: MatchInput):
+        db.execute(
+            "INSERT INTO matches(id, home_team, away_team, name, played_on, venue, kind) VALUES(?,?,?,?,?,?,?)",
+            (match_id, payload.homeTeamName, payload.awayTeamName, payload.name, payload.playedOn, payload.venue, payload.kind),
+        )
+        return db.execute("SELECT * FROM matches WHERE id=?", (match_id,)).fetchone()
+
     @app.post("/v1/matches", status_code=201)
     def create_match(payload: MatchInput):
-        match_id = new_id()
         with connect(write=True) as db:
-            db.execute(
-                "INSERT INTO matches(id, home_team, away_team, name, played_on, venue, kind) VALUES(?,?,?,?,?,?,?)",
-                (match_id, payload.homeTeamName, payload.awayTeamName, payload.name, payload.playedOn, payload.venue, payload.kind),
-            )
-            return match_payload(db.execute("SELECT * FROM matches WHERE id=?", (match_id,)).fetchone())
+            return match_payload(insert_match(db, new_id(), payload))
+
+    @app.put("/v1/matches/{match_id}", responses={201: {"description": "The match was created under this id"}})
+    def put_match(match_id: str, payload: MatchInput, response: Response):
+        """Create the match under an id the client chose, or return the match that already has it.
+
+        A client that picks the id before its first request can address the match whatever happens
+        to the answer: it repeats this call, or deletes the match, with the id it already holds.
+        With POST the id exists only in the answer, and a lost answer leaves a match nobody can
+        delete. A repeat never changes what the first request stored.
+        """
+        if not is_canonical_id(match_id):
+            fail("MATCH_ID_INVALID", "Match id must be a UUID in lowercase with dashes", 422)
+        with connect(write=True) as db:
+            match = db.execute("SELECT * FROM matches WHERE id=?", (match_id,)).fetchone()
+            if match is None:
+                match = insert_match(db, match_id, payload)
+                response.status_code = 201
+            return match_payload(match)
 
     @app.get("/v1/matches/{match_id}")
     def get_match(match_id: str):
@@ -424,6 +448,43 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
             db.execute("DELETE FROM videos WHERE id=?", (video_id,))
             # Remove the bytes before the commit: a deletion must never leave the file behind.
             video_path(record).unlink(missing_ok=True)
+        empty_write_ahead_log(db_path)
+        # A run in progress has lost its job row and can write nothing; this only makes it stop sooner.
+        for job_id in pending:
+            worker.release(job_id)
+
+    @app.delete("/v1/matches/{match_id}", status_code=204)
+    def delete_match(match_id: str):
+        """Remove a match and everything the server holds for it: its record, uploads, videos, analyses and bytes.
+
+        Deleting a video leaves the match record and the upload rows behind. This is the call a
+        client makes when the user removes the match itself, so that nothing of it stays.
+        """
+        with connect(write=True) as db:
+            if not db.execute("SELECT 1 FROM matches WHERE id=?", (match_id,)).fetchone():
+                fail("MATCH_NOT_FOUND", "Match does not exist", 404)
+            uploads = db.execute("SELECT * FROM uploads WHERE match_id=?", (match_id,)).fetchall()
+            # A verification in progress is about to turn its upload into a video of this match.
+            # The route refuses before it removes a row or a file.
+            for upload in uploads:
+                if upload["status"] == "FINALIZING" and time.time() - (upload["finalize_started_at"] or 0) < FINALIZE_STALE_SECONDS:
+                    fail("UPLOAD_FINALIZING", "An upload of this match is being verified", 409)
+            videos = db.execute("SELECT * FROM videos WHERE match_id=?", (match_id,)).fetchall()
+            pending = [row["id"] for row in db.execute(
+                "SELECT id FROM analysis_jobs WHERE match_id=? AND state IN (?,?)", (match_id, *jobs.ACTIVE_STATES))]
+            # The order follows the foreign keys: videos first (their jobs, rallies, cards and
+            # decisions go with them, ON DELETE CASCADE), then the uploads, then the match.
+            db.execute("DELETE FROM videos WHERE match_id=?", (match_id,))
+            db.execute("DELETE FROM uploads WHERE match_id=?", (match_id,))
+            db.execute("DELETE FROM matches WHERE id=?", (match_id,))
+            # Remove the bytes before the commit: a deletion must never leave a file behind. If the
+            # commit then fails, the rows return without their bytes and the same call clears them.
+            for video in videos:
+                video_path(video).unlink(missing_ok=True)
+            for upload in uploads:
+                upload_path(upload["id"]).unlink(missing_ok=True)
+                old_part_path(upload["id"]).unlink(missing_ok=True)
+        empty_write_ahead_log(db_path)
         # A run in progress has lost its job row and can write nothing; this only makes it stop sooner.
         for job_id in pending:
             worker.release(job_id)

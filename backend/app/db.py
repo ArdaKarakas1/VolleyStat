@@ -1,6 +1,7 @@
 """SQLite schema and transactions shared by the routes and the analysis worker."""
 from __future__ import annotations
 
+import logging
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -8,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .errors import fail
+
+log = logging.getLogger(__name__)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS matches (
@@ -119,6 +122,14 @@ def new_id() -> str:
     return str(uuid.uuid4())
 
 
+def is_canonical_id(text: str) -> bool:
+    """True for a UUID written the way new_id() writes one: lowercase, with dashes, nothing around it."""
+    try:
+        return str(uuid.UUID(text)) == text
+    except ValueError:
+        return False
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -153,6 +164,9 @@ def connector(db_path: Path):
         try:
             # Also what makes the ON DELETE CASCADE clauses above take effect.
             conn.execute("PRAGMA foreign_keys=ON")
+            # A deleted row is overwritten with zeros. Without this its text stays readable in the
+            # freed pages of the file, long after the server said the match was deleted.
+            conn.execute("PRAGMA secure_delete=ON")
             # Readers take a snapshot and never wait for a writer (WAL).
             conn.execute("BEGIN IMMEDIATE" if write else "BEGIN")
             yield conn
@@ -165,6 +179,24 @@ def connector(db_path: Path):
             conn.close()
 
     return connect
+
+
+def empty_write_ahead_log(db_path: Path) -> None:
+    """Fold the write-ahead log into the database file and cut the log to zero bytes.
+
+    The log still holds the pages as they were before a deletion. Called after a deletion so that
+    no copy of the deleted rows stays in it. When another connection is reading at this moment
+    SQLite leaves the log as it is; it is then emptied by the next deletion, or when the last
+    connection closes.
+    """
+    # A short wait: the deletion is already committed, and a reader must not hold its answer back.
+    conn = sqlite3.connect(db_path, timeout=1)
+    try:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    except sqlite3.Error:
+        log.exception("The write-ahead log could not be emptied")
+    finally:
+        conn.close()
 
 
 def find_video(db, video_id: str):

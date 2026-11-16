@@ -232,7 +232,7 @@ fun VolleyStatApp(viewModel: AppViewModel = viewModel()) {
                         onDispose { viewModel.stopWatchingAnalysis() }
                     }
                     StatusScreen(
-                        match, state.upload, analysis, removalFailed = state.removalFailedFor == match.localId,
+                        match, state.upload, analysis, removalFailure = state.removalProblem?.takeIf { it.matchId == match.localId }?.failure,
                         onPause = viewModel::pauseUpload, onResume = { viewModel.resumeUpload(match.localId) },
                         onRemove = { viewModel.removeMatch(match.localId) {} },
                         onRestartAnalysis = { viewModel.restartAnalysis(match.localId) },

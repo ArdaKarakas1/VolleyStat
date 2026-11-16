@@ -135,7 +135,9 @@ class ScreenshotTest {
         shot("maclar") { MatchesScreen(state, {}, {}) }
         shot("takimlar") { TeamsScreen(teams, { true }, {}) }
         shot("takim_kadro") { TeamRosterScreen(teams[0], { _, _ -> true }, {}, {}, {}) }
-        shot("profil") { ProfileScreen(state, "0.4.0", {}, {}, {}, {}) }
+        shot("profil") { ProfileScreen(state, "0.4.2", {}, {}, {}, {}) }
+        // The privacy lines sit below the first screen; a tall window keeps all of them in one picture.
+        shotOn("profil_gizlilik", "+w411dp-h1700dp-port") { ProfileScreen(state, "0.4.2", {}, {}, {}, {}) }
     }
 
     @Test fun s03_s04_s05_newMatch() {
@@ -173,7 +175,7 @@ class ScreenshotTest {
     }
 
     @Test fun s07_status() {
-        fun screen(match: MatchRecord, upload: UploadProgress?, analysis: AnalysisUi): @Composable () -> Unit = { StatusScreen(match, upload, analysis, false, {}, {}, {}, {}, {}, {}, {}) }
+        fun screen(match: MatchRecord, upload: UploadProgress?, analysis: AnalysisUi): @Composable () -> Unit = { StatusScreen(match, upload, analysis, null, {}, {}, {}, {}, {}, {}, {}) }
         shot("07_yukleme", content = screen(uploading, state.upload, AnalysisUi()))
         shot("07_analiz_modeli_yok", content = screen(match("m4"), null, AnalysisUi("m4", JobLoad.NO_ANALYZER)))
         shot("07_analiz_suruyor", content = screen(match("m4"), null, AnalysisUi("m4", JobLoad.READY, job(AnalysisSummary.PROCESSING, mock = false, done = 3100, total = 5400))))
@@ -196,6 +198,7 @@ class ScreenshotTest {
         shot("09_mac_raporu_yok") { ReportScreen(match("m4"), ReportLoad.NONE, null, {}, {}, {}, {}, {}) }
         shot("09_mac_raporu_kararsiz_ralli") { ReportScreen(finished, ReportLoad.READY, report.copy(scoreStoppedAtRally = 29), {}, {}, {}, {}, {}) }
         shot("09_mac_raporu_koyu", dark = true) { ReportScreen(finished, ReportLoad.READY, report, {}, {}, {}, {}, {}) }
+        shot("09_mac_raporu_demo") { ReportScreen(finished, ReportLoad.READY, report.copy(mock = true, analyzerId = "demo", analyzerKind = "MOCK"), {}, {}, {}, {}, {}) }
         shot("10_oyuncu_istatistik") { PlayersScreen(finished, report, players, teams[1].players) {} }
     }
 }

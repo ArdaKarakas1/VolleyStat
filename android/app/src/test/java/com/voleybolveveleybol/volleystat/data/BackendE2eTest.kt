@@ -60,7 +60,7 @@ class BackendE2eTest {
         assertEquals(clip.length(), session.sentBytes)
         // The server keeps the video and still has no model: analysis must be refused honestly.
         assertEquals(VideoCheck.READY, ApiClient(url!!).video(check.videoId).status)
-        ApiClient(url).deleteVideo(check.videoId)
+        ApiClient(url).deleteMatch(session.serverMatchId!!)
     }
 
     @Test fun anInterruptedUploadResumesOnTheRealServer() {
@@ -71,17 +71,17 @@ class BackendE2eTest {
         val (finished, check) = upload(clip, partial)
         assertEquals(VideoCheck.READY, check!!.status)
         assertEquals(partial.uploadId, finished.uploadId)
-        ApiClient(url).deleteVideo(check.videoId)
+        ApiClient(url).deleteMatch(finished.serverMatchId!!)
     }
 
     @Test fun aTruncatedClipIsQuarantinedNotAccepted() {
         assumeTrue(url != null && clip != null && clip.isFile)
         val half = File.createTempFile("half", ".mp4").apply { writeBytes(clip!!.readBytes().copyOf((clip.length() / 2).toInt())) }
         try {
-            val (_, check) = upload(half)
+            val (session, check) = upload(half)
             assertEquals(VideoCheck.QUARANTINED, check!!.status)
             assertEquals("VIDEO_CORRUPT", check.rejectCode)
-            ApiClient(url!!).deleteVideo(check.videoId)
+            ApiClient(url!!).deleteMatch(session.serverMatchId!!)
         } finally {
             half.delete()
         }
@@ -167,7 +167,27 @@ class BackendE2eTest {
                 assertEquals("REVIEW_STALE_VERSION", error.code)
             }
         } finally {
-            api.deleteVideo(videoId)
+            api.deleteMatch(matchId)
+        }
+    }
+
+    @Test fun aDeletedMatchLeavesNothingOnTheServer() {
+        assumeTrue(url != null && clip != null && clip.isFile)
+        val api = ApiClient(url!!)
+        val (session, check) = upload(clip!!)
+        api.deleteMatch(session.serverMatchId!!)
+        // The video, the upload and the match record are all gone, not only the video.
+        listOf<Pair<String, () -> Unit>>(
+            "VIDEO_NOT_FOUND" to { api.video(check!!.videoId) },
+            "UPLOAD_NOT_FOUND" to { api.uploadStatus(session.uploadId!!) },
+            "MATCH_NOT_FOUND" to { api.deleteMatch(session.serverMatchId!!) },
+        ).forEach { (code, call) ->
+            try {
+                call()
+                fail("the server still answers for what the deleted match owned: $code")
+            } catch (error: ApiException) {
+                assertEquals(code, error.code)
+            }
         }
     }
 }

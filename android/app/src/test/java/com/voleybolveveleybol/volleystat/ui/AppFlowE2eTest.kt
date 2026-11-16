@@ -56,6 +56,7 @@ class AppFlowE2eTest {
     private val url = System.getenv("VOLLEYSTAT_E2E_URL")
     private val clip = System.getenv("VOLLEYSTAT_E2E_VIDEO")?.let(::File)
     private var videoId: String? = null
+    private var matchId: String? = null
 
     /** Uploads the clip and stores the match the way the app itself would have left it. */
     @get:Rule(order = 0) val acceptedMatch = object : ExternalResource() {
@@ -71,6 +72,7 @@ class AppFlowE2eTest {
                 onSession = { session = it }, onProgress = { _, _, _ -> }, cancelled = { false },
             )
             videoId = check.videoId
+            matchId = session.serverMatchId
             val files = ApplicationProvider.getApplicationContext<Context>().filesDir
             LocalStore(File(files, "volleystat.json")).save(
                 StoredState(
@@ -87,7 +89,7 @@ class AppFlowE2eTest {
         }
 
         override fun after() {
-            videoId?.let { runCatching { ApiClient(url!!).deleteVideo(it) } }
+            matchId?.let { runCatching { ApiClient(url!!).deleteMatch(it) } }
         }
     }
     @get:Rule(order = 1) val app = createAndroidComposeRule<MainActivity>()

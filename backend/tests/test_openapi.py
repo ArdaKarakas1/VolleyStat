@@ -40,6 +40,6 @@ def test_the_openapi_document_does_not_depend_on_the_analyzer(storage):
 
 def test_the_app_is_version_0_4_0_and_serves_every_route_of_the_contract(storage):
     spec = create_app(storage, analyzer="none").openapi()
-    assert spec["info"]["version"] == "0.4.0"
+    assert spec["info"]["version"] == "0.4.1"
     missing = [(path, method) for path, method in CONTRACT_ROUTES if method not in spec["paths"].get(path, {})]
     assert missing == []

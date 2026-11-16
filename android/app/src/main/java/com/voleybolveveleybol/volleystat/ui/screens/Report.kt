@@ -25,6 +25,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -49,6 +50,7 @@ import com.voleybolveveleybol.volleystat.ui.components.FactRow
 import com.voleybolveveleybol.volleystat.ui.components.ListRow
 import com.voleybolveveleybol.volleystat.ui.components.NotYetCard
 import com.voleybolveveleybol.volleystat.ui.components.Notice
+import com.voleybolveveleybol.volleystat.ui.components.PointTypesDialog
 import com.voleybolveveleybol.volleystat.ui.components.PrimaryButton
 import com.voleybolveveleybol.volleystat.ui.components.RowDivider
 import com.voleybolveveleybol.volleystat.ui.components.SegmentedChoice
@@ -58,6 +60,7 @@ import com.voleybolveveleybol.volleystat.ui.components.Tone
 import com.voleybolveveleybol.volleystat.ui.components.VsCard
 import com.voleybolveveleybol.volleystat.ui.components.dashedOutline
 import com.voleybolveveleybol.volleystat.ui.theme.Dimens
+import com.voleybolveveleybol.volleystat.ui.theme.LocalVsColors
 
 /**
  * A reported number in one of its three honest forms: measured, a lower bound (marked with a
@@ -138,13 +141,23 @@ private fun CompareRow(label: String, home: StatValue, away: StatValue) {
     }
 }
 
+/** [demo] puts the DEMO mark on the card itself, so that a picture of this card alone still says what its numbers are. */
 @Composable
-private fun SectionHeader(text: String) {
-    Text(
-        text, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onPrimary,
-        modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.primary, RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
-            .padding(horizontal = Dimens.cardPadding, vertical = 12.dp).semantics { heading() },
-    )
+private fun SectionHeader(text: String, demo: Boolean = false) {
+    Row(
+        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.primary, RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+            .padding(horizontal = Dimens.cardPadding, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(text, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.weight(1f).semantics { heading() })
+        if (demo) {
+            val extra = LocalVsColors.current
+            Text(
+                stringResource(R.string.status_demo), style = MaterialTheme.typography.labelMedium, color = extra.onCautionContainer,
+                modifier = Modifier.background(extra.cautionContainer, MaterialTheme.shapes.small).padding(horizontal = 8.dp, vertical = 2.dp),
+            )
+        }
+    }
 }
 
 @Composable
@@ -165,6 +178,7 @@ fun ReportScreen(
     onRetry: () -> Unit,
     onBack: () -> Unit,
 ) {
+    var pointTypesOpen by rememberSaveable { mutableStateOf(false) }
     FlowScaffold(title = stringResource(R.string.report_title), onBack = onBack) {
         when {
             load == ReportLoad.LOADING -> ReportLoading()
@@ -201,7 +215,7 @@ fun ReportScreen(
                 }
 
                 VsCard(padding = PaddingValues(0.dp)) {
-                    SectionHeader(stringResource(R.string.report_team_stats))
+                    SectionHeader(stringResource(R.string.report_team_stats), demo = report.mock)
                     Column(Modifier.padding(horizontal = Dimens.cardPadding, vertical = 8.dp)) {
                         CompareRow(stringResource(R.string.report_points), report.home.points, report.away.points)
                         CompareRow(stringResource(R.string.report_attack_points), report.home.attackPoints, report.away.attackPoints)
@@ -218,10 +232,12 @@ fun ReportScreen(
                     ListRow(R.drawable.ic_groups, stringResource(R.string.report_player_stats), null, onOpenPlayers)
                     RowDivider()
                     ListRow(R.drawable.ic_smart_display, stringResource(R.string.report_review_video), null, onOpenReview)
+                    RowDivider()
+                    ListRow(R.drawable.ic_info, stringResource(R.string.definitions_title), null, { pointTypesOpen = true })
                 }
 
                 VsCard(padding = PaddingValues(0.dp)) {
-                    SectionHeader(stringResource(R.string.report_coverage))
+                    SectionHeader(stringResource(R.string.report_coverage), demo = report.mock)
                     Column(Modifier.padding(horizontal = Dimens.cardPadding, vertical = 8.dp)) {
                         report.coverage.forEach { coverage ->
                             FactRow(
@@ -247,6 +263,8 @@ fun ReportScreen(
             }
         }
     }
+    // Outside the states above: a report that reloads underneath does not close the definitions.
+    if (pointTypesOpen) PointTypesDialog { pointTypesOpen = false }
 }
 
 /** A count of confirmed decisions. While decisions are missing it is a lower bound and carries a plus. */
