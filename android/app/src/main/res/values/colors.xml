@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Measured from the brand logo: its cream disc, used behind the launcher artwork. -->
+    <color name="ic_launcher_background">#FCF3E0</color>
+    <color name="window_background">#F5F3FF</color>
+</resources>
