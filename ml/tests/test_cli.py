@@ -287,7 +287,7 @@ def test_evaluate_refuses_input_it_can_not_read(tmp_path, capsys):
 
 @pytest.mark.parametrize("option, value", [
     ("--resamples", 0), ("--resamples", -5), ("--resamples", "many"), ("--tolerance-ms", -1),
-    ("--tolerance-ms", 0.5), ("--seed", -1),
+    ("--tolerance-ms", 0.5), ("--seed", -1), ("--resamples", 1_000_001), ("--resamples", 10 ** 400),
 ])
 def test_evaluate_option_outside_its_range_is_refused_by_the_parser(tmp_path, capsys, option, value):
     gold = write_json(tmp_path / "gold.json", annotation("V1", [(0, 5000)]))

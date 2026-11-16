@@ -906,6 +906,12 @@ def test_the_interval_note_names_only_the_videos_and_matches_that_hold_eligible_
     assert code == 0
     assert "intervals: 95% Wilson score intervals over rallies from 1 video(s) in 1 match group(s)." in out
     assert "  GOLD-layer rallies from 1 video(s) in 1 match group(s)" in out
+    # V2 labelled by one person: its rallies are behind the SINGLE-layer intervals, not behind G3.
+    gold_file(tmp_path, [row if row[0] == "V1" else [*row[:5], "SINGLE_HUMAN"] for row in rows])
+    code, out, _ = evaluate(capsys, "--gold", gold, "--pred", *preds, "--manifest", manifest, "--expect-sha256", digest)
+    assert code == 0
+    assert "intervals: 95% Wilson score intervals over rallies from 2 video(s) in 2 match group(s)." in out
+    assert "  GOLD-layer rallies from 1 video(s) in 1 match group(s)" in out
 
 
 def test_a_manifest_that_can_not_be_trusted_or_does_not_fit_the_videos_is_refused(tmp_path, capsys):
