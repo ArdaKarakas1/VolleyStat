@@ -233,6 +233,8 @@ def test_excluded_gold_and_unscored_decisions_are_counted_and_stay_out_of_the_ra
     gold_block = out[out.index("layer GOLD"):out.index("layer SINGLE")]
     assert ("  hard cases of the double-annotated labels, outside this layer: 1 UNRESOLVABLE, 1 NEEDS_MORE_EVIDENCE; "
             "1 of them got an automatic decision, which was not scored") in gold_block
+    # Only the GOLD layer says it: the SINGLE layer never held double-annotated labels.
+    assert out.count("hard cases of the double-annotated labels") == 1
 
     result = as_json(capsys, "--gold", gold, "--pred", pred)
     assert result["excluded"] == {"NOT_ANNOTATED": 1, "NEEDS_MORE_EVIDENCE": 1, "UNRESOLVABLE": 1, "WINNER_UNKNOWN": 1}
@@ -244,6 +246,19 @@ def test_excluded_gold_and_unscored_decisions_are_counted_and_stay_out_of_the_ra
     layer = result["layers"]["GOLD"]
     assert (layer["eligibleN"], layer["autoN"], layer["correct"], layer["unpairedAutomatic"]) == (32, 32, 31, 3)
     assert (layer["lowerBoundPrecision"]["numerator"], layer["lowerBoundPrecision"]["denominator"]) == (31, 35)
+
+
+def test_a_gold_layer_left_empty_by_hard_cases_still_names_them(tmp_path, capsys):
+    rows = gold_rows("V1", ["HOME"] * 3, status="SINGLE_HUMAN")
+    rows += [["V1", *at(3), "HOME", "OBSERVED", "UNRESOLVABLE"], ["V1", *at(4), "HOME", "OBSERVED", "UNRESOLVABLE"],
+             ["V1", *at(5), "HOME", "OBSERVED", "NEEDS_MORE_EVIDENCE"]]
+    gold = gold_file(tmp_path, rows)
+    pred = pred_file(tmp_path, "V1", [(index, "HOME") for index in range(6)])
+    code, out, _ = evaluate(capsys, "--gold", gold, "--pred", pred)
+    assert code == 0
+    assert ("layer GOLD (double-agreed or adjudicated labels): no eligible rally\n"
+            "  hard cases of the double-annotated labels, outside this layer: 2 UNRESOLVABLE, 1 NEEDS_MORE_EVIDENCE; "
+            "3 of them got an automatic decision, which was not scored\n") in out
 
 
 def test_the_text_shows_what_was_proposed_for_each_gold_side(tmp_path, capsys):

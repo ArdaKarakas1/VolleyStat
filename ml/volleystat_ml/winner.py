@@ -192,10 +192,11 @@ def evaluate_video(gold: Sequence[agreement.Rally], proposals: Sequence[Proposal
     then pair with a rally of another video. Combine videos with pool().
 
     Raises ContradictingProposals when proposals within the tolerance of one gold rally name
-    different winners and at least one of them decides: HOME and AWAY, or a side and UNKNOWN."""
+    different winners: HOME and AWAY, or a side and UNKNOWN. Two values out of HOME, AWAY and
+    UNKNOWN always include a side, so two abstentions never contradict each other."""
     for rally in gold:
         named = {proposal.proposed_winner for proposal in proposals if _within(proposal, rally, tolerance_ms)}
-        if len(named) > 1 and named & set(SIDES):
+        if len(named) > 1:
             raise ContradictingProposals(
                 f"proposals within +/-{tolerance_ms} ms of the gold rally {rally.start_ms}-{rally.end_ms} ms name "
                 f"different winners ({', '.join(sorted(named))}); the component made no single decision on that rally")

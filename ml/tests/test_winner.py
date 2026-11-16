@@ -141,6 +141,20 @@ def test_proposals_that_name_different_winners_for_one_rally_are_refused_in_eith
     assert kinds(winner.evaluate_video([gold(0)], [prop(0, "UNKNOWN"), prop(0, "UNKNOWN", shift=200)])) == ["UNKNOWN"]
 
 
+def test_only_proposals_within_the_tolerance_on_both_ends_can_contradict_each_other():
+    # Exactly at the tolerance on both ends: a candidate for the rally, so the sides contradict.
+    with pytest.raises(winner.ContradictingProposals):
+        winner.evaluate_video([gold(0, "HOME")], [prop(0, "HOME"), prop(0, "AWAY", shift=1000)])
+    # The same start but an end 4 s off: no candidate for the rally, so nothing contradicts.
+    video = winner.evaluate_video([gold(0, "HOME")], [prop(0, "HOME"), Proposal(0, 9000, "AWAY")])
+    assert [(outcome.kind, outcome.reason) for outcome in video.outcomes] == [
+        ("CORRECT", None), ("AUTO_UNPAIRED", "OVERLAPS_GOLD")]
+    # A same-side proposal exactly at the tolerance is a second proposal, not a boundary miss.
+    twice = winner.evaluate_video([gold(0, "HOME")], [prop(0, "HOME"), prop(0, "HOME", shift=1000)])
+    assert [(outcome.kind, outcome.reason) for outcome in twice.outcomes] == [
+        ("CORRECT", None), ("AUTO_UNPAIRED", "SECOND_PROPOSAL")]
+
+
 def test_a_proposal_that_only_touches_a_gold_rally_does_not_overlap_it():
     video = winner.evaluate_video([gold(0, "HOME")], [prop(0, "HOME", shift=5000)])
     assert [(outcome.kind, outcome.reason) for outcome in video.outcomes] == [
