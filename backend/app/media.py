@@ -10,14 +10,18 @@ import json
 import math
 import shutil
 import subprocess
+import threading
 from dataclasses import dataclass, field
 from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
-PROBE_VERSION = "ffprobe-v1"
+PROBE_VERSION = "ffprobe-v2"
 PROBE_TIMEOUT_SECONDS = 90
 MAX_DURATION_SECONDS = 12 * 3600
+TAIL_WINDOW_SECONDS = 2.0
+# 24p material is usually 24000/1001 (23.976) fps; only clearly slower video is flagged.
+MIN_FRAME_RATE = 23.5
 ACCEPTED_CODECS = {"h264", "hevc", "vp8", "vp9", "av1"}
 
 READY = "READY"
@@ -30,12 +34,20 @@ VIDEO_CORRUPT = "VIDEO_CORRUPT"
 UNSUPPORTED_CODEC = "UNSUPPORTED_CODEC"
 VIDEO_DURATION_INVALID = "VIDEO_DURATION_INVALID"
 PROBE_UNAVAILABLE = "PROBE_UNAVAILABLE"
+PROBE_TIMEOUT = "PROBE_TIMEOUT"
 
 # Warnings (video is accepted into a lower quality layer, never auto-rejected).
 LOW_RESOLUTION = "LOW_RESOLUTION"
 LOW_FRAME_RATE = "LOW_FRAME_RATE"
 PORTRAIT_ORIENTATION = "PORTRAIT_ORIENTATION"
 VARIABLE_FRAME_RATE = "VARIABLE_FRAME_RATE"
+CONTAINER_MISMATCH = "CONTAINER_MISMATCH"
+
+_CONTAINER_FAMILY = {
+    "video/mp4": "iso", "video/quicktime": "iso",
+    "video/webm": "matroska", "video/x-matroska": "matroska",
+}
+_TRUNCATION_MARKERS = ("ended prematurely", "partial file", "Invalid NAL unit size", "Truncating packet")
 
 
 @dataclass
@@ -75,15 +87,104 @@ def _rotation(stream: dict[str, Any]) -> int:
     for value in candidates:
         try:
             return int(float(value)) % 360
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             continue
     return 0
 
 
-def probe_video(path: Path) -> ProbeResult:
+def _iso_boxes_fit(path: Path) -> bool:
+    """True when every top-level MP4/MOV box lies inside the file.
+
+    A file cut short after its index (moov first, "faststart") still has valid
+    headers, so the declared box sizes are the only cheap proof of truncation.
+    """
+    size = path.stat().st_size
+    offset = 0
+    with path.open("rb") as handle:
+        while size - offset >= 8:
+            handle.seek(offset)
+            header = handle.read(16)
+            length = int.from_bytes(header[:4], "big")
+            if length == 0:  # box runs to the end of the file
+                return True
+            if length == 1:
+                if len(header) < 16:
+                    return False
+                length = int.from_bytes(header[8:16], "big")
+                if length < 16:
+                    return False
+            elif length < 8:
+                return False
+            if offset + length > size:
+                return False
+            offset += length
+    return True
+
+
+def _tail_is_readable(path: Path, demuxer: str, duration: float) -> bool | None:
+    """Read the packets of the last seconds. None means the check itself timed out.
+
+    The listing grows with the number of packets, which the uploader controls, so it is read line
+    by line and only the latest packet time is kept.
+    """
+    start = max(0.0, duration - TAIL_WINDOW_SECONDS)
+    command = [
+        "ffprobe", "-v", "error", "-protocol_whitelist", "file", "-f", demuxer,
+        "-read_intervals", f"{start:.3f}%",
+        # One line per packet: "pts_time,dts_time", with "N/A" for a time the packet does not carry.
+        "-show_entries", "packet=pts_time,dts_time", "-of", "csv=p=0", str(path),
+    ]
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace")
+    timed_out = threading.Event()
+    truncated = threading.Event()
+
+    def stop_late_process() -> None:
+        timed_out.set()
+        process.kill()
+
+    def scan_errors() -> None:
+        for line in process.stderr:
+            if any(marker in line for marker in _TRUNCATION_MARKERS):
+                truncated.set()
+
+    watchdog = threading.Timer(PROBE_TIMEOUT_SECONDS, stop_late_process)
+    # ffprobe blocks once a pipe is full, so the error stream is drained while the packets are read.
+    errors = threading.Thread(target=scan_errors, name="volleystat-ffprobe-errors", daemon=True)
+    watchdog.start()
+    errors.start()
+    latest = None
+    try:
+        for line in process.stdout:
+            for field in line.split(",")[:2]:
+                try:
+                    stamp = float(field)
+                except ValueError:
+                    continue
+                latest = stamp if latest is None else max(latest, stamp)
+                break
+        process.wait()
+    except BaseException:
+        process.kill()
+        raise
+    finally:
+        process.wait()
+        watchdog.cancel()
+        errors.join()
+        process.stdout.close()
+        process.stderr.close()
+    if timed_out.is_set():
+        return None
+    if process.returncode != 0 or truncated.is_set():
+        return False
+    return latest is not None and latest >= duration - TAIL_WINDOW_SECONDS
+
+
+def probe_video(path: Path, declared_mime: str | None = None) -> ProbeResult:
     demuxer = _demuxer(path)
     if demuxer is None:
         return ProbeResult(QUARANTINED, NOT_A_VIDEO)
+    if demuxer == "mov" and not _iso_boxes_fit(path):
+        return ProbeResult(QUARANTINED, VIDEO_CORRUPT)
     command = [
         "ffprobe", "-v", "error", "-protocol_whitelist", "file", "-f", demuxer,
         "-show_entries",
@@ -98,7 +199,10 @@ def probe_video(path: Path) -> ProbeResult:
         )
     except FileNotFoundError:
         return ProbeResult(STORED_UNVALIDATED, PROBE_UNAVAILABLE)
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+    except subprocess.TimeoutExpired:
+        # Not proof of a bad file: the video stays unvalidated and can be checked again.
+        return ProbeResult(STORED_UNVALIDATED, PROBE_TIMEOUT)
+    except subprocess.CalledProcessError:
         return ProbeResult(QUARANTINED, VIDEO_CORRUPT)
 
     try:
@@ -153,14 +257,23 @@ def probe_video(path: Path) -> ProbeResult:
     if codec not in ACCEPTED_CODECS:
         return ProbeResult(QUARANTINED, UNSUPPORTED_CODEC, media)
 
+    tail = _tail_is_readable(path, demuxer, duration)
+    if tail is None:
+        return ProbeResult(STORED_UNVALIDATED, PROBE_TIMEOUT, media)
+    if not tail:
+        return ProbeResult(QUARANTINED, VIDEO_CORRUPT, media)
+
     warnings = []
     if min(width, height) < 720:
         warnings.append(LOW_RESOLUTION)
     if height > width:
         warnings.append(PORTRAIT_ORIENTATION)
     fps = average or nominal
-    if fps is not None and fps < 24:
+    if fps is not None and fps < MIN_FRAME_RATE:
         warnings.append(LOW_FRAME_RATE)
     if average and nominal and abs(average - nominal) / nominal > 0.02:
         warnings.append(VARIABLE_FRAME_RATE)
+    declared = _CONTAINER_FAMILY.get(declared_mime or "")
+    if declared and declared != _CONTAINER_FAMILY[mime]:
+        warnings.append(CONTAINER_MISMATCH)
     return ProbeResult(READY, None, media, warnings)
