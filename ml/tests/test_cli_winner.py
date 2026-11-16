@@ -292,6 +292,20 @@ def test_a_component_without_confidences_has_no_calibration_and_no_confident_wro
     assert calibration["highConfidence"]["wrong"] is None
 
 
+def test_a_layer_without_an_automatic_decision_reports_no_calibration(tmp_path, capsys):
+    rows = gold_rows("V1", ["HOME"] * 3) + gold_rows("V2", ["AWAY"] * 3, status="SINGLE_HUMAN")
+    gold = gold_file(tmp_path, rows)
+    preds = [pred_file(tmp_path, "V1", [(index, "HOME", 0.8) for index in range(3)]),
+             pred_file(tmp_path, "V2", [(index, "UNKNOWN") for index in range(3)])]
+    code, out, _ = evaluate(capsys, "--gold", gold, "--pred", *preds)
+    assert code == 0
+    single = out[out.index("layer SINGLE"):]
+    assert "  selective precision: not defined, there is no automatic decision on these rallies" in single
+    # Nothing was decided there, so a calibration line would read as a component without confidences.
+    assert "calibration" not in single and "wrong with a confidence" not in single
+    assert "  calibration over 3 automatic decisions that carry a confidence (0 carry none):" in out[:out.index("layer SINGLE")]
+
+
 def confident(tmp_path, count=40):
     """`count` decisions at 0.9 of which every tenth is wrong, and two at 0.55 (one wrong)."""
     gold = gold_file(tmp_path, gold_rows("V1", ["HOME"] * (count + 3)))

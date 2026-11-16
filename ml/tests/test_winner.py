@@ -179,6 +179,8 @@ def test_unscored_decisions_with_a_high_confidence_are_counted_on_their_own():
     )
     # The wrong decision on the eligible rally is the layer's own count, not this one.
     assert evaluation.unscored_high_confidence(0.9) == 2
+    assert evaluation.unscored_high_confidence(0.92) == 2
+    assert evaluation.unscored_high_confidence(0.93) == 1
     assert evaluation.layers["GOLD"].calibration.high_confidence(0.9) == (1, 1)
     # No unscored decision with a confidence: unknown, not zero.
     assert one_video([gold(0)], [prop(0), prop(5, "HOME")]).unscored_high_confidence(0.9) is None
@@ -254,7 +256,8 @@ def test_the_wilson_interval_of_known_counts(successes, total, low, high):
     assert interval.confidence == 0.95
 
 
-@pytest.mark.parametrize("total", [1, 5, 30, 60, 200, 1000])
+# At 21 rallies the closed form gives a lower end of -1.4e-17 for 0 successes.
+@pytest.mark.parametrize("total", [1, 5, 21, 30, 60, 200, 1000])
 def test_the_wilson_interval_never_leaves_zero_to_one_and_contains_its_own_ratio(total):
     assert winner.wilson_interval(total, total).high == 1.0
     assert winner.wilson_interval(0, total).low == 0.0
@@ -265,7 +268,7 @@ def test_the_wilson_interval_never_leaves_zero_to_one_and_contains_its_own_ratio
 
 def test_the_wilson_interval_refuses_counts_that_are_not_a_share():
     for successes, total in ((1, 0), (-1, 5), (6, 5)):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match=f"^{successes} of {total} is not a share$"):
             winner.wilson_interval(successes, total)
 
 
@@ -348,6 +351,8 @@ def test_nothing_is_measured_when_the_predictions_hold_no_automatic_proposal():
 @pytest.mark.parametrize("confidence, index", [
     (0.0, 0), (0.05, 0), (0.0999999, 0), (0.1, 1), (0.3, 3), (0.5, 5), (0.6, 6), (0.7, 7), (0.8, 8),
     (0.9, 9), (0.95, 9), (1.0, 9),
+    # Computed values a floating point hair below their edge: 0.19999999999999998 and 0.09999999999999998.
+    (0.3 - 0.1, 2), (1 - 0.9, 1),
 ])
 def test_a_confidence_on_an_edge_belongs_to_the_bin_above_it(confidence, index):
     assert winner.bin_index(confidence) == index
@@ -370,6 +375,20 @@ def test_brier_and_ece_of_a_small_hand_computed_case():
     assert calibration.ece == pytest.approx(3 / 5 * abs(2 / 3 - 0.9) + 2 / 5 * abs(1 / 2 - 0.6))
     assert [(row.low, row.high, row.n, row.correct) for row in calibration.bins] == [(0.6, 0.7, 2, 1), (0.9, 1.0, 3, 2)]
     assert [row.mean_confidence for row in calibration.bins] == pytest.approx([0.6, 0.9])
+
+
+def test_an_overconfident_bin_and_an_underconfident_bin_do_not_cancel_out():
+    # Bin [0.9, 1.0]: mean confidence 0.9, 1 of 2 correct. Bin [0.1, 0.2): mean confidence 0.1, 1 of 2 correct.
+    calibration = calibrated_layer([(0.9, True), (0.9, False), (0.1, True), (0.1, False)]).calibration
+    assert calibration.ece == pytest.approx(2 / 4 * 0.4 + 2 / 4 * 0.4)
+
+
+def test_an_abstention_is_no_decision_even_when_it_carries_a_confidence():
+    layer = one_video([gold(0), gold(1), gold(2)], [prop(0, "HOME", 0.95), prop(1, "UNKNOWN", 0.97), prop(2, "UNKNOWN")]).layers["GOLD"]
+    assert (layer.correct, layer.unknown) == (1, 2)
+    calibration = layer.calibration
+    assert (calibration.n, calibration.without_confidence) == (1, 0)
+    assert calibration.high_confidence(0.9) == (1, 0)
 
 
 def test_calibration_reads_only_the_decisions_that_carry_a_confidence():
