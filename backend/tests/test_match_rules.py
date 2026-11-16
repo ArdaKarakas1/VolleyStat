@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from app.analyzers.base import MOCK, AnalyzerInfo
 from app.main import create_app
-from tests.helpers import ScriptedAnalyzer, cards, decide, one_match, only_sets, proposals, request_job, rows, run_pending, serve, tiny_clip
+from tests.helpers import ScriptedAnalyzer, cards, decide, one_match, only_sets, proposals, request_job, rows, run_pending, serve, tiny_clip, without_statistics
 from tests.test_api import create_match
 from tests.test_media import store
 
@@ -159,6 +159,23 @@ def test_two_matches_count_with_their_own_rules(storage, make_clip):
             counted[name] = (only_sets(listing(client, job_id)), one_match(report_of(client, match_id)["score"])["setsWon"])
         assert counted["fivb"] == ([set_line(1, 21, 0, complete=False)], {"home": 0, "away": 0})
         assert counted["to 21"] == ([set_line(1, 21, 0)], {"home": 1, "away": 0})
+
+
+def test_the_rally_list_and_the_report_split_two_matches_alike(storage, make_clip):
+    # Best of three to 15: HOME wins 15-0 and 15-0, and rally 31 opens the second match.
+    with serve(storage, ScriptedAnalyzer(result=proposals(SPANS))) as client:
+        match_id = create_match(client, rules={"setsToWin": 2, "setTarget": 15, "decidingSetTarget": 15})
+        job_id = analysed(client, minute_clip(make_clip), match_id)
+        answer_winners(client, job_id, ["HOME"] * 31)
+        found = listing(client, job_id)
+        report = report_of(client, match_id)
+    assert [(part["number"], part["kind"], part["setsWon"]) for part in found["matches"]] == [
+        (1, "MATCH", {"home": 2, "away": 0}), (2, "STOPPED", {"home": 0, "away": 0})]
+    assert found["matches"] == without_statistics(report["score"]["matches"])
+    after = {rally["sequence"]: rally["scoreAfter"] for rally in found["rallies"]}
+    assert after[30] == {"match": 1, "set": 2, "home": 15, "away": 0}
+    assert after[31] == {"match": 2, "set": 1, "home": 1, "away": 0}
+    assert after[32] is None
 
 
 # --- changing the rule ------------------------------------------------------------------------

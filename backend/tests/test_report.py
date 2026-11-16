@@ -238,6 +238,8 @@ def test_an_undecided_rally_right_after_a_finished_set_makes_the_score_partial()
     # The second set has no counted point, so it gets no line.
     assert result == {"status": "PARTIAL", "setsWon": {"home": 1, "away": 0},
                       "sets": [{"number": 1, "home": 25, "away": 0, "complete": True}], "stoppedAtRally": 26}
+    # The match may still be won after the stop, so its part is stopped and not unfinished.
+    assert full_score([won(HOME)] * 25 + [OPEN])["matches"][0]["kind"] == "STOPPED"
 
 
 def test_review_in_progress_shows_the_counted_points_of_the_open_set():
@@ -410,6 +412,43 @@ def test_the_running_score_and_the_report_count_with_the_same_rule():
     assert matches[0]["sets"] == [set_line(1, 21, 19), set_line(2, 10, 21), set_line(3, 9, 0, complete=False)]
     assert after[40] == {"match": 1, "set": 1, "home": 21, "away": 19} and after[41] == {"match": 1, "set": 2, "home": 1, "away": 0}
     assert after[len(rallies)] == {"match": 1, "set": 3, "home": 9, "away": 0}
+
+
+@pytest.mark.parametrize("rules", OFFERED, ids=lambda r: f"{r.sets_to_win}-{r.set_target}-{r.deciding_set_target}")
+def test_the_running_score_and_the_report_split_several_matches_alike(rules):
+    wins = rules.sets_to_win
+    rallies = [{**rally, "sequence": position} for position, rally in enumerate(
+        match_of(wins, wins - 1, rules=rules) + [NOT_A_RALLY] + match_of(0, wins, rules=rules) + [won(HOME)] * 3, start=1)]
+    matches, after = report_module.running_score(rallies, rules=rules)
+    reported = report_module.build_report(rallies, rules=rules)["score"]["matches"]
+    assert matches == without_statistics(reported)
+    assert [(match["number"], match["kind"]) for match in matches] == [(1, "MATCH"), (2, "MATCH"), (3, "AFTER_MATCH")]
+    # The first rally of each part opens set 1 of its own match.
+    for match in matches:
+        first = match["firstRally"]
+        assert after[first]["match"] == match["number"] and after[first]["set"] == 1
+        assert max(after[first]["home"], after[first]["away"]) == 1
+    # Every counted rally carries the number of the part whose rallies hold it.
+    by_number = {match["number"]: match for match in matches}
+    counted = [rally["sequence"] for rally in rallies if rally["status"] == "VERIFIED"]
+    assert sorted(after) == counted
+    for sequence, point in after.items():
+        assert by_number[point["match"]]["firstRally"] <= sequence <= by_number[point["match"]]["lastRally"]
+    assert after[counted[-1]] == {"match": 3, "set": 1, "home": 3, "away": 0}
+
+
+def test_a_stop_on_the_first_rally_of_a_set_inside_a_later_match_stops_that_match():
+    # Match 1 ends 3-0. Match 2 stands at 1-2 in sets when the count meets an unsure rally,
+    # and match 2 may still end 3-2, so its part is stopped and its statistics are not measured.
+    rallies = match_of(3, 0) + [won(AWAY)] * 25 + [won(HOME)] * 25 + [won(AWAY)] * 25 + [UNSURE] + [won(HOME)] * 5
+    report = build_report(rallies)
+    assert parts(report["score"]) == [("MATCH", HOME, (3, 0)), ("STOPPED", None, (1, 2))]
+    assert (report["score"]["stoppedAtRally"], report["score"]["unplacedRallies"]) == (151, 6)
+    match, stopped = report["score"]["matches"]
+    assert match["teams"]["home"]["points"] == measured(75)
+    assert stopped["teams"]["home"]["points"] == partial(25) and stopped["teams"]["away"]["points"] == partial(50)
+    # A count that stops on the first rally of a match without a finished one stops it as well.
+    assert parts(full_score([won(HOME)] * 25 + [won(AWAY)] * 25 + [OPEN])) == [("STOPPED", None, (1, 1))]
 
 
 def test_a_rule_touches_only_the_set_score_and_the_rules():

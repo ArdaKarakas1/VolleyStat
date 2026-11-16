@@ -5,6 +5,7 @@ import com.voleybolveveleybol.volleystat.model.AnalysisSummary
 import com.voleybolveveleybol.volleystat.model.MatchRules
 import com.voleybolveveleybol.volleystat.model.Rally
 import com.voleybolveveleybol.volleystat.model.ReviewCard
+import com.voleybolveveleybol.volleystat.model.SetPoint
 import com.voleybolveveleybol.volleystat.model.StatValue
 import com.voleybolveveleybol.volleystat.model.UploadSession
 import com.voleybolveveleybol.volleystat.model.VideoCheck
@@ -148,6 +149,8 @@ class BackendE2eTest {
             assertEquals(StatValue(null, StatValue.UNKNOWN), draft.home.points)
             assertEquals(StatValue(null, StatValue.UNKNOWN), draft.away.points)
             assertTrue(draft.matches.isEmpty())
+            assertEquals(1, draft.scoreStoppedAtRally)
+            assertEquals("every open rally lies after the stop", total, draft.unplacedRallies)
 
             // First rally to the home side, every other rally to the away side.
             deck.cards.forEachIndexed { index, card ->
@@ -165,6 +168,7 @@ class BackendE2eTest {
             assertEquals(StatValue(1, StatValue.PARTIAL), scored.home.points)
             assertEquals(StatValue(total - 1, StatValue.PARTIAL), scored.away.points)
             assertNull(scored.scoreStoppedAtRally)
+            assertEquals("the count reached the end, so no rally is left outside a match", 0, scored.unplacedRallies)
             assertEquals(listOf(1 to total - 1), scored.matches.single().sets.map { it.home to it.away })
             assertTrue(scored.matches.single().sets.none { it.complete })
             // Nobody said how the points were scored, so the kinds of points stay unknown.
@@ -252,6 +256,8 @@ class BackendE2eTest {
             list = api.rallies(job.id)
             assertEquals(done.rallyListVersion, list.version)
             assertEquals("the list carries the set scores of its own version", listOf(Triple(1, list.rallies.size, 0)), list.matches.flatMap { it.sets }.map { Triple(it.number, it.home, it.away) })
+            // Each counted rally names its match and its set, and the last one closes the count at the home score.
+            assertEquals(list.rallies.indices.map { SetPoint(1, it + 1, 0, match = 1) }, list.rallies.map { it.scoreAfter })
             refused("MOCK_LIST_NOT_CONFIRMABLE") { api.confirmRallyList(job.id, list.version) }
 
             val report = api.report(matchId)!!

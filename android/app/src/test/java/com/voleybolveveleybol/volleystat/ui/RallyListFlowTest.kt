@@ -124,7 +124,7 @@ class RallyListFlowTest {
         JSONObject().put("id", "r${index + 1}").put("sequence", index + 1).put("startMs", spans[index].first).put("endMs", spans[index].second)
             .put("origin", "ANALYZER").put("status", if (winners[index] != null) "VERIFIED" else if (index in unsure) "UNRESOLVED" else "PROPOSED")
             .put("proposedWinner", "UNKNOWN").put("winner", winners[index] ?: JSONObject.NULL)
-            .put("scoreAfter", score?.let { JSONObject().put("set", 1).put("home", it.first).put("away", it.second) } ?: JSONObject.NULL)
+            .put("scoreAfter", score?.let { JSONObject().put("match", 1).put("set", 1).put("home", it.first).put("away", it.second) } ?: JSONObject.NULL)
     })).put("rallyListVersion", version).put("listConfirmed", confirmed).put("videoDurationMs", 60_000).put("rules", rulesJson())
         .put("matches", JSONArray(listOfNotNull(scores().lastOrNull { it != null }?.let { partJson(listOf(SetScore(1, it.first, it.second, false))) })))
 
@@ -150,7 +150,7 @@ class RallyListFlowTest {
             .put("rallyList", JSONObject().put("confirmed", confirmed).put("confirmedAt", JSONObject.NULL).put("corrections", 0))
             .put("rallies", JSONObject().put("proposed", 3).put("total", 3).put("userCreated", 0).put("verified", home + away).put("rejected", 0)
                 .put("unresolved", unsure.size).put("open", open))
-            .put("score", JSONObject().put("status", if (confirmed) "MEASURED" else "PARTIAL").put("stoppedAtRally", JSONObject.NULL)
+            .put("score", JSONObject().put("status", if (confirmed) "MEASURED" else "PARTIAL").put("stoppedAtRally", JSONObject.NULL).put("unplacedRallies", 0)
                 .put("matches", JSONArray(listOf(partJson(listOf(SetScore(1, home, away, false)))))))
             .put("teams", JSONObject().put("home", team(home)).put("away", team(away)))
             .put("players", JSONArray()).put("unattributed", JSONObject().put("home", home).put("away", away))

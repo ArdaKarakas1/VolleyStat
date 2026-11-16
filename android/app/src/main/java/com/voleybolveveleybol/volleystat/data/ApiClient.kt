@@ -223,7 +223,7 @@ class ApiClient(
     private fun parseRally(json: JSONObject) = Rally(
         id = json.getString("id"), sequence = json.getInt("sequence"), startMs = json.getLong("startMs"), endMs = json.getLong("endMs"),
         fromAnalyzer = json.getString("origin") == "ANALYZER", status = json.getString("status"), winner = json.optStringOrNull("winner"),
-        scoreAfter = json.optJSONObject("scoreAfter")?.let { SetPoint(it.getInt("set"), it.getInt("home"), it.getInt("away"), it.optInt("match", 1)) },
+        scoreAfter = json.optJSONObject("scoreAfter")?.let { SetPoint(it.getInt("set"), it.getInt("home"), it.getInt("away"), it.getInt("match")) },
     )
 
     /** The report of a match, or null when the match has no analysis job. */
@@ -275,7 +275,7 @@ class ApiClient(
             scoreStatus = score.getString("status"),
             matches = score.getJSONArray("matches").objects().map(::parsePart),
             scoreStoppedAtRally = score.intOrNull("stoppedAtRally"),
-            unplacedRallies = score.optInt("unplacedRallies", 0),
+            unplacedRallies = score.getInt("unplacedRallies"),
             ralliesMayBeMissing = json.optBoolean("ralliesMayBeMissing", false),
             listConfirmed = json.optJSONObject("rallyList")?.optBoolean("confirmed", false) ?: false,
             corrections = json.optJSONObject("rallyList")?.optInt("corrections", 0) ?: 0,
