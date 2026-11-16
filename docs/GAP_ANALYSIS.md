@@ -276,11 +276,7 @@ Doğrulayıcılar iki adayı reddetti. Önceki rallinin kazananından çıkarıl
 | Kendi çektiğin bir ya da iki amatör salon maçı ve oyuncuların yazılı izni | Model seçimi ve ölçüm izinli video olmadan başlayamaz. Açı ve izin ayrıntısı `docs/AI_PLAN.md` 4.1 bölümünde. |
 | Voleybol bilen ikinci bir etiketçi | Gold etiket iki bağımsız etiketçi ister (B0). |
 | Gerçek telefonda bir deneme | Emülatör gerçek salonu, tripodu ve uzun kaydı temsil etmez. |
-| Lisans yönü kararı | Kod kapalı ticari ürün mü olacak, AGPL ile açık mı kalacak? Karar kullanılabilir model listesini değiştirir (`docs/AI_PLAN.md` 2. bölüm). |
-| Uygulama simgesi kararı | Suluboya logo küçük boyda zor okunur ve mor arayüzle aynı paleti paylaşmaz. |
-| Bulut ve GPU kararı | Ücretli hizmet onayı sende. O zamana kadar her şey yerelde çalışır. |
-| Depo görünürlüğü | Depo herkese açık. Kapalı olmasını istersen GitHub ayarından değiştirirsin. |
-| Maçın bitişi | Sunucu maçı bitirmez. Takımlar 2-0 biten üç setlik maçta bir dostluk seti oynarsa sunucu o seti de karar seti olarak sayar ve kazanılan setlere katar (ADR-0115). Sunucu bir takım gereken seti alınca sayımı durdurabilir. Bu da o dostluk setini rapordan çıkarır. Karar senin. |
-| Kural değerleri | Kullanıcı setin ve karar setinin sayısı için yalnız 25, 21 ve 15 arasından seçer. Başka bir değer (30 sayı, sayı tavanı) gerekiyorsa sen söylersin. |
-| İzin cümlesinin hukuki onayı | Uygulama 14 Kasım kararınla şu cümleyi gösterir: "Bu videoyu yükleme hakkım var. Sahadaki oyuncular çekimi biliyor ve analiz için izin verdi." Hiçbir KVKK uzmanı bu cümleyi okumadı. Cümle kişisel veri konusudur ve son hâlini bir uzman onaylar. |
-| Geri bildirim adresi | Uygulama içinden geri bildirim için bir e-posta adresi gerekir. Adresi yalnız sen verebilirsin. |
+| Depo görünürlüğü | Depo herkese açık. Kod kapalı ticari ürün olarak kalacağı için ekip deponun gizli olmasını önerir. Ayarı GitHub'da sen değiştirirsin. |
+| İzin cümlesinin hukuki onayı (ürün sahibi sonraya bıraktı) | Uygulama 14 Kasım kararınla şu cümleyi gösterir: "Bu videoyu yükleme hakkım var. Sahadaki oyuncular çekimi biliyor ve analiz için izin verdi." Hiçbir KVKK uzmanı bu cümleyi okumadı. Cümle kişisel veri konusudur ve son hâlini bir uzman onaylar. |
+
+16 Kasım 2026'da verilen kararlar (ADR-0117): Kod kapalı ticari ürün olarak kalır ve ürün yalnız serbest lisanslı modelleri kullanır. Suluboya logo simge olarak kalır. Kural değerleri 25, 21 ve 15 olarak kalır. Bir video birden çok maç taşıyabilir ve maç bir takım gereken sete ulaşınca biter. Geri bildirim `voleybolveveleybol@gmail.com` adresine gider. Ürün sahibinin GPU'su yok ve analiz yerelde işlemcide çalışır.

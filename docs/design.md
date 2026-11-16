@@ -98,4 +98,4 @@ Her ekran dört durumu çizer: yükleniyor, boş, hata ve dolu. Hata mesajı ney
 
 ## Uygulama simgesi
 
-Simge ürün sahibinin verdiği suluboya logodur (krem, lacivert, turuncu). Uygulamanın içi mor ve beyazdır. İki kimlik aynı paleti paylaşmaz. Logo ayrıntılı bir çizimdir ve küçük boyda okunması zordur. Bu karar marka sahibine aittir. Uygulama logoyu açılış ekranında ve Profil sekmesinde küçük boyda gösterir.
+Simge ürün sahibinin verdiği suluboya logodur (krem, lacivert, turuncu). Uygulamanın içi mor ve beyazdır. İki kimlik aynı paleti paylaşmaz. Logo ayrıntılı bir çizimdir ve küçük boyda okunması zordur. Ürün sahibi 16 Kasım 2026'da logonun simge olarak kalmasına karar verdi (ADR-0117). Uygulama logoyu açılış ekranında ve Profil sekmesinde küçük boyda gösterir. Logonun üstündeki yazı ana ekrandaki küçük simgede okunmaz. Yazısız tek bir işaret bu boyda daha iyi çalışır. Ürün sahibi yeni bir simge verirse ekip onu bu iki boyda dener.

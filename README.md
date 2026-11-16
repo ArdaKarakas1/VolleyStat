@@ -98,6 +98,10 @@ Depo herkese açıktır. Maç videoları, oyuncu verileri, API anahtarları, ver
 
 `tools/import_youtube.py` yalnızca indirme ve kullanım hakkı belgelenmiş videolar içindir. Araç `--rights` ile bir lisans ya da yazılı izin referansı ister ve bunu videonun yanına kaydeder. Bir YouTube bağlantısının var olması eğitim hakkı vermez.
 
+## Lisans
+
+VolleyStat kapalı bir ticari ürünün kaynağıdır. `LICENSE` dosyası bütün hakları saklı tutar: Depoyu okuyabilmek kodu kullanma, kopyalama ya da dağıtma hakkı vermez. Ürün yalnız Apache 2.0, MIT ve BSD gibi serbest lisanslı modelleri ve kütüphaneleri kullanır. Kararın gerekçesi ADR-0117'dedir.
+
 ## Belgeler
 
 - [docs/GAP_ANALYSIS.md](docs/GAP_ANALYSIS.md): Gereksinim ve kod farkı, sıradaki işler

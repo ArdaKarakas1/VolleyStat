@@ -58,6 +58,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import com.voleybolveveleybol.volleystat.AppUiState
+import com.voleybolveveleybol.volleystat.FEEDBACK_ADDRESS
 import com.voleybolveveleybol.volleystat.R
 import com.voleybolveveleybol.volleystat.ServerTest
 import com.voleybolveveleybol.volleystat.UploadProgress
@@ -317,8 +318,11 @@ fun ProfileScreen(
     onServerTarget: (ServerTarget) -> Unit,
     onTestServer: () -> Unit,
     onDeleteRecording: (String) -> Unit,
+    // Opens the mail app; false when the phone has none.
+    onSendFeedback: () -> Boolean,
 ) {
     var recordingToDelete by rememberSaveable { mutableStateOf<String?>(null) }
+    var noMailApp by rememberSaveable { mutableStateOf(false) }
     TabScaffold {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Image(painterResource(R.drawable.brand_logo), contentDescription = stringResource(R.string.logo_description), modifier = Modifier.size(56.dp).clip(CircleShape))
@@ -422,6 +426,15 @@ fun ProfileScreen(
                     Text(stringResource(R.string.recordings_in_use), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
+        }
+        SectionTitle(stringResource(R.string.profile_feedback))
+        VsCard {
+            Text(stringResource(R.string.feedback_body), style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.height(8.dp))
+            Text(stringResource(R.string.feedback_address, FEEDBACK_ADDRESS), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(12.dp))
+            SecondaryButton(stringResource(R.string.action_send_feedback), { noMailApp = !onSendFeedback() })
+            if (noMailApp) Notice(stringResource(R.string.feedback_no_mail_app), Tone.CAUTION, Modifier.padding(top = 12.dp))
         }
         Text(stringResource(R.string.profile_version, versionName), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }

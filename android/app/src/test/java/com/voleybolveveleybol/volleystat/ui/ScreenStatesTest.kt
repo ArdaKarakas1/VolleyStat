@@ -53,6 +53,7 @@ import com.voleybolveveleybol.volleystat.ui.screens.ClipPlaceholder
 import com.voleybolveveleybol.volleystat.ui.screens.HomeScreen
 import com.voleybolveveleybol.volleystat.ui.screens.MatchCreateScreen
 import com.voleybolveveleybol.volleystat.ui.screens.PlayersScreen
+import com.voleybolveveleybol.volleystat.FEEDBACK_ADDRESS
 import com.voleybolveveleybol.volleystat.ui.screens.ProfileScreen
 import com.voleybolveveleybol.volleystat.ui.screens.ReportScreen
 import com.voleybolveveleybol.volleystat.ui.screens.ReviewScreen
@@ -342,17 +343,31 @@ class ScreenStatesTest {
         val used = RecordingFile("kayit-1.mp4", "/files/recordings/kayit-1.mp4", 10)
         val free = RecordingFile("kayit-2.mp4", "/files/recordings/kayit-2.mp4", 10)
         val state = AppUiState(draft = Draft(homeTeam = "A", video = video.copy(location = used.path)), recordings = listOf(used, free))
-        show { ProfileScreen(state, "0.4.2", {}, {}, {}, {}) }
+        show { ProfileScreen(state, "0.4.2", {}, {}, {}, {}, { true }) }
         compose.onNodeWithText(text(R.string.recordings_in_use)).performScrollTo().assertIsDisplayed()
         assertEquals(0, compose.onAllNodesWithContentDescription(text(R.string.recording_delete_description, used.name)).fetchSemanticsNodes().size)
         assertEquals(1, compose.onAllNodesWithContentDescription(text(R.string.recording_delete_description, free.name)).fetchSemanticsNodes().size)
     }
 
     @Test fun theProfileSaysWhoSeesTheVideoHowLongTheServerKeepsItAndHowItIsDeleted() {
-        show { ProfileScreen(AppUiState(), "0.4.2", {}, {}, {}, {}) }
+        show { ProfileScreen(AppUiState(), "0.4.2", {}, {}, {}, {}, { true }) }
         listOf(R.string.privacy_accounts, R.string.privacy_retention, R.string.privacy_delete, R.string.privacy_faces).forEach {
             compose.onNodeWithText(text(it)).performScrollTo().assertIsDisplayed()
         }
+    }
+
+    @Test fun theProfileOpensTheMailAppForFeedbackAndNamesTheAddressWhenThereIsNone() {
+        var opened = 0
+        var mailApp = true
+        show { ProfileScreen(AppUiState(), "0.4.2", {}, {}, {}, {}, { opened++; mailApp }) }
+        compose.onNodeWithText(text(R.string.feedback_address, FEEDBACK_ADDRESS)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.action_send_feedback)).performScrollTo().performClick()
+        assertEquals(1, opened)
+        assertEquals(0, compose.onAllNodesWithText(text(R.string.feedback_no_mail_app)).fetchSemanticsNodes().size)
+        mailApp = false
+        compose.onNodeWithText(text(R.string.action_send_feedback)).performScrollTo().performClick()
+        assertEquals(2, opened)
+        compose.onNodeWithText(text(R.string.feedback_no_mail_app)).performScrollTo().assertIsDisplayed()
     }
 
     @Test fun theStartButtonOfTheWelcomeScreenCanBeReachedInLandscapeWithLargeText() {

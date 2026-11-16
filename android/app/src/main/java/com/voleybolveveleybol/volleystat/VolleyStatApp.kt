@@ -1,6 +1,8 @@
 package com.voleybolveveleybol.volleystat
 
+import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -347,7 +349,19 @@ fun VolleyStatApp(
                 TeamsScreen(state.teams, onAddTeam = { viewModel.addTeam(it) != null }, onOpenTeam = { go(Routes.team(it.id)) })
             }
             composable(Routes.PROFILE) {
-                ProfileScreen(state, BuildConfig.VERSION_NAME, viewModel::setDisplayName, viewModel::setServerTarget, viewModel::testServer, viewModel::deleteRecording)
+                val context = LocalContext.current
+                ProfileScreen(
+                    state, BuildConfig.VERSION_NAME, viewModel::setDisplayName, viewModel::setServerTarget, viewModel::testServer,
+                    viewModel::deleteRecording,
+                    onSendFeedback = {
+                        try {
+                            context.startActivity(feedbackIntent(BuildConfig.VERSION_NAME, "${Build.MANUFACTURER} ${Build.MODEL}", Build.VERSION.SDK_INT))
+                            true
+                        } catch (_: ActivityNotFoundException) {
+                            false
+                        }
+                    },
+                )
             }
             composable(Routes.TEAM) { entry ->
                 val team = state.teams.firstOrNull { it.id == entry.arguments?.getString("id") }

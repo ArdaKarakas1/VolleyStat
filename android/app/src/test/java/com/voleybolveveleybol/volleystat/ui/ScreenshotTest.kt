@@ -163,9 +163,9 @@ class ScreenshotTest {
         shot("maclar") { MatchesScreen(state, {}, {}) }
         shot("takimlar") { TeamsScreen(teams, { true }, {}) }
         shot("takim_kadro") { TeamRosterScreen(teams[0], { _, _ -> true }, {}, {}, {}) }
-        shot("profil") { ProfileScreen(state, "0.4.2", {}, {}, {}, {}) }
+        shot("profil") { ProfileScreen(state, "0.4.2", {}, {}, {}, {}, { true }) }
         // The privacy lines sit below the first screen; a tall window keeps all of them in one picture.
-        shotOn("profil_gizlilik", "+w411dp-h1700dp-port") { ProfileScreen(state, "0.4.2", {}, {}, {}, {}) }
+        shotOn("profil_gizlilik", "+w411dp-h1700dp-port") { ProfileScreen(state, "0.4.2", {}, {}, {}, {}, { true }) }
     }
 
     @Test fun s03_s04_s05_newMatch() {

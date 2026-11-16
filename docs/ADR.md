@@ -252,3 +252,20 @@ Açık kalan sınırlar:
 - Komut video kimliklerini adlarıyla karşılaştırır ve video dosyalarının özetini doğrulamaz. Gold dosyası kilitten sonra değişirse manifestin özeti değişmez. Komut bu yüzden okuduğu her dosyanın özetini `--json` çıktısına yazar.
 - Bir G3 kararı alt grup metriklerini ve en az 10 etiketli hata örneğini de ister. Komut video başına sayıları ve hata listesini verir, alt grupları vermez.
 - Arka uç analizörün dokunulmamış önerilerini dışarı vermez. Sunucudaki ralli listesi kullanıcı düzeltmesi taşır ve komut o listeyi reddeder.
+
+## ADR-0117: Ürün sahibinin 16 Kasım kararları
+
+**Tarih:** 16 Kasım 2026 · **Durum:** Kabul edildi
+
+**Bağlam:** `docs/GAP_ANALYSIS.md` bölüm 8 ürün sahibinden bekleyen kararları listeliyordu. Ürün sahibi 16 Kasım 2026'da bu kararların çoğunu verdi.
+
+Kararlar:
+
+- **Lisans:** Kod kapalı bir ticari ürün olarak kalır. `LICENSE` dosyası bütün hakları saklı tutar. Ürün yalnız Apache 2.0, MIT ve BSD gibi serbest lisanslı modelleri ve kütüphaneleri kullanır. AGPL ve GPL kaynakları ürüne girmez, çünkü AGPL sunucunun bütün kodunu açmayı ister. Ticari olmayan kullanım koşulu taşıyan kaynaklar da ürüne girmez. Depo bugün herkese açıktır ve kod okunabilir. Ekip ürün sahibine deponun gizli olmasını önerir. Bu ayarı ürün sahibi GitHub'da değiştirir.
+- **Uygulama simgesi:** Ürün sahibinin suluboya logosu simge olarak kalır.
+- **Kural değerleri:** Kullanıcı setin ve karar setinin sayısını 25, 21 ve 15 arasından seçer. Her set iki sayı farkla biter (FIVB 6.2).
+- **Maçın bitişi:** Bir video birden çok maç taşıyabilir. Bir takım gereken set sayısına ulaşınca maç biter ve sonraki ralli aynı kuralla yeni bir maçı başlatır (FIVB 6.3.1). Biten son maçtan sonra bir maçı bitirmeyen setler "maç sonrası" bölümünde durur. Hiçbir maç bitmediyse o setler "bitmemiş maç" olur. Her maçın kendi istatistiği vardır. Ekip bu kuralı ayrı bir dilimde uygular.
+- **Geri bildirim adresi:** Uygulama geri bildirimi `voleybolveveleybol@gmail.com` adresine gönderir. Profil sekmesi telefonun e-posta uygulamasını açar ve mesaja yalnız uygulamanın sürümünü ve telefonun modelini ekler.
+- **Bulut ve GPU:** Ürün sahibinin NVIDIA ekran kartlı bir bilgisayarı yok. Analiz ve ölçüm yerelde işlemcide çalışır. Eğitim ileride ancak ücretsiz not defteri ortamlarında yapılır. Ekip oyuncu görüntüsünü bu ortamlara ancak izin metni eğitimi ve yurt dışına aktarımı kapsadığında yükler.
+- **KVKK:** Ürün sahibi KVKK incelemesini sonraya bıraktı. Ekip hesap ve takım katmanında veriyi en aza indirir: kullanıcı adı, şifre ve görünen ad. Uygulama başka takımlara KVKK incelemesinden önce açılmaz.
+- **Hesap ve takım:** Ürün sahibi giriş, takım kurma ve takıma katılma, kaptanlar arası maç isteği, kişi ve takım istatistiği istedi. Ekip bu katmanı ayrı bir tasarımla ve ayrı dilimlerle kurar. İki kaptanın farklı yerlerden bağlanması için sunucunun internete açılması gerekir. Barındırma ayrı bir karardır.
