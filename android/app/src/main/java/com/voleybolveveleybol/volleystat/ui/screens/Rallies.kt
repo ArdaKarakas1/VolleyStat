@@ -63,7 +63,7 @@ import com.voleybolveveleybol.volleystat.model.MatchRules
 import com.voleybolveveleybol.volleystat.model.Rally
 import com.voleybolveveleybol.volleystat.model.RallyList
 import com.voleybolveveleybol.volleystat.model.ReviewCard
-import com.voleybolveveleybol.volleystat.model.SetScore
+import com.voleybolveveleybol.volleystat.model.MatchPart
 import com.voleybolveveleybol.volleystat.model.gaps
 import com.voleybolveveleybol.volleystat.ui.components.DemoBanner
 import com.voleybolveveleybol.volleystat.ui.components.Notice
@@ -78,9 +78,13 @@ import com.voleybolveveleybol.volleystat.ui.theme.Dimens
 import com.voleybolveveleybol.volleystat.ui.theme.LocalVsColors
 import kotlinx.coroutines.flow.drop
 
-/** One line of the rally list: the start of a set, the place where the count stops, a rally, or the time between two rallies. */
+/**
+ * One line of the rally list: the start of a part of the video (only when it holds more than one),
+ * the start of a set, the place where the count stops, a rally, or the time between two rallies.
+ */
 private sealed interface Line {
-    data class SetStart(val number: Int) : Line
+    data class PartStart(val part: MatchPart) : Line
+    data class SetStart(val match: Int, val number: Int) : Line
     data object NotCounted : Line
     data class OfRally(val rally: Rally) : Line
     data class Gap(val startMs: Long, val endMs: Long) : Line
@@ -93,14 +97,20 @@ private val Rally.waits get() = status == Rally.PROPOSED || status == Rally.UNRE
 private fun lines(list: RallyList): List<Line> = buildList {
     val pauses = gaps(list)
     var next = 0
+    var part = 0
     var set = 0
     var counted = true
     list.rallies.forEach { rally ->
         while (next < pauses.size && pauses[next].windowEndMs <= rally.startMs) pauses[next++].let { add(Line.Gap(it.windowStartMs, it.windowEndMs)) }
         val after = rally.scoreAfter
-        if (after != null && after.set != set) {
+        if (after != null && (after.match != part || after.set != set)) {
+            if (after.match != part) {
+                // A new part of the video: its sets count from 1 again (ADR-0118).
+                part = after.match
+                if (list.matches.size > 1) list.matches.firstOrNull { it.number == part }?.let { add(Line.PartStart(it)) }
+            }
             set = after.set
-            add(Line.SetStart(set))
+            add(Line.SetStart(part, set))
         } else if (counted && rally.waits) {
             // The server's count ends at the first rally without a winner. No rally from here on has a score.
             counted = false
@@ -265,13 +275,15 @@ fun RalliesScreen(
                 item(key = "state") { ListState(list, analysis, scoresDiffer, statusPlace, onCheck = { checking = true }, onOpenReview = onOpenReview, onChangeRules = onChangeRules) }
                 items(lines(list), key = { line ->
                     when (line) {
-                        is Line.SetStart -> "set-${line.number}"
+                        is Line.PartStart -> "part-${line.part.number}"
+                        is Line.SetStart -> "set-${line.match}-${line.number}"
                         Line.NotCounted -> "not-counted"
                         is Line.OfRally -> line.rally.id
                         is Line.Gap -> "gap-${line.startMs}"
                     }
                 }) { line ->
                     when (line) {
+                        is Line.PartStart -> PartLine(partLabel(line.part))
                         is Line.SetStart -> SectionLine(stringResource(R.string.rallies_set_header, line.number))
                         Line.NotCounted -> SectionLine(stringResource(R.string.rallies_no_set))
                         is Line.OfRally -> RallyRow(line.rally, match, enabled = !analysis.correcting) { onOpenRally(line.rally) }
@@ -283,12 +295,17 @@ fun RalliesScreen(
     }
     if (checking && list != null) {
         ScoreCheckDialog(
-            list.sets, list.rules,
+            list.matches, list.rules,
             onYes = { checking = false; noAt = null; onConfirm() },
             onNo = { checking = false; noAt = list.version },
             onUnknown = { checking = false },
         )
     }
+}
+
+@Composable
+private fun PartLine(text: String) {
+    Text(text, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 12.dp).semantics { heading() })
 }
 
 @Composable
@@ -321,7 +338,7 @@ private fun ListState(
         // The scores next to the rallies are counts of this list. Until the user has confirmed the list they
         // are lower bounds like every number of the report, and the list says so where it shows them. The
         // list of a demo is never confirmed, so it gets no promise about a confirmation: its notice speaks for it.
-        if (!list.confirmed && list.sets.isNotEmpty() && analysis.job?.mock != true) {
+        if (!list.confirmed && list.matches.isNotEmpty() && analysis.job?.mock != true) {
             Text(stringResource(R.string.rallies_scores_lower), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         // The rule the server counted these scores with: the list's own, not the one the match was created with.
@@ -349,7 +366,7 @@ private fun ListState(
                         )
                     }
                     // Without one counted rally the server has no set score to show, and it would refuse the confirmation.
-                    PrimaryButton(stringResource(R.string.action_check_score), onCheck, enabled = !analysis.correcting && list.sets.isNotEmpty(), icon = R.drawable.ic_task_alt)
+                    PrimaryButton(stringResource(R.string.action_check_score), onCheck, enabled = !analysis.correcting && list.matches.isNotEmpty(), icon = R.drawable.ic_task_alt)
                 }
             }
         }
@@ -416,7 +433,7 @@ private fun GapRow(gap: Line.Gap, enabled: Boolean, onClick: () -> Unit) {
  * confirms. "No" and "I do not know" leave every number a lower bound.
  */
 @Composable
-fun ScoreCheckDialog(sets: List<SetScore>, rules: MatchRules, onYes: () -> Unit, onNo: () -> Unit, onUnknown: () -> Unit) {
+fun ScoreCheckDialog(parts: List<MatchPart>, rules: MatchRules, onYes: () -> Unit, onNo: () -> Unit, onUnknown: () -> Unit) {
     AlertDialog(
         onDismissRequest = onUnknown,
         title = { Text(stringResource(R.string.score_check_title)) },
@@ -424,11 +441,20 @@ fun ScoreCheckDialog(sets: List<SetScore>, rules: MatchRules, onYes: () -> Unit,
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(stringResource(R.string.score_check_intro), style = MaterialTheme.typography.bodyMedium)
                 Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small).padding(12.dp)) {
-                    sets.forEach { set ->
-                        Text(
-                            stringResource(if (set.complete) R.string.score_check_set else R.string.score_check_set_open, set.number, set.home, set.away),
-                            style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface,
-                        )
+                    parts.forEach { part ->
+                        // With several parts the user checks which match each set belongs to as well.
+                        if (parts.size > 1) {
+                            Text(
+                                "${partLabel(part)}: ${part.setsWonHome} - ${part.setsWonAway}", style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = if (part.number > 1) 8.dp else 0.dp),
+                            )
+                        }
+                        part.sets.forEach { set ->
+                            Text(
+                                stringResource(if (set.complete) R.string.score_check_set else R.string.score_check_set_open, set.number, set.home, set.away),
+                                style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface,
+                            )
+                        }
                     }
                 }
                 // The rule of the list these scores were counted with, by name: a rule of another match would make the "yes" mean nothing.

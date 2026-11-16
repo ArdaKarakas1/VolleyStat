@@ -28,8 +28,11 @@ data class AnalysisJob(
     val summary get() = AnalysisSummary(id, state, mock, reviewOpen, reviewTotal, failureCode)
 }
 
-/** The score of the running set after a rally, as the server counted it. The phone computes no score. */
-data class SetPoint(val set: Int, val home: Int, val away: Int)
+/**
+ * The score of the running set after a rally, as the server counted it, and the part of the video
+ * the rally belongs to ([MatchPart.number]). The phone computes no score.
+ */
+data class SetPoint(val set: Int, val home: Int, val away: Int, val match: Int = 1)
 
 /** One rally of the list the user can correct. Times are positions in the video. */
 data class Rally(
@@ -53,16 +56,16 @@ data class Rally(
 }
 
 /**
- * The rally list of a job, with the version every correction has to name. [sets] are the set
- * scores of exactly this version, which is what the user compares with the match before confirming,
- * and [rules] is the rule of the match the server counted them with.
+ * The rally list of a job, with the version every correction has to name. [matches] are the parts
+ * of the video and their set scores for exactly this version, which is what the user compares with
+ * the match before confirming, and [rules] is the rule of the match the server counted them with.
  */
 data class RallyList(
     val rallies: List<Rally>,
     val version: Int,
     val confirmed: Boolean,
     val videoDurationMs: Long,
-    val sets: List<SetScore> = emptyList(),
+    val matches: List<MatchPart> = emptyList(),
     val rules: MatchRules = MatchRules.FIVB,
 )
 
@@ -121,6 +124,36 @@ data class TeamStats(
 
 data class SetScore(val number: Int, val home: Int, val away: Int, val complete: Boolean)
 
+/**
+ * One part of a video as the server counted it (ADR-0118): a finished match ([MATCH]), the sets
+ * after the last finished match ([AFTER_MATCH]), the sets of a video in which no match finished
+ * ([UNFINISHED]), or the part the count stopped in ([STOPPED]), which may still become a match.
+ * The statistics are null on the rally list, which carries none.
+ */
+data class MatchPart(
+    val number: Int,
+    val kind: String,
+    /** HOME or AWAY for a finished match, null for every other part. */
+    val winner: String?,
+    val setsWonHome: Int,
+    val setsWonAway: Int,
+    val sets: List<SetScore>,
+    val firstRally: Int,
+    val lastRally: Int,
+    val home: TeamStats? = null,
+    val away: TeamStats? = null,
+    val players: List<PlayerLine> = emptyList(),
+    val unattributedHome: Int? = null,
+    val unattributedAway: Int? = null,
+) {
+    companion object {
+        const val MATCH = "MATCH"
+        const val AFTER_MATCH = "AFTER_MATCH"
+        const val UNFINISHED = "UNFINISHED"
+        const val STOPPED = "STOPPED"
+    }
+}
+
 data class PlayerLine(val home: Boolean, val jersey: Int, val points: Int, val attackPoints: Int, val blockPoints: Int, val aces: Int)
 
 data class Coverage(val metricId: String, val eligibleN: Int, val verifiedN: Int)
@@ -139,11 +172,12 @@ data class MatchReport(
     val ralliesUnresolved: Int,
     val ralliesOpen: Int,
     val scoreStatus: String,
-    val setsWonHome: Int?,
-    val setsWonAway: Int?,
-    val sets: List<SetScore>,
+    /** The parts of the video, each with its sets and its own statistics. Empty while nothing is counted. */
+    val matches: List<MatchPart>,
     /** Sequence number of the first rally without a winner. Set scores stop there; null when none. */
     val scoreStoppedAtRally: Int? = null,
+    /** Rallies from the first one without a winner to the end: no part holds them, the video totals count the verified ones. */
+    val unplacedRallies: Int = 0,
     /**
      * True until the user confirmed that the rally list holds every rally of the video. Every
      * count is then a lower bound, however many cards are answered.

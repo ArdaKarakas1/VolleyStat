@@ -75,6 +75,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import com.voleybolveveleybol.volleystat.part
 
 /**
  * Renders every screen in its main states with fixed, invented data. The images are the visual
@@ -122,7 +123,7 @@ class ScreenshotTest {
     private val report = MatchReport(
         "j1", "motion-baseline", "BASELINE", mock = false, verificationStatus = "PARTIALLY_VERIFIED",
         ralliesProposed = 42, ralliesVerified = 30, ralliesRejected = 2, ralliesUnresolved = 1, ralliesOpen = 9,
-        scoreStatus = "PARTIAL", setsWonHome = 1, setsWonAway = 0, sets = listOf(SetScore(1, 25, 21, true), SetScore(2, 3, 4, false)),
+        scoreStatus = "PARTIAL", matches = listOf(part(SetScore(1, 25, 21, true), SetScore(2, 3, 4, false))),
         ralliesMayBeMissing = true,
         home = TeamStats(StatValue(28, "PARTIAL"), StatValue(11, "PARTIAL"), StatValue(3, "PARTIAL"), StatValue(2, "PARTIAL"), StatValue(null, "UNKNOWN")),
         away = TeamStats(StatValue(25, "PARTIAL"), StatValue(9, "PARTIAL"), StatValue(null, "UNKNOWN"), StatValue(1, "PARTIAL"), StatValue(4, "PARTIAL")),
@@ -247,7 +248,7 @@ class ScreenshotTest {
             rally(5, 190_000, 204_000, winner = null, status = Rally.PROPOSED),
             rally(6, 221_000, 229_000, winner = null, status = Rally.UNRESOLVED),
         ),
-        version = 12, confirmed = false, videoDurationMs = 4_980_000, sets = listOf(SetScore(1, 2, 1, false)),
+        version = 12, confirmed = false, videoDurationMs = 4_980_000, matches = listOf(part(SetScore(1, 2, 1, false))),
     )
     private val decidedList = waitingList.copy(
         rallies = waitingList.rallies.map {
@@ -257,7 +258,7 @@ class ScreenshotTest {
                 else -> it
             }
         },
-        sets = listOf(SetScore(1, 3, 2, false)),
+        matches = listOf(part(SetScore(1, 3, 2, false))),
     )
 
     private fun listState(list: RallyList, mock: Boolean = false) =
@@ -318,7 +319,7 @@ class ScreenshotTest {
         // The rule line closes the last card of the report, so a tall window keeps it in the picture.
         shotOn("09_mac_raporu_kural", "+w411dp-h2400dp-port") {
             // Set scores a server counting to 21 could give.
-            ReportScreen(finished, ReportLoad.READY, report.copy(rules = MatchRules(2, 21, 15), sets = listOf(SetScore(1, 21, 18, true), SetScore(2, 3, 4, false))), {}, {}, {}, {}, {})
+            ReportScreen(finished, ReportLoad.READY, report.copy(rules = MatchRules(2, 21, 15), matches = listOf(part(SetScore(1, 21, 18, true), SetScore(2, 3, 4, false)))), {}, {}, {}, {}, {})
         }
         shot("10_oyuncu_istatistik") { PlayersScreen(finished, report, players, teams[1].players) {} }
     }

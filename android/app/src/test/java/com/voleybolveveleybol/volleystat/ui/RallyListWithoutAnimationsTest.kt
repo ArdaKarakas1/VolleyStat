@@ -45,6 +45,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import com.voleybolveveleybol.volleystat.part
 
 /**
  * The rally list on a phone whose animations are removed. Compose scrolls on another path there:
@@ -77,7 +78,7 @@ class RallyListWithoutAnimationsTest {
             rally(3, 30_000, 41_000, Rally.VERIFIED, "AWAY", SetPoint(2, 2, 1)),
             rally(4, 48_000, 56_000, Rally.VERIFIED, "HOME", SetPoint(2, 3, 1)),
         ),
-        version = 7, confirmed = false, videoDurationMs = 60_000, sets = listOf(SetScore(1, 21, 18, true), SetScore(2, 3, 1, false)),
+        version = 7, confirmed = false, videoDurationMs = 60_000, matches = listOf(part(SetScore(1, 21, 18, true), SetScore(2, 3, 1, false))),
         rules = MatchRules(2, 21, 15),
     )
 

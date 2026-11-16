@@ -94,7 +94,7 @@ class AppViewModelTest {
 
     private fun rallies(version: Int, vararg list: JSONObject, confirmed: Boolean = false, rules: MatchRules = MatchRules.FIVB) = JSONObject()
         .put("rallies", JSONArray(list.toList())).put("rallyListVersion", version).put("listConfirmed", confirmed)
-        .put("videoDurationMs", 60_000).put("sets", JSONArray()).put("rules", rulesJson(rules))
+        .put("videoDurationMs", 60_000).put("matches", JSONArray()).put("rules", rulesJson(rules))
 
     private fun unknownTeam() = JSONObject().apply {
         listOf("points", "attackPoints", "blockPoints", "aces", "opponentErrors").forEach { put(it, JSONObject().put("value", JSONObject.NULL).put("status", "UNKNOWN")) }
@@ -107,8 +107,7 @@ class AppViewModelTest {
         .put("verificationStatus", "DRAFT")
         .put("rallies", JSONObject().put("proposed", 2).put("total", 2).put("userCreated", 0).put("verified", 0).put("rejected", 0).put("unresolved", 0).put("open", 2))
         .put("ralliesMayBeMissing", true).putOpt("rules", rules)
-        .put("score", JSONObject().put("status", "UNKNOWN").put("setsWon", JSONObject().put("home", JSONObject.NULL).put("away", JSONObject.NULL))
-            .put("sets", JSONArray()).put("stoppedAtRally", 1))
+        .put("score", JSONObject().put("status", "UNKNOWN").put("matches", JSONArray()).put("stoppedAtRally", 1).put("unplacedRallies", 2))
         .put("teams", JSONObject().put("home", unknownTeam()).put("away", unknownTeam())).put("players", JSONArray())
         .put("unattributed", JSONObject().put("home", JSONObject.NULL).put("away", JSONObject.NULL)).put("coverage", JSONArray())
 

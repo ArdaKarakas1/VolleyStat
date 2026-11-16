@@ -132,8 +132,8 @@ fun MatchRulesScreen(
                 sets to stringResource(if (sets == MatchRules.FIVB.setsToWin) R.string.rule_sets_option_fivb else R.string.rule_sets_option, sets)
             },
             selected = setsToWin, enabled = !sending,
-            // The rule says when a team has won the match. The server still counts the sets played after that.
-            note = stringResource(R.string.rule_no_match_end),
+            // The rule says when a team has won the match; play after that starts a new match (ADR-0118).
+            note = stringResource(R.string.rule_match_end),
         ) { setsToWin = it; onSelectionChanged(MatchRules(it, setTarget, decidingSetTarget)) }
         RuleGroup(
             stringResource(R.string.rule_points_question),
