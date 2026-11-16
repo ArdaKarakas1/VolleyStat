@@ -60,7 +60,7 @@ Yüklenen her dosya `storage/media/<uploadId>.bin` adında tek bir dosyadır. Ta
 
 ### `ml`
 
-`volleystat_ml` paketi ilk gerçek analiz bileşenini ve ölçüm araçlarını taşır: hareket enerjisinden ralli aralığı öneren bölümleyici, ralli sınırı metrikleri, etiket denetimi, maç grubuna göre ayrım ve sızıntı denetimi. Paket yalnız numpy ve ffmpeg ister. Ayrıntı `ml/README.md` ve `docs/AI_PLAN.md` dosyalarındadır.
+`volleystat_ml` paketi ilk gerçek analiz bileşenini ve ölçüm araçlarını taşır: hareket enerjisinden ralli aralığı öneren bölümleyici, ralli sınırı metrikleri, kazanan ölçümü ve kalibrasyon, etiket denetimi, maç grubuna göre ayrım ve sızıntı denetimi. Paket yalnız numpy ve ffmpeg ister. Ayrıntı `ml/README.md` ve `docs/AI_PLAN.md` dosyalarındadır.
 
 ## Analizör türleri
 

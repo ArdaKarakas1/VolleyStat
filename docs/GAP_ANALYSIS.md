@@ -94,7 +94,7 @@ Ayrıntılı plan `docs/AI_PLAN.md` dosyasındadır.
 | Oyuncu kimliği | ARAŞTIRMA + DIŞ BAĞIMLILIK | Bugün kullanıcı forma numarasını kartta seçer. Yüz tanıma kapsam dışıdır. |
 | Ralli kazananı | ARAŞTIRMA + DIŞ BAĞIMLILIK | Bugün kullanıcı kazananı kartta seçer. |
 | İstatistik üretimi | TEST EDİLDİ | Sunucu raporu kararlardan hesaplar. Bu bileşen model içermez. |
-| Değerlendirme hattı | KISMEN | Ralli sınırı metrikleri, güven aralığı, etiket denetimi, ayrım ve sızıntı denetimi var ve testli. Kazanan, aksiyon, oyuncu ve kalibrasyon metrikleri yok. |
+| Değerlendirme hattı | KISMEN | Ralli sınırı metrikleri, güven aralığı, etiket denetimi, ayrım ve sızıntı denetimi var ve testli. Kazanan metrikleri ve kalibrasyon da var ve testli (`evaluate-winner`, ADR-0116). Depoda kazanan öneren bir bileşen yoktur, bu yüzden kimse bu araçla bir ölçüm yapmadı. Aksiyon ve oyuncu metrikleri, güven eşiği taraması ve alt grup metrikleri yok. |
 | `UNKNOWN`, `PARTIAL`, `NEEDS_REVIEW` | TEST EDİLDİ | Sözleşme, sunucu ve ekranlar bu durumları taşır. Uygulama bilinmeyen değeri `0` yazmaz. |
 
 ## 5. Veri hattı
@@ -115,7 +115,7 @@ Sayılar son yerel koşudan gelir. CI aynı testleri her PR'da çalıştırır.
 | Kanıt | Sonuç |
 |---|---|
 | Arka uç `pytest` | 585 test geçti (yerelde Python 3.13). CI aynı testleri Python 3.12 ile çalıştırır. |
-| `ml` `pytest` | 239 test geçti (yerel ve CI) |
+| `ml` `pytest` | 390 test geçti (yerel). 151 test kazanan ölçümüyle geldi ve uydurma ralli listeleriyle çalışır. |
 | Android JVM testleri (`:core:test`, `:app:testDebugUnitTest`) | 269 test geçti, hiçbiri atlanmadı (yerel): `:core` 5, `:app` 264. Testler 89 ekran görüntüsü üretti. |
 | Uygulama gerçek sunucuya karşı (JVM) | 11 test geçti (yerel): `BackendE2eTest` 7, `AppFlowE2eTest` 1, `AppUploadFlowE2eTest` 1, `RallyFixE2eTest` 2. Bu on bir test yukarıdaki 269 testin içindedir. İkisi ralli düzeltmeyi dener: biri API istemcisinden, öbürü ekranlardan. İkisi maç kuralını dener. Biri API istemcisinden gider: Kural maçla gider, sunucu sunulan 18 kuralın hepsini kabul eder, listede yeni kuralı verir ve eski kurala dayanan geç bir isteği reddeder. Öbürü kuralı ekranlardan değiştirir. Bu iki test hiçbir set sınırına ulaşmaz. Setleri kuralla sayan rotaları sunucu testleri dener. |
 | Lint | 0 hata |
@@ -255,7 +255,7 @@ Sıra bağımlılığa göredir. İlk dört iş gerçek video beklemez.
 2. **Saha yarısı ve taraf değişimi:** Maç kaydı hangi takımın hangi yarıda başladığını ve takımların ne zaman yer değiştirdiğini taşımıyor. Kazanan önerisi ve oyuncu tarafı bu bilgiyi ister.
 3. **Saha bölgesi seçimi:** Kullanıcı bir karede sahanın köşelerine dokunur. Sunucu homografiyi saklar. Baseline hareketi saha içiyle sınırlar (deney B2'nin ön koşulu).
 4. **Arka plan yükleme:** WorkManager ve ön plan hizmeti. Gerçek telefonda deneme ister.
-5. **Eksik ölçüm araçları:** Kazanan metrikleri ve kalibrasyon. Anotatör uyumu aracı hazırdır (`agreement`).
+5. **Eksik ölçüm araçları:** Aksiyon ve oyuncu metrikleri, güven eşiği taraması ve risk-kapsama eğrisi (B6), alt grup metrikleri. Kazanan metrikleri ve kalibrasyon hazırdır (`evaluate-winner`). Anotatör uyumu aracı hazırdır (`agreement`).
 6. **B0 ve B1 deneyleri:** İzinli video ve iki etiketçi gelince. Ekip baseline'ı ilk kez gerçek maçta ölçer.
 7. **Üretim altyapısı:** Hesap, HTTPS, nesne depolama, iş kuyruğu. Bulut ve bütçe kararı ister.
 

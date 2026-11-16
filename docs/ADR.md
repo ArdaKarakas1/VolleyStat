@@ -214,3 +214,35 @@ Açık kalan sınırlar:
 - Sunucu kural değişikliğinde yalnız kuralları karşılaştırır ve maç bir kural sürümü taşımaz. Telefonun beklemekten vazgeçtiği bir istek yoldayken kullanıcı kuralı iki kez daha değiştirip ilk kurala dönerse sunucu geç gelen isteği uygular. Ralli listesi ve rapor o durumda da sunucunun kullandığı kuralı yazar ve liste onayı düşer, bu yüzden kullanıcı sunucunun yanlış kuralla saydığı bir skoru kuralı görmeden onaylayamaz.
 - Kimse kuralı gerçek bir maçta denemedi. Gerçek sunucuya karşı çalışan E2E testi deneme analizörünün beş rallisiyle çalışır ve hiçbir set sınırına ulaşmaz. Set sınırlarını rotalar üzerinden yalnız sunucu testleri dener.
 - Uygulama 0.6.0, sunucunun 0.6.0 sürümünü ister. Daha eski sunucu kuralı sessizce yok sayar ve maçı FIVB kuralıyla sayar. Uygulama o sunucunun ralli listesini okuyamaz ve bunu ralli listesinde söyler. Rapor sunucunun gerçekten kullandığı kuralı bir cümleyle söyler: "Sunucu seti 25 sayıda, 5. seti 15 sayıda ve iki farkla bitirir."
+
+## ADR-0116: Kazanan ölçümü kapı kararı vermez
+
+**Tarih:** 16 Kasım 2026 · **Durum:** Kabul edildi
+
+**Bağlam:** `docs/AI_PLAN.md` 2.7, ralli kazananı bileşeninin `selective_precision`, `auto_coverage`, `UNKNOWN` oranı, ECE, Brier ve yüksek güvenli yanlış karar sayısıyla ölçüleceğini söyler. G3 kapısı otomatik kararda precision için en az 0,95 ve kapsama için en az 0,60 ister. Depoda kazanan öneren bir bileşen yoktur. `ml` paketi bu ölçümü taşımıyordu. Devir paketinin `05_DENEY_METRIKLERI_KABUL_KAPILARI.md` belgesi iki oranı tanımlar: `selective_precision = correct_auto / autoN` ve `auto_coverage = autoN / eligibleN`. Belge birçok ayrıntıyı açık bırakır. Üç bağımsız eleştirmen tasarım taslağını kodlamadan önce okudu ve 30 nokta yazdı. Bu kayıt kaynağın karar vermediği yerleri tutar.
+
+Kararlar:
+
+- `python -m volleystat_ml evaluate-winner` komutu yalnız ölçer. Komut `PASS` ya da `FAIL` yazmaz. Kaynak kapıları "ölçüm sonucu değil" diye adlandırır, eşiğin tek başına yetmediğini söyler ve deney kaydında `decision` ile `signed_off_by` alanlarını ister. Kapı kararını bir kişi verir ve imzalar.
+- Komut her koşunun türünü ilk satırda söyler. Koşu yalnız şu koşulların hepsi tutarsa G3 kararının girdisidir: Kilit manifesti verildi, manifestin özeti kilit anında not edilen özetle karşılaştırıldı, videolar `test` kümesindedir, o kümenin her videosu değerlendirildi, tolerans 1000 ms'dir, tahmin dosyaları analizörü adlandırır ve `GOLD` katmanı boş değildir. Başka her koşu pilot koşudur ve komut onu hiçbir hedefle karşılaştırmaz. Kaynak düşük kaliteli kaydın testten sessizce çıkarılmasını yasaklar. Eksik test videosu bu yüzden koşuyu pilot koşu yapar.
+- Komut önerileri gold rallilerle ralli sınırı eşleyicisiyle ve 1000 ms toleransla eşler. Kaynak bu toleransı yalnız sınır metriği için verir. Kazanan ölçümünde aynı eşleyiciyi kullanmak bu projenin kararıdır.
+- `GOLD` katmanı yalnız `DOUBLE_AGREED` ve `ADJUDICATED` etiketleri tutar. Durumu yazılmamış etiket `SINGLE` katmanına gider. V4 raporu bu iki durumu nihai test için "tercih" diye yazar. `docs/AI_PLAN.md` 4.3 bunu kurala çevirir ve G3 karşılaştırması yalnız `GOLD` katmanını okur.
+- Komut kesin kazananı olmayan gold ralliyi ilk uyan nedenle dışarıda tutar. `review_status` değeri `DISPUTED` ya da `UNRESOLVABLE` olan ralli uygun değildir. Hakemin `NEEDS_MORE_EVIDENCE` kararı geçerli bir etiket durumudur ve ralliyi dışarıda tutar. Etiket sözlüğü `review_status` ile uygunluğun ilişkisini yazmaz.
+- Komut bir oranı yalnız o oranın paydası en az 30 ise yazar. Bu kural "30 gold ralli" kuralından sıkıdır: 120 uygun rallide 12 otomatik karar precision yazdırmaz.
+- Güven aralığı Wilson aralığıdır. Kaynak "bootstrap gibi bir aralık" ister. Hedefin yakınında beklenen sonuç "hepsi doğru" olur ve yüzdelik bootstrap o durumda sıfır genişlikte bir aralık verir. Wilson aralığı 20/20 için 0,839 ile 1,000 arasını verir.
+- Hiçbir gold ralliyle eşleşmeyen otomatik karar precision'a ve kapsamaya girmez. `evaluate` komutu o aralığı zaten FP sayar ve sınırı 1,2 saniye kayan doğru bir karar yanlış sayılmamalıdır. Komut bu kararları sayar, gold o aralıkta ralli taşıyor mu diye ikiye ayırır ve precision'ın altına bir alt sınır yazar: Her biri yanlış sayılsaydı precision kaç olurdu.
+- ECE on sabit kutu üzerinden hesaplanır ve aralık taşımaz. Kutulu ECE küçük örneklemde yukarı sapar ve bootstrap aralığı gerçek değeri kapsamaz. Komut yanına tam kalibre bir bileşenin aynı güvenlerle göstereceği ECE'yi yazar. Brier bir ortalamadır ve tohumlu bootstrap aralığı taşır.
+- Yüksek güven düzeyi varsayılan olarak 0,90'dır. Kaynak bu sayı için bir düzey vermez. Hiçbir karar güven taşımıyorsa sayı `null` olur.
+- Komut analizör çıktısı olmayan tahmin dosyasını reddeder: deneme analizörünün çıktısı, kullanıcının üzerinde çalıştığı ralli listesi, `proposedWinner` taşımayan ralli ve iki ayrı analizörün dosyaları. Kullanıcının düzelttiği bir aralık modelin kapsaması sayılmamalıdır.
+- `labels.py` `groundTruthStatus` alanını `ground_truth_status` sütununun JSON yazımı olarak denetler.
+
+Ekip şunları bilerek yapmadı: güven eşiği seçeneği ve risk-kapsama eğrisi (B6 deneyiyle gelir), video kalitesine, kameraya ve sete göre alt grup metrikleri, arka uçtan analizörün dokunulmamış önerilerini veren bir dışa aktarma, kural motoru ve tutarlılık denetimi.
+
+Açık kalan sınırlar:
+
+- Kimse bu komutu gerçek bir kazanan bileşeninin çıktısıyla çalıştırmadı. Testler uydurma ralli listeleri kullanır.
+- Araç durum tutmaz. Araç bir parametrenin yalnız validation kümesinde seçildiğini doğrulayamaz. Ekip test kümesini her açışını deney kaydına yazar.
+- Aralıklar rallileri bağımsız sayar. Aynı maçın rallileri bağımsız değildir ve bir servis sırası kuralının hatası sonraki rallilere taşınır. Tek bir maçtan gelen dar bir aralık yeni maçlar için bir şey kanıtlamaz.
+- Komut video kimliklerini adlarıyla karşılaştırır ve video dosyalarının özetini doğrulamaz. Gold dosyası kilitten sonra değişirse manifestin özeti değişmez. Komut bu yüzden okuduğu her dosyanın özetini `--json` çıktısına yazar.
+- Bir G3 kararı alt grup metriklerini ve en az 10 etiketli hata örneğini de ister. Komut video başına sayıları ve hata listesini verir, alt grupları vermez.
+- Arka uç analizörün dokunulmamış önerilerini dışarı vermez. Sunucudaki ralli listesi kullanıcı düzeltmesi taşır ve komut o listeyi reddeder.

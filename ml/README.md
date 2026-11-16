@@ -10,10 +10,11 @@ Bu algoritmanın gerçek voleybol videosundaki doğruluğunu kimse ölçmedi. "D
 |---|---|
 | `volleystat_ml/segmenter.py` | Segmenter videodaki hareket enerjisinden ralli aralığı önerir. |
 | `volleystat_ml/metrics.py` | Bu modül tahmin aralıklarını gold aralıklarla karşılaştırır. |
+| `volleystat_ml/winner.py` | Bu modül bir kazanan bileşeninin önerilerini gold kazananlarla karşılaştırır: seçici precision, otomatik kapsama, kalibrasyon ve G3 hedefleriyle karşılaştırma. Depoda kazanan öneren bir bileşen yoktur. |
 | `volleystat_ml/agreement.py` | Bu modül iki anotatörün aynı videolara verdiği etiketleri karşılaştırır: ralli sınırı, kazanan taraf ve servis tarafı. |
 | `volleystat_ml/labels.py` | Bu modül etiket dosyasını V3 şemasına ve alan kurallarına göre denetler. |
 | `volleystat_ml/splits.py` | Bu modül videoları maç grubuna göre train, validation ve test kümelerine ayırır, sızıntı arar ve kilit manifestini yazar. |
-| `volleystat_ml/cli.py` | Bu modül altı alt komutu çalıştırır. |
+| `volleystat_ml/cli.py` | Bu modül yedi alt komutu çalıştırır. |
 | `schemas/` | Bu klasör devir paketindeki şemanın ve üç CSV şablonunun değişmemiş kopyalarını tutar. |
 | `tests/` | Bu klasör sentetik kliplerle çalışan testleri tutar. |
 
@@ -95,6 +96,7 @@ Algoritma yalnızca görüntünün ne kadar değiştiğini ölçer ve hareketi k
 2. Anotatörler ralli sınırlarını `03_RALLI_GOLD.csv` ya da V3 JSON biçiminde etiketler. `validate-labels` komutu etiketleri denetler. İki anotatör aynı videoları birbirinden bağımsız etiketlerse `agreement` komutu iki etiket setinin uyumunu ölçer.
 3. `make-splits` komutu test kümesini maç grubuna göre ayırır ve kilitler. Ekip komutun yazdığı `content_sha256` değerini dosyanın dışında bir yere, örneğin deney kaydına yazar. Envantere video eklenince ekip yeni kilidi `--previous` seçeneğiyle üretir ve iki kilidi `check-leakage` komutuyla karşılaştırır.
 4. `segment` komutu test videolarını işler. `evaluate` komutu tahminleri gold etiketlerle karşılaştırır.
+5. Bir kazanan bileşeni geldiğinde `evaluate-winner` komutu o bileşenin önerilerini gold kazananlarla karşılaştırır. Depoda bugün kazanan öneren bir bileşen yoktur.
 
 `evaluate` komutu 30'dan az gold rallide oran yazmaz. Komut bu durumda ham sayıları ve güven aralığını verir. Bu kural metin çıktısında da `--json` çıktısında da geçerlidir.
 
@@ -162,6 +164,67 @@ Komut şu kuralları uygular:
 - Komut yalnız bir tarafta bulunan videoyu listeler ve sayıma katmaz.
 - Argüman ayrıştırıcı `--tolerance-ms` (en az 0), `--resamples` (en az 1) ve `--seed` (en az 0) değerlerini denetler.
 
+### evaluate-winner
+
+```bash
+python -m volleystat_ml evaluate-winner --gold 03_RALLI_GOLD.csv --pred V001.pred.json V002.pred.json
+python -m volleystat_ml evaluate-winner --gold gold.csv --pred tahminler.csv --manifest TEST_LOCK_V1.csv --expect-sha256 <özet> --out hatalar.csv --json
+```
+
+Komut bir kazanan bileşeninin önerilerini gold kazananlarla karşılaştırır. Depoda bugün kazanan öneren bir bileşen yoktur ve `segment` her öneride `UNKNOWN` yazar. Komut yalnız ölçer: Komut model eğitmez ve kapı kararı vermez. Tanımlar devir paketinin `05_DENEY_METRIKLERI_KABUL_KAPILARI.md` belgesinden gelir. Kaynağın karar vermediği yerleri ADR-0116 kaydeder (`docs/ADR.md`).
+
+Komut girdiyi şöyle okur:
+
+- `--gold` seçeneği V3 etiket JSON'u ya da `03_RALLI_GOLD.csv` düzeninde bir CSV alır. Komut her rallinin kazananını (`winning_side`), gözlem durumunu (`observation_status`) ve etiket durumunu (`ground_truth_status`) okur. JSON dosyası etiket durumunu `groundTruthStatus` anahtarında taşır. Komut gold dosyasına `evaluate` komutunun sıra ve çakışma kurallarını uygular. Komut CSV dosyasında bu sütunlarda yalnız şemanın değerlerini kabul eder. `ground_truth_status` sütunu `SINGLE_HUMAN`, `DOUBLE_AGREED`, `ADJUDICATED`, `UNRESOLVABLE` ya da `NEEDS_MORE_EVIDENCE` değerini taşır ya da boş kalır.
+- `--pred` seçeneği bir analizörün çıktısını alır: `segment` komutunun yazdığı biçimde JSON ya da `video_id`, `start_ms`, `end_ms` ve `proposed_winner` sütunlarını taşıyan CSV. `confidence` sütunu isteğe bağlıdır.
+- Komut yalnız `proposedWinner` alanını okur. Komut kullanıcının kararını taşıyan `winner` alanını okumaz.
+- Her öneri `HOME`, `AWAY` ya da `UNKNOWN` değerini taşır. Komut alanı taşımayan JSON rallisini ve boş CSV hücresini reddeder, çünkü yanlış yazılmış bir sütun adı bütün kararları çekimser gösterir.
+- `confidence` 0 ile 1 arasında bir sayıdır ya da boştur. Komut ondalık virgülle yazılmış değeri (`0,85`) satır numarasıyla reddeder.
+- Komut şu dosyaları reddeder: `"mock": true` taşıyan çıktı, türü `MOCK` olan analizörün çıktısı ve kullanıcının üzerinde çalıştığı ralli listesi (`rallyListVersion`, `listConfirmed`, `origin`, `status` ya da `winner` taşıyan belge). O listenin aralıkları kullanıcı düzeltmesi taşıyabilir ve kullanıcının işi model başarısına girmez.
+- Bütün tahmin dosyaları aynı analizörü (`analyzer.id` ve `analyzer.version`) adlandırır ya da hiçbiri adlandırmaz. Komut karışımı reddeder.
+
+Komut sayıları şu kurallarla çıkarır:
+
+- Komut önerileri gold rallilerle `evaluate` komutunun eşlemesiyle eşler: Başlangıç ve bitiş ayrı ayrı `--tolerance-ms` değerinin içinde kalır ve eşleşme bire birdir. Varsayılan tolerans 1000 ms'dir.
+- Kesin kazananı olmayan gold ralli hiçbir orana girmez. Komut o ralliyi şu nedenlerden ilk uyanıyla dışarıda tutar ve nedenleri sayar: `NOT_ANNOTATED`, `NEEDS_MORE_EVIDENCE`, `UNRESOLVABLE`, `REVIEW_DISPUTED`, `REVIEW_UNRESOLVABLE`, `WINNER_UNKNOWN`, `OBSERVATION_UNKNOWN`, `OBSERVATION_NOT_APPLICABLE`.
+- Uygun ralliler iki katmana ayrılır. `GOLD` katmanı etiket durumu `DOUBLE_AGREED` ya da `ADJUDICATED` olan rallileri tutar. `SINGLE` katmanı tek anotatörün etiketlediği ve durumu yazılmamış rallileri tutar. Komut her katmanın sayılarını ayrı verir.
+- Her uygun ralli tek bir sonuç alır: `CORRECT`, `WRONG`, `UNKNOWN` (bileşen çekimser kaldı) ya da `NOT_PROPOSED` (hiçbir öneri o ralliyle eşleşmedi).
+- `selective_precision` doğru otomatik kararların otomatik kararlara oranıdır. `auto_coverage` otomatik kararların uygun rallilere oranıdır. Komut `UNKNOWN` oranını ve önerilmeyen rallilerin oranını da verir. Bu üç pay toplamda 1 eder.
+- Komut bir oranı yalnız o oranın paydası en az 30 ise yazar. Payda 30'un altındaysa metin çıktısı ham sayıyı (`18/20` gibi) ve güven aralığını yazar, `--json` çıktısı `value` alanına `null` yazar.
+- Güven aralığı %95'lik Wilson aralığıdır. Aralık rallileri birbirinden bağımsız sayar. Aynı maçın rallileri aynı salonu, kamerayı ve takımları paylaşır, bu yüzden yeni maçlar için geçerli aralık daha geniştir.
+- Komut iki tür otomatik kararı sayar ve hiçbir orana katmaz: kesin kazananı olmayan bir gold ralliye verilen karar ve hiçbir gold ralliyle eşleşmeyen karar. Komut ikinci türü ikiye ayırır: Öneri bir gold ralliyle çakışıyor ama sınırı toleransın dışında kalıyor, ya da gold o aralıkta hiç ralli taşımıyor. Komut precision satırının altına bir alt sınır yazar: Eşleşmeyen her karar yanlış sayılsaydı precision kaç olurdu.
+- Komut her gold taraf için neyin önerildiğini sayar (`HOME`, `AWAY`, `UNKNOWN`, önerilmedi). Hep aynı tarafı söyleyen bir bileşen bu tabloda görünür.
+- Tahmin dosyaları hiç `HOME` ya da `AWAY` önerisi taşımıyorsa komut oran ve aralık yazmaz ve hiçbir kazanan bileşeninin ölçülmediğini söyler. `segment` çıktısı bugün bu sonucu verir.
+
+Komut kalibrasyonu güven değeri taşıyan otomatik kararlardan hesaplar:
+
+- Komut güven değerini önerilen tarafın doğru olma olasılığı olarak okur.
+- Brier değeri güven ile sonuç arasındaki farkın karesinin ortalamasıdır. Komut Brier için tohumlu bir bootstrap aralığı verir (`--resamples`, `--seed`).
+- ECE on eşit kutu üzerinden hesaplanır. Kutu `[i/10, (i+1)/10)` aralığıdır ve 1,0 son kutuya girer. Komut ECE için aralık vermez. Kutulu ECE küçük örneklemde tam kalibre bir bileşen için de sıfırdan büyük çıkar. Komut bu yüzden bir referans yazar: Aynı güven değerlerini taşıyan tam kalibre bir bileşen bu örneklem boyunda ortalama kaç ECE gösterir ve 100 örneklemin 95'inde en çok kaç gösterir.
+- Komut her dolu kutu için karar sayısını, ortalama güveni ve doğru karar sayısını yazar.
+- Komut Brier ve ECE değerlerini yalnız güven taşıyan en az 30 karar varsa yazar. Kutu tablosu her zaman çıkar.
+- Komut `--high-confidence` düzeyindeki (varsayılan 0,90) ve üstündeki kararları ve bunların yanlış olanlarını sayar. Hiçbir karar güven taşımıyorsa bu sayı `null` olur ve komut `0` yazmaz. Komut güven taşımayan yanlış kararları ayrıca sayar.
+
+Komut her koşunun türünü ilk satırda söyler:
+
+- Koşu şu koşulların hepsi tutarsa G3 kararının girdisidir (`GATE_INPUT`): `--manifest` bir kilit manifesti verir, `--expect-sha256` manifestin özetini kilit anında not edilen özetle karşılaştırır, videolar manifestin `test` kümesindedir, o kümenin her videosu için gold ve tahmin dosyası vardır, tolerans 1000 ms'dir, tahmin dosyaları analizörü adlandırır ve `GOLD` katmanı boş değildir.
+- Başka her koşu pilot koşudur (`PILOT`). Komut tutmayan her koşulu yazar ve pilot koşuyu hiçbir hedefle karşılaştırmaz.
+- Komut değişmiş bir manifesti, beklenen özetle tutmayan manifesti, manifestte olmayan videoyu ve iki ayrı kümeden video karıştıran koşuyu reddeder.
+- G3 hedefleri precision için en az 0,95 ve kapsama için en az 0,60'tır. Komut her hedefi `GOLD` katmanında ve kendi paydasında denetler. Payda 30'un altındaysa komut o hedefi denetlemez.
+- Komut her hedef için nokta tahminini ve aralığı hedefle karşılaştırır ve dört durumdan birini yazar: Nokta tahmini ve aralığın tamamı hedefin üstünde, nokta tahmini üstünde ama aralık hedefin altına iniyor, nokta tahmini altında ama aralık hedefe ulaşıyor, aralığın tamamı hedefin altında.
+- Denetlenen bir hedef tutmuyorsa komut nokta tahminlerinin hedefleri karşılamadığını yazar. Çekimser kalarak precision paydasını 30'un altına düşüren bir bileşen kapsama hedefini böylece gizleyemez.
+- Komut `PASS` ya da `FAIL` yazmaz. Kapı kararını bir kişi verir ve imzalar. Karşılaştırma tamamlandıysa komut sonuç ne olursa olsun `0` koduyla çıkar.
+
+Çıktılar:
+
+- `--json` çıktısı aynı sayıları taşır. Her oran `value`, `numerator`, `denominator`, `reliable` ve `interval` alanlarıyla gelir. Çıktı okunan her dosyanın SHA-256 özetini, koşu türünü, nedenleri ve `g3` bölümünü de taşır.
+- `--out` seçeneği hata analizi için bir CSV dosyası yazar. Dosya doğru karar dışındaki her sonuç için bir satır taşır: `WRONG`, `UNKNOWN`, `NOT_PROPOSED`, `AUTO_ON_INELIGIBLE_GOLD` ve `AUTO_UNPAIRED`. Sütunlar şunlardır: `video_id`, `kind`, `layer`, `gold_start_ms`, `gold_end_ms`, `pred_start_ms`, `pred_end_ms`, `gold_winner`, `proposed_winner`, `confidence`, `reason`. Komut var olan bir dosyanın üstüne yazmaz.
+- Deney kaydı şablonuyla eşleme şöyledir: `TP` doğru otomatik karar sayısıdır, `FP` yanlış otomatik karar sayısıdır ve `predicted_n` otomatik karar sayısıdır. `FN` seçici bir karar için tanımlı değildir.
+
+Bu sürüm şunları içermez: güven eşiği seçeneği ve risk-kapsama eğrisi (B6 deneyiyle gelir), video kalitesine, kameraya ve sete göre alt grup metrikleri ve arka uçtan analizörün dokunulmamış önerilerini veren bir dışa aktarma. Bir G3 kararı alt grup metriklerini de ister. Video başına sayılar `--json` çıktısının `videos` alanında durur.
+
+Komut video kimliklerini adlarıyla karşılaştırır ve video dosyalarının özetini doğrulamaz. Kimse bu komutu gerçek bir kazanan bileşeninin çıktısıyla çalıştırmadı.
+
 ### agreement
 
 ```bash
@@ -200,10 +263,11 @@ Komut bir etiket dosyasını iki katmanda denetler. Birinci katman dosyanın yap
 - Ralliler çakışmaz. Bir rallinin bitişi sonraki rallinin başlangıcına eşit olabilir.
 - `winningSide`, `servingSide` ya da `observationStatus` alanı `UNKNOWN` olan ralli bir `uncertaintyReason` taşır.
 - Bir rallide en çok bir aksiyon `endEvent: true` değerini taşır.
+- Dosya `groundTruthStatus` alanı taşıyorsa her ralli bu alanı taşır ve alan `SINGLE_HUMAN`, `DOUBLE_AGREED`, `ADJUDICATED`, `UNRESOLVABLE` ya da `NEEDS_MORE_EVIDENCE` değerini alır. Komut CSV yazımını (`ground_truth_status`) JSON dosyasında reddeder, çünkü `evaluate-winner` komutu o adla yazılmış durumu görmez.
 
 Komut her sorunu konumuyla birlikte ayrı bir satıra yazar. Şu satır bir örnektir: `$.rallies[2]: endMs (36000) is after the end of the video (35000 ms)`. Komut sorun bulursa `1` koduyla çıkar. Komut dosyayı okuyamazsa ya da dosya geçerli JSON değilse `2` koduyla çıkar, çünkü bu durumda hiçbir denetim çalışmadı.
 
-`sequence`, `setNumber` ve `endEvent` alanları şemada yoktur. İlk iki alan `03_RALLI_GOLD.csv` şablonundaki `sequence` ve `set_number` sütunlarının JSON yazımıdır. `endEvent` alanı devir paketindeki `04_AKSIYON_GOLD.csv` şablonunun `end_event` sütununa karşılık gelir.
+`sequence`, `setNumber`, `endEvent` ve `groundTruthStatus` alanları şemada yoktur. `sequence`, `setNumber` ve `groundTruthStatus` alanları `03_RALLI_GOLD.csv` şablonundaki `sequence`, `set_number` ve `ground_truth_status` sütunlarının JSON yazımıdır. `endEvent` alanı devir paketindeki `04_AKSIYON_GOLD.csv` şablonunun `end_event` sütununa karşılık gelir.
 
 ### make-splits
 
