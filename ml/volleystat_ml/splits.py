@@ -337,7 +337,13 @@ def read_csv(text: str) -> tuple[list[str], list[dict[str, str]], list[str]]:
     columns = [name.strip() for name in (reader.fieldnames or [])]
     reader.fieldnames = columns
     rows, problems = [], []
-    for row in reader:
+    try:
+        listed = list(reader)
+    except csv.Error as error:
+        # A quote that is never closed swallows the rest of the file into one cell.
+        raise SplitError([f"line {reader.line_num}: {error}; a quote may not be closed, "
+                          "or a cell is longer than the CSV limit"]) from error
+    for row in listed:
         cells = {name: (row.get(name) or "").strip() for name in columns}
         # The reader collects the cells beyond the last column under the key None.
         surplus = row.get(None) or []

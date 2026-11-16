@@ -33,9 +33,10 @@ is not eligible, and one that pairs with no gold rally. The second kind is split
 ways, because they are different faults: a second proposal for a gold rally that another
 proposal already pairs with, a boundary off by more than the tolerance, and a decision
 where the gold has no rally. `lower_bound_precision` shows what the precision would be if
-every unpaired decision of the layer's videos were a wrong one. Proposals that name
-different winners for one gold rally are refused (ContradictingProposals): the pairing
-would keep whichever comes first in the file, so the score would depend on its order.
+every unpaired decision of the layer's videos were a wrong one. Proposals that say
+different things about one gold rally (another side, or the same side with another
+confidence) are refused (ContradictingProposals): the pairing would keep whichever comes
+first in the file, so the score would depend on its order.
 
 With fewer than MIN_RELIABLE in its own denominator a ratio is misleading. `to_dict()`
 then writes null for it and keeps the counts and the interval, so a record built from it
@@ -60,7 +61,7 @@ from __future__ import annotations
 
 import math
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from fractions import Fraction
 from statistics import NormalDist
 from typing import Any, Mapping, NamedTuple, Sequence
@@ -98,7 +99,9 @@ FAILURE_COLUMNS = ("video_id", "kind", "layer", "gold_start_ms", "gold_end_ms", 
                    "gold_winner", "proposed_winner", "confidence", "reason")
 
 NO_CONFIDENCE = "no automatic decision carries a confidence"
-NO_PROPOSAL = "the prediction files contain no HOME or AWAY proposal, so nothing about a winner component was measured"
+NO_PROPOSAL = "the evaluated videos carry no HOME or AWAY proposal, so nothing about a winner component was measured"
+# The hard cases of the double-annotated set: an adjudication that could not settle the winner.
+HARD_CASES = ("UNRESOLVABLE", "NEEDS_MORE_EVIDENCE")
 
 
 @dataclass(frozen=True)
@@ -150,6 +153,14 @@ def exclusion(rally: agreement.Rally) -> str | None:
     return None
 
 
+def hard_case(rally: agreement.Rally) -> str | None:
+    """UNRESOLVABLE or NEEDS_MORE_EVIDENCE when the label carries that status, else None.
+    Read from the status alone: such a label often leaves the winner empty, and exclusion()
+    then gives NOT_ANNOTATED as the first reason."""
+    status = _given(rally.ground_truth_status)
+    return status if status in HARD_CASES else None
+
+
 def layer_of(rally: agreement.Rally) -> str:
     """The layer of an eligible rally. A label without a status is never taken for a double-checked one."""
     return "GOLD" if _given(rally.ground_truth_status) in GOLD_LAYER_STATUSES else "SINGLE"
@@ -175,10 +186,12 @@ class VideoEvaluation:
     gold_rallies: int
     predicted_rallies: int
     automatic_proposals: int
+    # Gold rallies whose status is one of HARD_CASES, whatever their exclusion reason.
+    hard_cases: Mapping[str, int] = field(default_factory=dict)
 
 
 class ContradictingProposals(ValueError):
-    """Proposals within the tolerance of one gold rally name different winners."""
+    """Proposals within the tolerance of one gold rally say different things about it."""
 
 
 def _within(proposal: Proposal, rally: agreement.Rally, tolerance_ms: int) -> bool:
@@ -186,25 +199,38 @@ def _within(proposal: Proposal, rally: agreement.Rally, tolerance_ms: int) -> bo
     return abs(proposal.start_ms - rally.start_ms) <= tolerance_ms and abs(proposal.end_ms - rally.end_ms) <= tolerance_ms
 
 
+def _statement(proposal: Proposal) -> str:
+    """What a proposal says about a rally: its side, and the confidence of an automatic
+    decision. An abstention is never calibrated, so its confidence says nothing here."""
+    if not proposal.automatic or proposal.confidence is None:
+        return proposal.proposed_winner
+    return f"{proposal.proposed_winner} {proposal.confidence:g}"
+
+
 def evaluate_video(gold: Sequence[agreement.Rally], proposals: Sequence[Proposal],
                    tolerance_ms: int = DEFAULT_TOLERANCE_MS) -> VideoEvaluation:
     """Score the proposals of ONE video. Never mix videos in one call: a proposal could
     then pair with a rally of another video. Combine videos with pool().
 
-    Raises ContradictingProposals when proposals within the tolerance of one gold rally name
-    different winners: HOME and AWAY, or a side and UNKNOWN. Two values out of HOME, AWAY and
-    UNKNOWN always include a side, so two abstentions never contradict each other."""
-    for rally in gold:
-        named = {proposal.proposed_winner for proposal in proposals if _within(proposal, rally, tolerance_ms)}
-        if len(named) > 1:
-            raise ContradictingProposals(
-                f"proposals within +/-{tolerance_ms} ms of the gold rally {rally.start_ms}-{rally.end_ms} ms name "
-                f"different winners ({', '.join(sorted(named))}); the component made no single decision on that rally")
+    Raises ContradictingProposals when a gold rally's paired proposal and a proposal left
+    unpaired within the tolerance of that rally say different things: another side, a side
+    against UNKNOWN, or the same side with another confidence. The pairing would keep
+    whichever comes first in the file, so the score would depend on the order of its rows.
+    A proposal that pairs with a neighbouring rally is that rally's and contradicts nothing."""
     boundaries = metrics.evaluate_boundaries(
         [(rally.start_ms, rally.end_ms) for rally in gold],
         [(proposal.start_ms, proposal.end_ms) for proposal in proposals], tolerance_ms)
     proposal_of = {match.gold_index: match.predicted_index for match in boundaries.matches}
     paired = set(proposal_of.values())
+    for gold_index, predicted_index in proposal_of.items():
+        rally = gold[gold_index]
+        said = {_statement(proposals[predicted_index])} | {
+            _statement(proposal) for index, proposal in enumerate(proposals)
+            if index not in paired and _within(proposal, rally, tolerance_ms)}
+        if len(said) > 1:
+            raise ContradictingProposals(
+                f"proposals within +/-{tolerance_ms} ms of the gold rally {rally.start_ms}-{rally.end_ms} ms differ "
+                f"({', '.join(sorted(said))}); the component made no single decision on that rally")
 
     excluded: Counter[str] = Counter()
     # Each item is (time, order within one moment, outcome).
@@ -245,6 +271,8 @@ def evaluate_video(gold: Sequence[agreement.Rally], proposals: Sequence[Proposal
         gold_rallies=len(gold),
         predicted_rallies=len(proposals),
         automatic_proposals=sum(proposal.automatic for proposal in proposals),
+        hard_cases={status: count for status in HARD_CASES
+                    if (count := sum(hard_case(rally) == status for rally in gold))},
     )
 
 
@@ -572,6 +600,9 @@ class Evaluation:
     automatic_proposals: int
     # video id -> layer -> the six counts of that video.
     videos: Mapping[str, Mapping[str, Mapping[str, int]]]
+    # Gold rallies by HARD_CASES status over all videos, and the automatic decisions on them.
+    hard_cases: Mapping[str, int] = field(default_factory=dict)
+    hard_cases_decided: int = 0
 
     @property
     def not_measured_reason(self) -> str | None:
@@ -597,6 +628,8 @@ class Evaluation:
             "automaticProposals": self.automatic_proposals,
             "notMeasuredReason": self.not_measured_reason,
             "excluded": dict(self.excluded),
+            "hardCases": {**{status: self.hard_cases.get(status, 0) for status in HARD_CASES},
+                          "automaticDecisions": self.hard_cases_decided},
             "layers": {name: layer.to_dict(measured, level, resamples=resamples, seed=seed)
                        for name, layer in self.layers.items()},
             "notScored": {
@@ -618,8 +651,10 @@ def pool(per_video: Mapping[str, VideoEvaluation]) -> Evaluation:
     excluded: Counter[str] = Counter()
     ineligible: Counter[str] = Counter()
     unpaired: Counter[str] = Counter()
+    hard: Counter[str] = Counter()
     for video in per_video.values():
         excluded.update(video.excluded)
+        hard.update(video.hard_cases)
         for outcome in video.outcomes:
             if outcome.kind == "AUTO_ON_INELIGIBLE_GOLD":
                 ineligible[outcome.reason] += 1
@@ -636,6 +671,9 @@ def pool(per_video: Mapping[str, VideoEvaluation]) -> Evaluation:
         automatic_proposals=sum(video.automatic_proposals for video in per_video.values()),
         videos={video_id: {name: _layer(name, {video_id: video}).counts() for name in LAYERS}
                 for video_id, video in per_video.items()},
+        hard_cases={status: hard[status] for status in HARD_CASES if hard[status]},
+        hard_cases_decided=sum(outcome.kind == "AUTO_ON_INELIGIBLE_GOLD" and hard_case(outcome.gold) is not None
+                               for video in per_video.values() for outcome in video.outcomes),
     )
 
 
@@ -794,7 +832,7 @@ def pilot_reasons(*, manifest_given: bool, digest_compared: bool, split: str | N
     if not automatic_proposals:
         # Today's segment output abstains on every rally. Its coverage of 0 is no measurement
         # of a winner component, so it is not compared with the targets.
-        reasons.append("the prediction files contain no HOME or AWAY proposal, so there is no winner decision "
+        reasons.append("the evaluated videos carry no HOME or AWAY proposal, so there is no winner decision "
                        "to compare with the targets")
     if not gold_layer_eligible:
         reasons.append("no eligible rally carries a double-agreed or adjudicated label")

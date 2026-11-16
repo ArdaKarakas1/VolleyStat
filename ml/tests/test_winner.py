@@ -126,7 +126,7 @@ def test_an_unpaired_automatic_decision_is_told_apart_by_whether_the_gold_has_a_
 
 def test_a_second_proposal_for_a_paired_rally_is_not_called_a_boundary_miss():
     # Both lie within the tolerance of the gold rally; the closer one pairs with it.
-    video = winner.evaluate_video([gold(0, "HOME")], [prop(0, "HOME", 0.6), prop(0, "HOME", 0.95, shift=300)])
+    video = winner.evaluate_video([gold(0, "HOME")], [prop(0, "HOME", 0.6), prop(0, "HOME", 0.6, shift=300)])
     assert [(outcome.kind, outcome.reason) for outcome in video.outcomes] == [
         ("CORRECT", None), ("AUTO_UNPAIRED", "SECOND_PROPOSAL")]
     assert winner.pool({"V1": video}).unpaired == {"SECOND_PROPOSAL": 1, "OVERLAPS_GOLD": 0, "NO_GOLD_THERE": 0}
@@ -139,6 +139,26 @@ def test_proposals_that_name_different_winners_for_one_rally_are_refused_in_eith
         winner.evaluate_video([gold(0, "HOME")], [prop(0, sides[0], 0.6), prop(0, sides[1], 0.95, shift=200)])
     # Two abstentions on one rally decide nothing, so there is nothing to contradict.
     assert kinds(winner.evaluate_video([gold(0)], [prop(0, "UNKNOWN"), prop(0, "UNKNOWN", shift=200)])) == ["UNKNOWN"]
+
+
+def test_the_same_side_with_two_confidences_is_refused_since_the_pairing_would_pick_one_by_file_order():
+    for order in ((0.95, 0.5), (0.5, 0.95)):
+        with pytest.raises(winner.ContradictingProposals, match=r"HOME 0\.5, HOME 0\.95"):
+            winner.evaluate_video([gold(0, "AWAY")], [prop(0, "HOME", order[0]), prop(0, "HOME", order[1])])
+    # Two abstentions say the same whatever confidence they carry: an abstention is never calibrated.
+    assert kinds(winner.evaluate_video([gold(0)], [prop(0, "UNKNOWN", 0.3), prop(0, "UNKNOWN", 0.7)])) == ["UNKNOWN"]
+
+
+def test_neighbouring_rallies_within_the_tolerance_of_each_other_are_scored_and_not_refused():
+    # Each proposal pairs with its own rally, so nothing is left over to contradict anything.
+    short = [Rally(0, 800, "HOME", None, "OBSERVED", ground_truth_status="DOUBLE_AGREED"),
+             Rally(900, 1700, "AWAY", None, "OBSERVED", ground_truth_status="DOUBLE_AGREED")]
+    video = winner.evaluate_video(short, [Proposal(0, 800, "HOME", 0.9), Proposal(900, 1700, "AWAY", 0.9)])
+    assert kinds(video) == ["CORRECT", "CORRECT"]
+    # A loose pilot tolerance puts every rally within reach of its neighbours.
+    loose = winner.evaluate_video([gold(0, "HOME"), gold(1, "AWAY"), gold(2, "AWAY")],
+                                  [prop(0, "HOME"), prop(1, "AWAY"), prop(2, "UNKNOWN")], tolerance_ms=30_000)
+    assert kinds(loose) == ["CORRECT", "CORRECT", "UNKNOWN"]
 
 
 def test_only_proposals_within_the_tolerance_on_both_ends_can_contradict_each_other():
@@ -621,7 +641,7 @@ def test_a_run_is_input_for_the_gate_only_when_every_condition_holds():
     (dict(tolerance_ms=5000), "5000 ms"),
     (dict(tolerance_ms=500), "+/-500 ms"),
     (dict(analyzer_stated=False), "analyzer"),
-    (dict(automatic_proposals=0), "no HOME or AWAY proposal"),
+    (dict(automatic_proposals=0), "the evaluated videos carry no HOME or AWAY proposal"),
     (dict(gold_layer_eligible=0), "double-agreed or adjudicated"),
 ])
 def test_each_missing_condition_makes_the_run_a_pilot_run_and_is_named(change, fragment):

@@ -108,7 +108,7 @@ def test_the_json_of_a_pilot_run_carries_the_same_numbers_and_no_comparison(tmp_
         "interval": {"low": pytest.approx(0.5981, abs=1e-4), "high": pytest.approx(0.8581, abs=1e-4),
                      "confidence": 0.95, "method": "wilson", "unit": "rally"}}
     assert document["layers"]["SINGLE"]["eligibleN"] == 0
-    assert document["notEvaluated"] == {"goldOnly": [], "goldEmpty": [], "predictedOnly": [], "manifestOnly": []}
+    assert document["notEvaluated"] == {"goldOnly": [], "goldEmpty": [], "goldWithoutWinner": [], "predictedOnly": [], "manifestOnly": []}
     assert document["failuresFile"] is None
     assert document["inputs"] == {
         "gold": [{"file": str(gold), "sha256": hashlib.sha256(gold.read_bytes()).hexdigest()}],
@@ -181,13 +181,13 @@ def test_segment_like_output_measures_nothing_about_a_winner(tmp_path, capsys):
                      analyzer={"id": "motion-energy", "version": "0.1", "kind": "BASELINE"})
     code, out, _ = evaluate(capsys, "--gold", gold, "--pred", pred)
     assert code == 0
-    assert ("the prediction files contain no HOME or AWAY proposal, so nothing about a winner component was measured"
+    assert ("the evaluated videos carry no HOME or AWAY proposal, so nothing about a winner component was measured"
             in out)
     assert "  correct 0   wrong 0   UNKNOWN 28   not proposed 12" in out
     # Not "0/40 (0.000)": a coverage of zero would read as a measured component.
     assert "automatic coverage" not in out and "selective precision" not in out and "Wilson" not in out
     document = as_json(capsys, "--gold", gold, "--pred", pred)
-    assert document["notMeasuredReason"].startswith("the prediction files contain no HOME or AWAY proposal")
+    assert document["notMeasuredReason"].startswith("the evaluated videos carry no HOME or AWAY proposal")
     assert document["layers"]["GOLD"]["autoCoverage"] == {
         "value": None, "numerator": 0, "denominator": 40, "reliable": False, "interval": None}
 
@@ -246,6 +246,80 @@ def test_excluded_gold_and_unscored_decisions_are_counted_and_stay_out_of_the_ra
     layer = result["layers"]["GOLD"]
     assert (layer["eligibleN"], layer["autoN"], layer["correct"], layer["unpairedAutomatic"]) == (32, 32, 31, 3)
     assert (layer["lowerBoundPrecision"]["numerator"], layer["lowerBoundPrecision"]["denominator"]) == (31, 35)
+
+
+def test_the_hard_cases_are_counted_by_their_status_even_without_a_winner(tmp_path, capsys):
+    # An UNRESOLVABLE label often leaves the winner empty; the empty winner is tested first.
+    rows = gold_rows("V1", ["HOME"] * 3)
+    rows += [["V1", *at(3), "", "UNKNOWN", "UNRESOLVABLE"], ["V1", *at(4), "", "", "UNRESOLVABLE"],
+             ["V1", *at(5), "HOME", "OBSERVED", "NEEDS_MORE_EVIDENCE"]]
+    gold = gold_file(tmp_path, rows)
+    pred = pred_file(tmp_path, "V1", [(index, "HOME", 0.9) for index in range(6)])
+    code, out, _ = evaluate(capsys, "--gold", gold, "--pred", pred)
+    assert code == 0
+    assert ("  hard cases of the double-annotated labels, outside this layer: 2 UNRESOLVABLE, 1 NEEDS_MORE_EVIDENCE; "
+            "3 of them got an automatic decision, which was not scored") in out
+    assert as_json(capsys, "--gold", gold, "--pred", pred)["hardCases"] == {
+        "UNRESOLVABLE": 2, "NEEDS_MORE_EVIDENCE": 1, "automaticDecisions": 3}
+
+
+def test_a_test_video_whose_winners_were_never_annotated_is_not_evaluated(tmp_path, capsys):
+    gold, preds, manifest, digest = gate_inputs(tmp_path)
+    rows = [row for row in csv.reader(open(gold, encoding="utf-8-sig"))][1:]
+    rows = [row if row[0] == "V1" else [row[0], row[1], row[2], "", "NOT_ANNOTATED", row[5]] for row in rows]
+    gold_file(tmp_path, rows)
+    arguments = ("--gold", gold, "--pred", *preds, "--manifest", manifest, "--expect-sha256", digest)
+    code, out, _ = evaluate(capsys, *arguments)
+    assert code == 0
+    assert out.splitlines()[:2] == ["PILOT RUN, NOT A GATE CHECK", "  - test video(s) of the manifest were not evaluated: V2"]
+    assert "not evaluated, in the test split of the manifest: V2 (the gold file annotates no winner)" in out
+    document = as_json(capsys, *arguments)
+    assert document["notEvaluated"]["goldWithoutWinner"] == ["V2"]
+    assert (document["videosEvaluated"], document["matchGroups"]) == (["V1"], 1)
+    # A video whose winners an annotator looked at and could not tell is evaluated: a hard
+    # recording stays in the test split.
+    rows = [row if row[0] == "V1" else [row[0], row[1], row[2], "UNKNOWN", "UNKNOWN", row[5]] for row in rows]
+    gold_file(tmp_path, rows, name="unknown.csv")
+    document = as_json(capsys, "--gold", tmp_path / "unknown.csv", "--pred", *preds, "--manifest", manifest,
+                       "--expect-sha256", digest)
+    assert document["videosEvaluated"] == ["V1", "V2"] and document["runKind"] == "GATE_INPUT"
+
+
+def test_the_gate_block_names_the_videos_and_matches_behind_the_gold_layer(tmp_path, capsys):
+    gold, preds, manifest, digest = gate_inputs(tmp_path)
+    rows = [row for row in csv.reader(open(gold, encoding="utf-8-sig"))][1:]
+    gold_file(tmp_path, [row[:5] + ["SINGLE_HUMAN" if row[0] == "V2" else row[5]] for row in rows])
+    arguments = ("--gold", gold, "--pred", *preds, "--manifest", manifest, "--expect-sha256", digest)
+    code, out, _ = evaluate(capsys, *arguments)
+    assert code == 0
+    assert "  GOLD-layer rallies from 1 video(s) in 1 match group(s), paired at +/-1000 ms" in out
+    document = as_json(capsys, *arguments)
+    assert (document["g3"]["goldLayerVideos"], document["g3"]["goldLayerMatchGroups"]) == (["V1"], 1)
+
+
+def test_the_bounds_of_an_interval_beside_a_target_are_not_rounded_onto_it(tmp_path, capsys):
+    gold, preds, manifest, digest = gate_inputs(tmp_path, correct=108, wrong=1, unknown=11)
+    code, out, _ = evaluate(capsys, "--gold", gold, "--pred", *preds, "--manifest", manifest, "--expect-sha256", digest)
+    assert code == 0
+    assert "  selective precision: 108/109 automatic decisions are correct (0.991)\n    95% Wilson interval: 0.9499 to 0.998" in out
+    assert "interval reaches down to 0.9499" in out
+
+
+def test_a_csv_cell_beyond_the_csv_limit_is_an_error_and_not_a_traceback(tmp_path, capsys):
+    pred = pred_file(tmp_path, "V1", [(0, "HOME")])
+    gold = tmp_path / "gold.csv"
+    gold.write_text(",".join(GOLD_HEADER) + ",notes\nV1,0,5000,HOME,OBSERVED,DOUBLE_AGREED,\"net touch?" + "x" * 140_000
+                    + "\n", encoding="utf-8")
+    assert_unusable(evaluate(capsys, "--gold", gold, "--pred", pred), str(gold), "a quote may not be closed")
+
+
+def test_proposals_outside_the_evaluated_videos_do_not_count_as_a_measurement(tmp_path, capsys):
+    gold = gold_file(tmp_path, gold_rows("V1", ["HOME"] * 4))
+    preds = [pred_file(tmp_path, "V1", [(index, "UNKNOWN") for index in range(4)]), pred_file(tmp_path, "V3", [(0, "HOME", 0.9)])]
+    code, out, _ = evaluate(capsys, "--gold", gold, "--pred", *preds)
+    assert code == 0
+    assert "the evaluated videos carry no HOME or AWAY proposal, so nothing about a winner component was measured" in out
+    assert "the prediction files contain no" not in out
 
 
 def test_a_gold_layer_left_empty_by_hard_cases_still_names_them(tmp_path, capsys):
@@ -318,7 +392,7 @@ def test_videos_present_on_one_side_only_are_listed_and_not_counted(tmp_path, ca
     assert "not evaluated, no gold file: V3" in out
     assert "gold rallies: 2   predicted rallies: 2   automatic proposals: 2" in out
     document = as_json(capsys, "--gold", gold, "--pred", *preds)
-    assert document["notEvaluated"] == {"goldOnly": ["V2"], "goldEmpty": [], "predictedOnly": ["V3"], "manifestOnly": []}
+    assert document["notEvaluated"] == {"goldOnly": ["V2"], "goldEmpty": [], "goldWithoutWinner": [], "predictedOnly": ["V3"], "manifestOnly": []}
 
     assert_unusable(evaluate(capsys, "--gold", gold, "--pred", preds[1]),
                     "no video id appears in both the gold and the predicted files")
@@ -510,7 +584,7 @@ def test_a_run_without_a_single_home_or_away_proposal_is_no_input_for_the_gate(t
     code, out, _ = evaluate(capsys, *arguments)
     assert code == 0
     assert out.splitlines()[:2] == ["PILOT RUN, NOT A GATE CHECK",
-                                    "  - the prediction files contain no HOME or AWAY proposal, so there is no winner "
+                                    "  - the evaluated videos carry no HOME or AWAY proposal, so there is no winner "
                                     "decision to compare with the targets"]
     assert "0.000" not in out and "coverage 0/" not in out and "point estimate" not in out and "whole interval" not in out
     document = as_json(capsys, *arguments)
@@ -531,7 +605,7 @@ def test_a_gold_file_without_rallies_does_not_count_as_an_evaluated_test_video(t
     assert "videos evaluated: 1 (V1)" in out
     assert "not evaluated, in the test split of the manifest: V2 (the gold file holds no rally)" in out
     document = as_json(capsys, *arguments)
-    assert document["notEvaluated"] == {"goldOnly": [], "goldEmpty": ["V2"], "predictedOnly": [], "manifestOnly": []}
+    assert document["notEvaluated"] == {"goldOnly": [], "goldEmpty": ["V2"], "goldWithoutWinner": [], "predictedOnly": [], "manifestOnly": []}
     assert (document["videosEvaluated"], document["matchGroups"]) == (["V1"], 1)
 
     # Without a manifest the video is named too.
@@ -604,7 +678,7 @@ def test_a_missing_test_video_is_listed_with_the_side_that_is_missing(tmp_path, 
     assert "1 of 3 videos of the split evaluated" in out
     assert "not evaluated, in the test split of the manifest: V2 (no prediction file), V7 (no gold file, no prediction file)" in out
     document = as_json(capsys, "--gold", gold, "--pred", preds[0], "--manifest", manifest, "--expect-sha256", digest)
-    assert document["notEvaluated"] == {"goldOnly": ["V2"], "goldEmpty": [], "predictedOnly": [], "manifestOnly": ["V7"]}
+    assert document["notEvaluated"] == {"goldOnly": ["V2"], "goldEmpty": [], "goldWithoutWinner": [], "predictedOnly": [], "manifestOnly": ["V7"]}
     assert document["matchGroups"] == 1
     assert "test video(s) of the manifest were not evaluated: V2, V7" in document["reasons"]
 
@@ -749,12 +823,13 @@ def test_proposals_that_name_different_winners_for_one_rally_are_refused(tmp_pat
     gold = gold_file(tmp_path, gold_rows("V1", ["HOME"] * 2))
     pred = pred_file(tmp_path, "V1", [(0, "HOME", 0.6), (0, "AWAY", 0.95), (1, "HOME")])
     assert_unusable(evaluate(capsys, "--gold", gold, "--pred", pred),
-                    "video V1: proposals within +/-1000 ms of the gold rally 0-5000 ms name different winners (AWAY, HOME)")
+                    "video V1: proposals within +/-1000 ms of the gold rally 0-5000 ms differ (AWAY 0.95, HOME 0.6); "
+                    "the component made no single decision on that rally")
 
 
 def test_a_second_proposal_for_a_rally_is_counted_and_named_as_such(tmp_path, capsys):
     gold = gold_file(tmp_path, gold_rows("V1", ["HOME"] * 2))
-    pred = pred_file(tmp_path, "V1", [(0, "HOME", 0.6), (0, "HOME", 0.95), (1, "HOME")])
+    pred = pred_file(tmp_path, "V1", [(0, "HOME", 0.6), (0, "HOME", 0.6), (1, "HOME")])
     code, out, _ = evaluate(capsys, "--gold", gold, "--pred", pred)
     assert code == 0
     assert ("not scored, automatic decisions that pair with no gold rally within +/-1000 ms: 1 (1 second proposals for a "
