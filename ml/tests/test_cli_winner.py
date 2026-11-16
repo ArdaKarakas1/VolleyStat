@@ -317,6 +317,15 @@ def test_a_video_without_any_winner_label_is_named_without_a_manifest_and_refuse
                     "no gold file of a video in the predicted files annotates a winner: V2")
 
 
+def test_two_gold_videos_of_one_match_are_one_match_group_in_the_gate_block(tmp_path, capsys):
+    gold, preds, manifest, _ = gate_inputs(tmp_path)
+    manifest, digest = lock(tmp_path, [("V1", "M1", "test"), ("V2", "M1", "test"), ("V3", "M3", "validation")], name="one.csv")
+    arguments = ("--gold", gold, "--pred", *preds, "--manifest", manifest, "--expect-sha256", digest)
+    code, out, _ = evaluate(capsys, *arguments)
+    assert "  GOLD-layer rallies from 2 video(s) in 1 match group(s), paired at +/-1000 ms" in out
+    assert as_json(capsys, *arguments)["g3"]["goldLayerMatchGroups"] == 1
+
+
 def test_the_gate_block_names_the_videos_and_matches_behind_the_gold_layer(tmp_path, capsys):
     gold, preds, manifest, digest = gate_inputs(tmp_path)
     rows = [row for row in csv.reader(open(gold, encoding="utf-8-sig"))][1:]
@@ -751,6 +760,34 @@ def test_a_video_without_predictions_names_what_its_gold_file_lacks_too(tmp_path
     code, out, _ = evaluate(capsys, "--gold", gold, empty, "--pred", pred)
     assert ("not evaluated, no prediction file: V2 (the gold file annotates no winner), "
             "V3 (the gold file holds no rally)\n") in out
+
+
+def test_partial_statuses_are_named_beside_the_hard_cases(tmp_path, capsys):
+    gold = gold_file(tmp_path, [["V1", *at(0), "HOME", "OBSERVED", "DOUBLE_AGREED"], ["V1", *at(1), "AWAY", "OBSERVED", ""],
+                                ["V1", *at(2), "", "NOT_ANNOTATED", "UNRESOLVABLE"]])
+    pred = pred_file(tmp_path, "V1", [(0, "HOME", 0.9), (1, "AWAY", 0.9), (2, "AWAY", 0.9)])
+    code, out, _ = evaluate(capsys, "--gold", gold, "--pred", pred)
+    assert ("  hard cases of the double-annotated labels, outside this layer: 1 UNRESOLVABLE, 0 NEEDS_MORE_EVIDENCE; "
+            "1 of them got an automatic decision, which was not scored\n"
+            "  1 of 3 gold rallies state no ground_truth_status, so their hard cases are not known\n") in out
+    assert "annotates no winner" not in out
+
+
+def test_where_proposals_reach_several_rallies_the_report_says_so(tmp_path, capsys):
+    gold = gold_file(tmp_path, [["V1", 11000, 17000, "AWAY", "OBSERVED", "DOUBLE_AGREED"],
+                                ["V1", 29000, 36000, "HOME", "OBSERVED", "DOUBLE_AGREED"],
+                                ["V1", 47000, 49000, "AWAY", "OBSERVED", "DOUBLE_AGREED"]])
+    document = proposals("V1", [])
+    document["rallies"] = [{"startMs": start, "endMs": end, "proposedWinner": "HOME", "confidence": confidence}
+                           for start, end, confidence in ((0, 5000, 0.95), (17000, 31000, 0.1), (26000, 53000, 0.3),
+                                                          (37000, 48000, 0.99))]
+    pred = write_json(tmp_path / "pred.json", document)
+    code, out, _ = evaluate(capsys, "--gold", gold, "--pred", pred, "--tolerance-ms", 30000)
+    assert ("3 proposal(s) lie within +/-30000 ms of two or more gold rallies. Where several pairings are equally good "
+            "the matcher picks one, and the counts can then change with the confidences.") in out
+    assert as_json(capsys, "--gold", gold, "--pred", pred, "--tolerance-ms", 30000)["proposalsReachingSeveralRallies"] == 3
+    code, out, _ = evaluate(capsys, "--gold", gold, "--pred", pred)
+    assert "two or more gold rallies" not in out
 
 
 def test_a_needs_more_evidence_case_alone_is_named_as_a_hard_case(tmp_path, capsys):

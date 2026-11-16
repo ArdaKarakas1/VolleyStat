@@ -191,6 +191,9 @@ class VideoEvaluation:
     hard_cases: Mapping[str, int] = field(default_factory=dict)
     # Gold rallies that state a ground_truth_status at all.
     status_given: int = 0
+    # Proposals within the tolerance of two or more gold rallies. Only these can make two
+    # pairings equally good, and the matcher then picks one.
+    reaching_several: int = 0
 
 
 class ContradictingProposals(ValueError):
@@ -347,6 +350,7 @@ def evaluate_video(gold: Sequence[agreement.Rally], proposals: Sequence[Proposal
         hard_cases={status: count for status in HARD_CASES
                     if (count := sum(hard_case(rally) == status for rally in gold))},
         status_given=sum(_given(rally.ground_truth_status) is not None for rally in gold),
+        reaching_several=sum(sum(_within(proposal, rally, tolerance_ms) for rally in gold) > 1 for proposal in proposals),
     )
 
 
@@ -679,6 +683,8 @@ class Evaluation:
     hard_cases_decided: int = 0
     # Gold rallies that state a ground_truth_status. With none the hard cases are unknown.
     status_given: int = 0
+    # Proposals within the tolerance of two or more gold rallies, over all videos.
+    reaching_several: int = 0
 
     @property
     def not_measured_reason(self) -> str | None:
@@ -704,6 +710,7 @@ class Evaluation:
             "automaticProposals": self.automatic_proposals,
             "notMeasuredReason": self.not_measured_reason,
             "excluded": dict(self.excluded),
+            "proposalsReachingSeveralRallies": self.reaching_several,
             "hardCases": {"statusGiven": self.status_given,
                           **{status: self.hard_cases.get(status, 0) if self.status_given else None for status in HARD_CASES},
                           "automaticDecisions": self.hard_cases_decided if self.status_given else None},
@@ -752,6 +759,7 @@ def pool(per_video: Mapping[str, VideoEvaluation]) -> Evaluation:
         hard_cases_decided=sum(outcome.kind == "AUTO_ON_INELIGIBLE_GOLD" and hard_case(outcome.gold) is not None
                                for video in per_video.values() for outcome in video.outcomes),
         status_given=sum(video.status_given for video in per_video.values()),
+        reaching_several=sum(video.reaching_several for video in per_video.values()),
     )
 
 

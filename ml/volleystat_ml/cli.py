@@ -975,6 +975,10 @@ def _evaluate_winner(args: argparse.Namespace) -> int:
           f"automatic proposals: {evaluation.automatic_proposals}")
     if evaluation.excluded:
         print(f"gold rallies without a definite winner: {sum(evaluation.excluded.values())} ({_by_reason(evaluation.excluded)})")
+    if evaluation.reaching_several:
+        print(f"{evaluation.reaching_several} proposal(s) lie within +/-{args.tolerance_ms} ms of two or more gold rallies. "
+              "Where several pairings are equally good the matcher picks one, and the counts can then change with "
+              "the confidences.")
     measured = evaluation.not_measured_reason is None
     if not measured:
         print(evaluation.not_measured_reason)

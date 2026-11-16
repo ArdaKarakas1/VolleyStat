@@ -278,8 +278,167 @@ def test_the_refusal_depends_on_intervals_and_sides_and_never_on_confidences():
 ])
 def test_a_confident_twin_is_scored_even_where_the_pairing_spans_several_rallies(golds, rows, tolerance_ms):
     for order in (rows, rows[::-1]):
-        layer = winner.pool({"V1": winner.evaluate_video(golds, order, tolerance_ms)}).layers["GOLD"]
-        assert layer.calibration.high_confidence(0.9) == (1, 1)
+        evaluation = winner.pool({"V1": winner.evaluate_video(golds, order, tolerance_ms)})
+        assert evaluation.layers["GOLD"].calibration.high_confidence(0.9) == (1, 1)
+        # Scored once: the confident decision is not also left over as a second proposal.
+        assert evaluation.unscored_high_confidence(0.9) == 0
+
+
+def test_the_twin_pass_keeps_the_pairing_one_to_one_through_several_swaps():
+    golds = [short(50, 450, "AWAY"), short(500, 900, "AWAY"), short(1100, 1500, "AWAY"), short(1550, 1950, "AWAY"),
+             short(2150, 2550, "AWAY")]
+    rows = [Proposal(600, 800, "HOME"), Proposal(2050, 2550, "HOME"), Proposal(1550, 1950, "HOME", 0.5),
+            Proposal(2050, 2550, "HOME", 0.5), Proposal(2250, 2450, "HOME"), Proposal(2050, 2550, "HOME", 0.95)]
+    for order in (rows, rows[::-1]):
+        video = winner.evaluate_video(golds, order)
+        assert scored(video) == [("NOT_PROPOSED", None, 50, None), ("WRONG", None, 500, None), ("WRONG", None, 1100, 0.5),
+                                 ("WRONG", None, 1550, 0.95), ("WRONG", None, 2150, 0.5),
+                                 ("AUTO_UNPAIRED", "SECOND_PROPOSAL", None, None), ("AUTO_UNPAIRED", "SECOND_PROPOSAL", None, None)]
+        evaluation = winner.pool({"V1": video})
+        assert evaluation.layers["GOLD"].calibration.high_confidence(0.9) == (1, 1)
+        assert evaluation.unscored_high_confidence(0.9) is None
+
+
+def test_the_twin_pass_ends_on_identical_twins_and_prefers_any_confidence_to_none():
+    import signal
+
+    def stop(*_):
+        raise TimeoutError("the twin pass did not end")
+    previous = signal.signal(signal.SIGALRM, stop)
+    signal.alarm(10)
+    try:
+        video = winner.evaluate_video([gold(0, "AWAY")], [prop(0, "HOME", 0.5), prop(0, "HOME", 0.5)])
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+    assert scored(video) == [("WRONG", None, 0, 0.5), ("AUTO_UNPAIRED", "SECOND_PROPOSAL", None, 0.5)]
+    # A twin with a confidence takes the place of one without.
+    golds = [short(50, 450, "AWAY"), short(550, 1350, "AWAY"), short(1400, 2400, "AWAY")]
+    rows = [Proposal(550, 1450, "HOME", 0.5), Proposal(1500, 2400, "HOME"), Proposal(1500, 2400, "HOME"),
+            Proposal(1500, 2400, "HOME", 0.95)]
+    assert winner.pool({"V1": winner.evaluate_video(golds, rows)}).layers["GOLD"].calibration.high_confidence(0.9) == (1, 1)
+
+
+def test_a_twin_out_of_reach_never_takes_the_place_of_the_paired_proposal():
+    # Same cost (1200), but the confident one starts 1100 ms early.
+    video = winner.evaluate_video([gold(0, "AWAY")], [Proposal(600, 5600, "HOME", 0.5), Proposal(1100, 5100, "HOME", 0.95)])
+    assert scored(video) == [("WRONG", None, 0, 0.5), ("AUTO_UNPAIRED", "OVERLAPS_GOLD", None, 0.95)]
+
+
+def test_a_forced_pair_is_solved_without_its_own_proposal():
+    golds = [short(1000, 2000, "HOME"), short(2500, 3500, "AWAY")]
+    rows = [Proposal(1800, 2800, "AWAY"), Proposal(200, 1200, "HOME")]
+    for order in (rows, rows[::-1]):
+        assert kinds(winner.evaluate_video(golds, order)) == ["CORRECT", "CORRECT"]
+
+
+def test_unpaired_rows_at_one_moment_follow_their_contents():
+    rows = [prop(0, "HOME", 0.9), Proposal(20000, 25000, "HOME", 0.9), Proposal(20000, 25000, "AWAY", 0.9)]
+    for order in (rows, rows[::-1]):
+        listed = winner.failure_rows({"V1": winner.evaluate_video([gold(0, "HOME")], order)})
+        assert [(row["kind"], row["reason"], row["proposed_winner"]) for row in listed] == [
+            ("AUTO_UNPAIRED", "NO_GOLD_THERE", "AWAY"), ("AUTO_UNPAIRED", "NO_GOLD_THERE", "HOME")]
+
+
+def test_where_whole_pairings_tie_the_report_stays_one_and_names_the_ambiguity():
+    # At a loose tolerance two pairings of the same size and cost exist; the 0.95 proposal is
+    # scored in one of them only. The report does not depend on the row order, and the
+    # confident decision shows among the unscored ones.
+    golds = [short(11000, 17000, "AWAY"), short(29000, 36000, "HOME"), short(47000, 49000, "AWAY")]
+    rows = [Proposal(0, 5000, "HOME", 0.95), Proposal(17000, 31000, "HOME", 0.1), Proposal(26000, 53000, "HOME", 0.3),
+            Proposal(37000, 48000, "HOME", 0.99)]
+    reports = []
+    for order in (rows, rows[::-1]):
+        evaluation = winner.pool({"V1": winner.evaluate_video(golds, order, tolerance_ms=30_000)})
+        assert evaluation.unscored_high_confidence(0.9) == 1
+        assert evaluation.reaching_several == 3
+        reports.append(evaluation.to_dict(resamples=50))
+    assert reports[0] == reports[1]
+    assert one_video([gold(0), gold(1)], [prop(0), prop(1)]).reaching_several == 0
+
+
+def test_in_dense_pilot_geometries_the_refusal_follows_intervals_and_sides_only():
+    import random
+    generator = random.Random(5)
+    reached = refused = 0
+    for _ in range(250):
+        start, golds = 0, []
+        for _ in range(generator.randint(2, 4)):
+            start += generator.randint(0, 700)
+            length = generator.randint(150, 1200)
+            golds.append(short(start, start + length, generator.choice(["HOME", "AWAY"])))
+            start += length
+        shapes = []
+        for _ in range(generator.randint(2, 6)):
+            rally = generator.choice(golds)
+            shapes.append((rally.start_ms + generator.randint(-900, 900), rally.end_ms + generator.randint(-900, 900),
+                           generator.choice(["HOME", "AWAY", "UNKNOWN"])))
+        shapes = [(begin, max(end, begin + 1), side) for begin, end, side in shapes]
+        shapes.append(generator.choice(shapes))
+
+        def drawn():
+            return [Proposal(max(0, begin), max(0, begin) + max(1, end - begin), side,
+                             generator.choice([None, 0.3, 0.5, 0.95])) for begin, end, side in shapes]
+
+        def report(rows):
+            try:
+                video = winner.evaluate_video(golds, rows)
+            except winner.ContradictingProposals as error:
+                return str(error)
+            return winner.pool({"V1": video}).to_dict(resamples=50), winner.failure_rows({"V1": video})
+
+        rows = drawn()
+        first = report(rows)
+        shuffled = list(rows)
+        generator.shuffle(shuffled)
+        assert report(shuffled) == first
+        # New confidences may change the numbers, never whether the file is refused or where.
+        for _ in range(3):
+            again = report(drawn())
+            assert isinstance(again, str) == isinstance(first, str)
+            if isinstance(first, str):
+                assert again == first
+        refused += isinstance(first, str)
+        reached += any(sum(abs(item.start_ms - rally.start_ms) <= 1000 and abs(item.end_ms - rally.end_ms) <= 1000
+                           for rally in golds) > 1 for item in rows)
+    assert reached > 100 and 30 < refused < 220
+
+
+def test_the_pairing_after_the_twin_pass_is_still_a_best_one_to_one_pairing():
+    import random
+    generator = random.Random(9)
+    swapped = 0
+    for _ in range(300):
+        start, golds = 0, []
+        for _ in range(generator.randint(2, 5)):
+            start += generator.randint(50, 200)
+            golds.append(short(start, start + generator.randint(400, 1000), "AWAY"))
+            start = golds[-1].end_ms
+        rows = []
+        for rally in golds:
+            shift = generator.choice([0, 100, -100, 500])
+            rows.append(Proposal(max(0, rally.start_ms + shift), rally.end_ms + shift, "HOME", generator.choice([0.3, 0.5, None])))
+        twin = generator.choice(rows)
+        rows.append(Proposal(twin.start_ms, twin.end_ms, "HOME", 0.95))
+        try:
+            video = winner.evaluate_video(golds, rows)
+        except winner.ContradictingProposals:
+            continue
+        decided = [outcome for outcome in video.outcomes if outcome.kind in ("CORRECT", "WRONG")]
+        unpaired = [outcome.proposal for outcome in video.outcomes if outcome.kind == "AUTO_UNPAIRED"]
+        # Every proposal appears once.
+        assert sorted(map(repr, [outcome.proposal for outcome in decided] + unpaired)) == sorted(map(repr, rows))
+        # Every pair is within reach, and the pairing has the best size and cost.
+        assert all(winner._within(outcome.proposal, outcome.gold, 1000) for outcome in decided)
+        assert (len(decided), sum(winner._cost(outcome.proposal, outcome.gold) for outcome in decided)) == \
+            winner._best_pairing(golds, rows, 1000)
+        # No unpaired, more confident twin is left beside a paired rally.
+        for outcome in decided:
+            assert not any(winner._within(other, outcome.gold, 1000) and other.proposed_winner == outcome.proposal.proposed_winner
+                           and winner._cost(other, outcome.gold) == winner._cost(outcome.proposal, outcome.gold)
+                           and winner._more_confident(other, outcome.proposal) for other in unpaired)
+        swapped += any(outcome.proposal.confidence == 0.95 for outcome in decided)
+    assert swapped > 50
 
 
 @pytest.mark.parametrize("golds, rows", [
