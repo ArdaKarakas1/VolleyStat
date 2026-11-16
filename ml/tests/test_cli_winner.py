@@ -743,6 +743,9 @@ def test_without_a_stated_status_the_hard_cases_are_unknown_and_not_zero(tmp_pat
     pred = pred_file(tmp_path, "V1", [(0, "HOME"), (1, "AWAY")])
     assert as_json(capsys, "--gold", gold, "--pred", pred)["hardCases"] == {
         "statusGiven": 0, "UNRESOLVABLE": None, "NEEDS_MORE_EVIDENCE": None, "automaticDecisions": None}
+    # With no status at all the text names no hard case and no count of unstated ones.
+    code, out, _ = evaluate(capsys, "--gold", gold, "--pred", pred)
+    assert code == 0 and "hard cases" not in out and "state no ground_truth_status" not in out
     # With some statuses stated the counts cover those, and the text says how many state none.
     rows = gold_rows("V1", ["HOME"] * 2) + [["V1", *at(2), "HOME", "OBSERVED", ""]]
     mixed = gold_file(tmp_path, rows, name="mixed.csv")
@@ -784,8 +787,9 @@ def test_where_proposals_reach_several_rallies_the_report_says_so(tmp_path, caps
                                                           (37000, 48000, 0.99))]
     pred = write_json(tmp_path / "pred.json", document)
     code, out, _ = evaluate(capsys, "--gold", gold, "--pred", pred, "--tolerance-ms", 30000)
-    assert ("3 proposal(s) lie within +/-30000 ms of two or more gold rallies. Where several pairings are equally good "
-            "the matcher picks one, and the counts can then change with the confidences.") in out
+    assert ("3 proposal(s) lie within +/-30000 ms of two or more gold rallies. The matcher pairs them by the smallest "
+            "total error, so a boundary moved by one millisecond, or a confidence where several pairings are equally "
+            "good, can move a decision onto a neighbouring rally and change the counts.") in out
     assert as_json(capsys, "--gold", gold, "--pred", pred, "--tolerance-ms", 30000)["proposalsReachingSeveralRallies"] == 3
     code, out, _ = evaluate(capsys, "--gold", gold, "--pred", pred)
     assert "two or more gold rallies" not in out

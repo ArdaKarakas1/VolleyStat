@@ -362,6 +362,25 @@ def test_a_confident_twin_with_another_interval_at_the_same_cost_is_scored_on_a_
         assert evaluation.unscored_high_confidence(0.9) is None
 
 
+def test_where_proposals_reach_two_rallies_a_millisecond_can_move_a_decision_and_the_count_says_so():
+    # Two proposals naming other winners both reach the middle rally, but each is nearer to a
+    # neighbour, so neither speaks for it alone and no file is refused. The pairing then
+    # follows the smallest total error, and a boundary moved by 1 ms changes the score.
+    golds = [short(0, 1000, "HOME"), short(1500, 2500, "HOME"), short(3000, 4000, "AWAY")]
+    common = [Proposal(0, 500, "HOME", 0.9), Proposal(2400, 3401, "AWAY", 0.9), Proposal(3500, 4000, "AWAY", 0.9)]
+    first = winner.evaluate_video(golds, common + [Proposal(600, 1600, "HOME", 0.9)])
+    moved = winner.evaluate_video(golds, common + [Proposal(599, 1599, "HOME", 0.9)])
+    assert ("CORRECT", None, 1500, 0.9) in scored(first) and ("WRONG", None, 1500, 0.9) in scored(moved)
+    assert first.reaching_several > 0 and moved.reaching_several > 0
+    # One proposal reaching two rallies is enough for the cliff of the tolerance.
+    golds = [short(0, 1000, "HOME"), short(1500, 2500, "HOME")]
+    common = [Proposal(0, 500, "HOME", 0.9), Proposal(700, 1700, "HOME", 0.9)]
+    inside = winner.evaluate_video(golds, common + [Proposal(2500, 3000, "AWAY", 0.9)])
+    outside = winner.evaluate_video(golds, common + [Proposal(2501, 3001, "AWAY", 0.9)])
+    assert ("WRONG", None, 1500, 0.9) in scored(inside) and ("CORRECT", None, 1500, 0.9) in scored(outside)
+    assert inside.reaching_several == outside.reaching_several == 1
+
+
 def test_a_twin_out_of_reach_never_takes_the_place_of_the_paired_proposal():
     # Same cost (1200), but the confident one starts 1100 ms early.
     video = winner.evaluate_video([gold(0, "AWAY")], [Proposal(600, 5600, "HOME", 0.5), Proposal(1100, 5100, "HOME", 0.95)])

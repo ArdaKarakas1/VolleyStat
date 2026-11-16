@@ -393,6 +393,53 @@ def test_text_after_a_closing_quote_stops_make_splits_and_check_leakage_with_its
     assert not (tmp_path / "lock.csv").exists()
 
 
+@pytest.mark.parametrize("arena", ["Salon A\u2028Kuzey", "Spor Salonu, Kuzey\u2028Tribun", "Salon\x0bB", "Salon\x85C",
+                                   "Salon, \x0cD", "Salon\x1cE"])
+def test_a_lock_verifies_although_a_cell_holds_a_character_that_python_calls_a_line_break(tmp_path, capsys, arena):
+    # csv reads these characters as text; a lock must not split its own records at them.
+    rows = []
+    for group in range(10):
+        for letter in "ab":
+            row = dict.fromkeys(splits.INVENTORY_COLUMNS, "")
+            row.update(video_id=f"V{group}{letter}", match_group_id=f"M{group}", training_allowed="true",
+                       arena_id=arena, sha256=hashlib.sha256(f"V{group}{letter}".encode()).hexdigest())
+            rows.append([row[name] for name in splits.INVENTORY_COLUMNS])
+    source = write_rows(tmp_path / "inventory.csv", splits.INVENTORY_COLUMNS, rows)
+    lock = tmp_path / "lock.csv"
+    code, out, err = run(capsys, "make-splits", "--inventory", source, "--out", lock, "--locked-at", "2026-11-16T00:00:00Z")
+    assert code == 0, err
+    digest = out.split("content_sha256 ")[1].split()[0]
+    code, out, err = run(capsys, "check-leakage", lock, "--expect-sha256", digest)
+    assert (code, err) == (0, "") and "20 of 20 video(s) have a split; 0 problem(s)" in out
+    test_video = next(video.video_id for video in splits.read_lock_manifest(lock).videos if video.split == "test")
+    gold = write_rows(tmp_path / "gold.csv", ["video_id", "start_ms", "end_ms", "winning_side", "observation_status",
+                                               "ground_truth_status"], [[test_video, 0, 5000, "HOME", "OBSERVED", "DOUBLE_AGREED"]])
+    pred = write_json(tmp_path / "pred.json", {"videoId": test_video, "mock": False, "rallies": [
+        {"startMs": 0, "endMs": 5000, "proposedWinner": "HOME", "confidence": 0.9}]})
+    code, out, err = run(capsys, "evaluate-winner", "--gold", gold, "--pred", pred, "--manifest", lock, "--expect-sha256", digest)
+    assert (code, err) == (0, "")
+
+
+def test_a_line_break_in_a_locked_cell_that_becomes_another_break_character_is_an_edit(tmp_path, capsys):
+    rows = []
+    for group in range(10):
+        for letter in "ab":
+            row = dict.fromkeys(splits.INVENTORY_COLUMNS, "")
+            row.update(video_id=f"V{group}{letter}", match_group_id=f"M{group}", training_allowed="true",
+                       arena_id="Salon\nKuzey", sha256=hashlib.sha256(f"V{group}{letter}".encode()).hexdigest())
+            rows.append([row[name] for name in splits.INVENTORY_COLUMNS])
+    source = write_rows(tmp_path / "inventory.csv", splits.INVENTORY_COLUMNS, rows)
+    lock = tmp_path / "lock.csv"
+    code, out, _ = run(capsys, "make-splits", "--inventory", source, "--out", lock, "--locked-at", "2026-11-16T00:00:00Z")
+    assert code == 0
+    digest = out.split("content_sha256 ")[1].split()[0]
+    text = lock.read_text(encoding="utf-8")
+    assert '"Salon\nKuzey"' in text
+    lock.write_text(text.replace('"Salon\nKuzey"', '"Salon\x0bKuzey"', 1), encoding="utf-8")
+    code, out, _ = run(capsys, "check-leakage", lock, "--expect-sha256", digest)
+    assert code == 1 and "the manifest was changed after it was locked" in out
+
+
 def test_check_leakage_detects_an_edited_lock(tmp_path, capsys):
     rows = [(f"V{group}{letter}", f"M{group}", "true", "") for group in range(10) for letter in "ab"]
     lock = tmp_path / "lock.csv"

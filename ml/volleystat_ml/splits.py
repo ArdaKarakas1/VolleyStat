@@ -287,7 +287,10 @@ def read_lock_manifest(path: Path) -> LockManifest:
     added or removed row does. A cell appended after the last column lies outside the
     hash and is listed in `.problems` instead.
     """
-    lines = read_text(path).splitlines()
+    # Only the line breaks of the csv module: str.splitlines also breaks at characters
+    # such as U+2028 or a vertical tab, which csv keeps inside a cell. read_text has
+    # already turned "\r\n" and "\r" into "\n".
+    lines = read_text(path).split("\n")
     while lines and not lines[-1].strip():
         lines.pop()
     stored = None
