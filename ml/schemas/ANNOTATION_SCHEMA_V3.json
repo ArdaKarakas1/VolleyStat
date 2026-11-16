@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VolleyStat Annotation Contract V3",
+  "type": "object",
+  "required": [
+    "annotationVersion",
+    "videoId",
+    "rallies"
+  ],
+  "properties": {
+    "annotationVersion": {
+      "const": "VVV_ANNOTATION_V3"
+    },
+    "videoId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "rallies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "rallyId",
+          "startMs",
+          "endMs",
+          "winningSide",
+          "observationStatus"
+        ],
+        "properties": {
+          "rallyId": {
+            "type": "string"
+          },
+          "startMs": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "endMs": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "servingSide": {
+            "enum": [
+              "HOME",
+              "AWAY",
+              "UNKNOWN"
+            ]
+          },
+          "winningSide": {
+            "enum": [
+              "HOME",
+              "AWAY",
+              "UNKNOWN"
+            ]
+          },
+          "observationStatus": {
+            "enum": [
+              "OBSERVED",
+              "INFERRED",
+              "UNKNOWN",
+              "NOT_ANNOTATED",
+              "NOT_APPLICABLE"
+            ]
+          },
+          "reviewStatus": {
+            "enum": [
+              "UNREVIEWED",
+              "ACCEPTED",
+              "CORRECTED",
+              "UNRESOLVABLE",
+              "DISPUTED"
+            ]
+          },
+          "uncertaintyReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "actionId",
+                "actionType",
+                "teamSide",
+                "outcome"
+              ],
+              "properties": {
+                "actionId": {
+                  "type": "string"
+                },
+                "actionType": {
+                  "enum": [
+                    "SERVE",
+                    "RECEPTION",
+                    "SET",
+                    "ATTACK",
+                    "BLOCK",
+                    "DIG",
+                    "FAULT",
+                    "CONTACT_OTHER"
+                  ]
+                },
+                "teamSide": {
+                  "enum": [
+                    "HOME",
+                    "AWAY",
+                    "UNKNOWN"
+                  ]
+                },
+                "outcome": {
+                  "type": "string"
+                },
+                "playerId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "startMs": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "endMs": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
