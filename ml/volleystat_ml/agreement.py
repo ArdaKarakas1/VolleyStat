@@ -62,6 +62,10 @@ class Rally:
     winning_side: str | None = None
     serving_side: str | None = None
     observation_status: str | None = None
+    # Read by the winner evaluation (winner.py) only. None: the file does not carry the field.
+    ground_truth_status: str | None = None
+    review_status: str | None = None
+    winner_evidence: str | None = None
 
     def value(self, field: str) -> str | None:
         """The value of a categorical field as the annotator gave it, or None when the

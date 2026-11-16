@@ -31,6 +31,10 @@ from typing import Any, Callable, Sequence
 
 SCHEMA_FILE = "ANNOTATION_SCHEMA_V3.json"
 UNKNOWN = "UNKNOWN"
+# The values of the CSV column `ground_truth_status` (03_RALLI_GOLD.csv) and of its JSON
+# spelling `groundTruthStatus`. The first four are the dictionary of the handover report;
+# NEEDS_MORE_EVIDENCE is the third result an adjudication can have (docs/AI_PLAN.md 4.3).
+GROUND_TRUTH_STATUSES = ("SINGLE_HUMAN", "DOUBLE_AGREED", "ADJUDICATED", "UNRESOLVABLE", "NEEDS_MORE_EVIDENCE")
 
 # Keywords the interpreter enforces, and the ones that carry no constraint.
 _ENFORCED = {"type", "required", "properties", "items", "enum", "const", "minimum", "minLength"}
