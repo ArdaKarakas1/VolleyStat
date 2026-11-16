@@ -346,6 +346,22 @@ def test_the_twin_pass_ends_on_identical_twins_and_prefers_any_confidence_to_non
         assert sorted(calibration.pairs) == [(0.0, 0), (0.5, 0)] and calibration.without_confidence == 0
 
 
+def test_a_confident_twin_with_another_interval_at_the_same_cost_is_scored_on_a_chain():
+    # The 0.95 proposal spans 1400-2500: 100 ms off at the end only, the same cost as the
+    # two unsure ones at 1500-2400. It is scored and no unsure twin takes its place.
+    golds = [short(50, 450, "AWAY"), short(550, 1350, "AWAY"), short(1400, 2400, "AWAY")]
+    rows = [Proposal(550, 1450, "HOME", 0.5), Proposal(1500, 2400, "HOME"), Proposal(1500, 2400, "HOME"),
+            Proposal(1400, 2500, "HOME", 0.95)]
+    for order in (rows, rows[::-1]):
+        video = winner.evaluate_video(golds, order)
+        assert ("WRONG", None, 1400, 0.95) in scored(video)
+        assert scored(video).count(("AUTO_UNPAIRED", "SECOND_PROPOSAL", None, None)) == 2
+        evaluation = winner.pool({"V1": video})
+        calibration = evaluation.layers["GOLD"].calibration
+        assert calibration.high_confidence(0.9) == (1, 1) and calibration.without_confidence == 0
+        assert evaluation.unscored_high_confidence(0.9) is None
+
+
 def test_a_twin_out_of_reach_never_takes_the_place_of_the_paired_proposal():
     # Same cost (1200), but the confident one starts 1100 ms early.
     video = winner.evaluate_video([gold(0, "AWAY")], [Proposal(600, 5600, "HOME", 0.5), Proposal(1100, 5100, "HOME", 0.95)])
@@ -444,7 +460,7 @@ def test_the_twin_pass_turns_any_best_pairing_into_one_that_scores_the_confident
     def stop(*_):
         raise TimeoutError("the twin pass did not end")
     generator = random.Random(17)
-    swaps = 0
+    swaps = to_another_interval = 0
     previous = signal.signal(signal.SIGALRM, stop)
     signal.alarm(60)
     try:
@@ -459,7 +475,10 @@ def test_the_twin_pass_turns_any_best_pairing_into_one_that_scores_the_confident
                     for rally in golds for shift in [generator.choice([0, 100, -100, 500])]]
             for _ in range(generator.randint(1, 3)):
                 twin = generator.choice(rows)
-                rows.append(Proposal(twin.start_ms, twin.end_ms, "HOME", generator.choice([0.0, 0.3, 0.5, 0.95, None])))
+                # A spread keeps the cost to the rally whenever the twin is shifted at least as far.
+                spread = generator.choice([0, 0, 50, 100])
+                rows.append(Proposal(max(0, twin.start_ms - spread), twin.end_ms + spread, "HOME",
+                                     generator.choice([0.0, 0.3, 0.5, 0.95, None])))
             rows = sorted(rows, key=winner._in_content_order)
             # Any best pairing, found on the rows in a shuffled order.
             shuffled = list(range(len(rows)))
@@ -470,6 +489,8 @@ def test_the_twin_pass_turns_any_best_pairing_into_one_that_scores_the_confident
             before = dict(proposal_of)
             winner._score_the_confident_twin(golds, rows, proposal_of, 1000)
             swaps += proposal_of != before
+            to_another_interval += any((rows[before[g]].start_ms, rows[before[g]].end_ms) != (rows[p].start_ms, rows[p].end_ms)
+                                       for g, p in proposal_of.items())
             assert len(set(proposal_of.values())) == len(proposal_of)
             assert sorted(proposal_of) == sorted(before)
             cost = sum(abs(rows[p].start_ms - golds[g].start_ms) + abs(rows[p].end_ms - golds[g].end_ms)
@@ -488,7 +509,7 @@ def test_the_twin_pass_turns_any_best_pairing_into_one_that_scores_the_confident
     finally:
         signal.alarm(0)
         signal.signal(signal.SIGALRM, previous)
-    assert swaps > 50
+    assert swaps > 50 and to_another_interval > 20
 
 
 def test_the_pairing_after_the_twin_pass_is_still_a_best_one_to_one_pairing():

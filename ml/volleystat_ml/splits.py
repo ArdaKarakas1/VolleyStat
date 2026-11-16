@@ -348,7 +348,7 @@ def read_csv(text: str) -> tuple[list[str], list[dict[str, str]], list[str]]:
             except StopIteration:
                 break
     except csv.Error as error:
-        raise SplitError([f"line {start}: {error}; a quote may not be closed, "
+        raise SplitError([f"line {start}: {error}; a quote may not be closed, text may follow a closing quote, "
                           "or a cell is longer than the CSV limit"]) from error
     columns = [name.strip() for name in records[0]] if records else []
     rows, problems = [], []

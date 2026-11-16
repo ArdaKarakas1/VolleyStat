@@ -496,3 +496,9 @@ def test_an_inventory_that_starts_with_the_manifest_columns_is_still_an_inventor
     path.write_text("\n".join(rows) + "\n", encoding="utf-8")
     assert splits.is_lock_manifest(path) is False
     assert [video.video_id for video in splits.read_inventory(path)] == ["V0", "V1", "V2", "V3"]
+    # Every manifest column and one more: still an inventory.
+    rows = [",".join([*splits.MANIFEST_COLUMNS, "training_allowed"])]
+    rows += [f"V{index},M{index},A1,C1,{str(index) * 64},{'test' if index < 2 else 'train'},,,,true" for index in range(4)]
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    assert splits.is_lock_manifest(path) is False
+    assert [video.video_id for video in splits.read_inventory(path)] == ["V0", "V1", "V2", "V3"]

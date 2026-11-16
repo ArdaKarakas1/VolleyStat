@@ -100,7 +100,7 @@ def _sha256(text: str) -> str:
 # that ties two options together (exit_level <= enter_level). A parameter without an
 # entry here stops the parser from being built.
 _SEGMENT_RANGES: dict[str, dict[str, float]] = {
-    "sample_fps": {"above": 0},
+    "sample_fps": {"above": 0, "maximum": segmenter.MAX_SAMPLE_FPS},
     "frame_width": {"minimum": 1, "maximum": segmenter.MAX_FRAME_SIDE},
     "frame_height": {"minimum": 1, "maximum": segmenter.MAX_FRAME_SIDE},
     "smooth_window_ms": {"minimum": 0, "maximum": segmenter.MAX_SMOOTH_WINDOW_MS},

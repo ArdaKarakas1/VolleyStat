@@ -43,9 +43,14 @@ ONLY_SHORT_RUNS = "ONLY_SHORT_RUNS"
 PROBE_TIMEOUT_SECONDS = 90
 # Upper bounds that keep a mistyped value from running out of memory or overflowing a
 # float after the video has been decoded. The energy needs a few dozen pixels, so 4096
-# is far above any useful frame side, and no rally lasts a day.
+# is far above any useful frame side; no rally lasts a day; and no phone records more
+# than 240 frames per second, so sampling faster only repeats frames.
 MAX_FRAME_SIDE = 4096
 MAX_SMOOTH_WINDOW_MS = 86_400_000
+MAX_SAMPLE_FPS = 240
+# np.median copies the sliding window it is given. Taking the window in blocks of rows
+# keeps that copy near this many values whatever the window and the length of the video.
+_MEDIAN_BLOCK_VALUES = 1 << 22
 # Frames read from the pipe per step; also how often progress is reported.
 _CHUNK_FRAMES = 32
 # How much of the end of ffmpeg's messages is read back for an error text.
@@ -108,8 +113,8 @@ class SegmenterParams:
     min_rally_ms: int = 2000
 
     def __post_init__(self) -> None:
-        if not (math.isfinite(self.sample_fps) and self.sample_fps > 0):
-            raise ValueError("sample_fps must be a positive number")
+        if not (math.isfinite(self.sample_fps) and 0 < self.sample_fps <= MAX_SAMPLE_FPS):
+            raise ValueError(f"sample_fps must be a number greater than 0 and at most {MAX_SAMPLE_FPS}")
         if not (1 <= self.frame_width <= MAX_FRAME_SIDE and 1 <= self.frame_height <= MAX_FRAME_SIDE):
             raise ValueError(f"frame_width and frame_height must be from 1 to {MAX_FRAME_SIDE}")
         if self.smooth_window_ms < 0 or self.merge_gap_ms < 0:
@@ -407,7 +412,9 @@ def _median_filter(values: np.ndarray, window: int) -> np.ndarray:
     if window <= 1:
         return values
     padded = np.pad(values, window // 2, mode="edge")
-    return np.median(np.lib.stride_tricks.sliding_window_view(padded, window), axis=1)
+    view = np.lib.stride_tricks.sliding_window_view(padded, window)
+    rows = max(1, _MEDIAN_BLOCK_VALUES // window)
+    return np.concatenate([np.median(view[first:first + rows], axis=1) for first in range(0, len(view), rows)])
 
 
 def _otsu_cut(values: np.ndarray, bins: int = 128) -> float | None:

@@ -406,7 +406,35 @@ def test_too_few_samples_are_reported():
     {"sample_fps": 0}, {"frame_width": 0}, {"min_rally_ms": 0}, {"merge_gap_ms": -1}, {"noise_floor": 0},
     {"min_contrast_ratio": 1.0}, {"enter_level": 0.2, "exit_level": 0.3}, {"exit_level": 0}, {"enter_level": 1.5},
     {"frame_width": 4097}, {"frame_height": 4097}, {"smooth_window_ms": 86_400_001},
+    {"sample_fps": 240.5}, {"sample_fps": 1e308},
 ])
 def test_invalid_parameters_are_rejected(override):
     with pytest.raises(ValueError):
         SegmenterParams(**override)
+
+
+def test_the_ends_of_the_ranges_are_accepted():
+    params = SegmenterParams(frame_width=segmenter.MAX_FRAME_SIDE, frame_height=segmenter.MAX_FRAME_SIDE,
+                             smooth_window_ms=segmenter.MAX_SMOOTH_WINDOW_MS, sample_fps=segmenter.MAX_SAMPLE_FPS)
+    assert (params.frame_width, params.frame_height, params.smooth_window_ms, params.sample_fps) == (
+        4096, 4096, 86_400_000, 240)
+
+
+@pytest.mark.parametrize("size, window", [(1, 3), (7, 3), (50, 9999), (300, 41), (1000, 4501), (2000, 1)])
+def test_the_median_filter_gives_the_same_values_when_it_works_in_blocks(size, window):
+    values = np.random.default_rng(size).random(size)
+    padded = np.pad(values, window // 2, mode="edge")
+    whole = np.median(np.lib.stride_tricks.sliding_window_view(padded, window), axis=1) if window > 1 else values
+    assert np.array_equal(segmenter._median_filter(values, window), whole)
+
+
+def test_the_median_filter_holds_a_bounded_block_of_values_whatever_the_window():
+    # 2000 samples and a window of 8001: the whole sliding view would copy 128 MB.
+    values = np.random.default_rng(1).random(2000)
+    tracemalloc.start()
+    try:
+        segmenter._median_filter(values, 8001)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert peak < 64 * 1024 * 1024 < 2000 * 8001 * 8

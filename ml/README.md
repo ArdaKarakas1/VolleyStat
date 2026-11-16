@@ -115,6 +115,8 @@ Her komut `python -m volleystat_ml <alt komut>` biçiminde çalışır. Komutlar
 
 Komut kullanamadığı girdiyi standart hataya `error: ...` biçiminde tek satırla yazar ve hata izi (traceback) basmaz. Komutun okuyamadığı dosya, UTF-8 olmayan dosya, dosya yerine gelen klasör ve aralığının dışında kalan seçenek değeri bu gruba girer. Argüman ayrıştırıcı seçenek aralıklarını komut çalışmadan önce denetler. Bir dosyanın birden çok satırı kural bozuyorsa komut her satırı ayrı bir satırda yazar. Komutlar CSV ve JSON dosyalarını UTF-8 olarak okur ve başka kodlamayla gelen dosyayı tahminle çözmez.
 
+CSV okuyan her komut kapanmamış bir tırnağı, kapanan tırnaktan sonra gelen bir yazıyı ya da CSV sınırını aşan bir hücreyi bozuk kaydın başladığı satırın numarasıyla bildirir ve `2` koduyla çıkar. Başlık satırı da bu kurala girer. Kapanmamış bir tırnak sonraki bütün satırları tek bir hücreye çekerdi ve dosya o satırları sessizce kaybederdi. Bir hücrenin içinde tırnak isteyen kullanıcı tırnağı iki kez yazar ve hücreyi tırnak içine alır: `"""Final"" maci"`. Paketin 0.1 sürümü bu kayıtları uyarı vermeden okuyordu, bu yüzden o sürümün kabul ettiği bir envanter ya da etiket dosyası şimdi bu satırda durabilir.
+
 ### segment
 
 ```bash
@@ -131,7 +133,7 @@ Parametrelerin hepsi `SegmenterParams` veri sınıfında durur ve komut satırı
 
 | Seçenek | Varsayılan | Görev |
 |---|---|---|
-| `--sample-fps` | 5.0 | Segmenter videodan saniyede bu kadar kare örnekler. Kaynak videonun kare hızını aşan bir değer kazanç sağlamaz, çünkü `ffmpeg` eksik kareyi tekrarlar ve segmenter kopya kareyi düzey kestiriminin dışında tutar. |
+| `--sample-fps` | 5.0 | Segmenter videodan saniyede bu kadar kare örnekler. Kaynak videonun kare hızını aşan bir değer kazanç sağlamaz, çünkü `ffmpeg` eksik kareyi tekrarlar ve segmenter kopya kareyi düzey kestiriminin dışında tutar. Ayrıştırıcı 240'tan büyük bir değeri reddeder. |
 | `--frame-width`, `--frame-height` | 96, 54 | Segmenter enerjiyi bu boyuttaki gri karede hesaplar. Ayrıştırıcı 4096'dan büyük bir kenarı reddeder. |
 | `--smooth-window-ms` | 1000 | Bu değer medyan filtresinin genişliğini belirler. Filtre tek karelik sıçramaları (sahne kesmesi, flaş) siler. Ayrıştırıcı bir günden (86.400.000 ms) uzun bir pencereyi reddeder. |
 | `--noise-floor` | 0.05 | Segmenter bu değeri logaritmadan önce enerjiye ekler. Sıkıştırma gürültüsü böylece ayrı bir düzey oluşturmaz. |
@@ -178,7 +180,7 @@ Komut girdiyi şöyle okur:
 - `--gold` seçeneği V3 etiket JSON'u ya da `03_RALLI_GOLD.csv` düzeninde bir CSV alır. Komut her rallinin kazananını (`winning_side`), gözlem durumunu (`observation_status`) ve etiket durumunu (`ground_truth_status`) okur. JSON dosyası etiket durumunu `groundTruthStatus` anahtarında taşır. Komut gold dosyasına `evaluate` komutunun sıra ve çakışma kurallarını uygular. Komut CSV dosyasında bu sütunlarda yalnız şemanın değerlerini kabul eder. `ground_truth_status` sütunu `SINGLE_HUMAN`, `DOUBLE_AGREED`, `ADJUDICATED`, `UNRESOLVABLE` ya da `NEEDS_MORE_EVIDENCE` değerini taşır ya da boş kalır.
 - Komut iki isteğe bağlı sütunu da okur ve değerlerini denetler. `review_status` sütunu `UNREVIEWED`, `ACCEPTED`, `CORRECTED`, `UNRESOLVABLE` ya da `DISPUTED` değerini taşır. `winner_evidence` sütunu `VIDEO`, `SCOREBOARD`, `AUDIO`, `RULE_CONSTRAINT` ya da `EXTERNAL_NOTES` değerini taşır. İki sütun da boş kalabilir. Komut başka bir yazımı (`disputed` gibi) satır numarasıyla reddeder, çünkü yanlış yazılmış bir `DISPUTED` tartışmalı ralliyi puana katardı. JSON dosyası bu alanları `reviewStatus` ve `winnerEvidence` anahtarlarında taşır.
 - Hiç ralli taşımayan bir gold dosyası etiketlenmiş bir videoyu göstermez. Komut o videoyu değerlendirmez ve "the gold file holds no rally" diye listeler. Bütün rallileri `NOT_ANNOTATED` olan ve hiçbir rallisi `UNRESOLVABLE` ya da `NEEDS_MORE_EVIDENCE` durumu taşımayan bir gold dosyası da hiçbir kazananı etiketlemez. Komut o videoyu da değerlendirmez ve "the gold file annotates no winner" diye listeler. Tahmin dosyası olan hiçbir videonun gold dosyası kazanan etiketlemiyorsa komut `2` koduyla çıkar. Komut kazananı `UNKNOWN` olan, etiketi `UNRESOLVABLE` ya da `NEEDS_MORE_EVIDENCE` olan videoyu ise değerlendirir, çünkü etiketçi o kayda baktı ve zor bir kayıt test kümesinde kalır.
-- Komut kapanmamış bir tırnağı, kapanan tırnaktan sonra gelen bir yazıyı ya da CSV sınırını aşan bir hücreyi bozuk kaydın başladığı satırın numarasıyla bildirir ve `2` koduyla çıkar. Başlık satırı da bu kurala girer. Kapanmamış bir tırnak sonraki bütün satırları tek bir hücreye çekerdi ve gold dosyası o rallileri sessizce kaybederdi.
+- Komut gold ve tahmin CSV dosyalarını "Komutlar" bölümündeki katı kurala göre okur. Kapanmamış bir tırnak gold dosyasında sonraki rallileri sessizce kaybettirirdi.
 - Komut değerlendirmediği videolardaki `HOME` ve `AWAY` önerilerini sayar ve yazar (`notEvaluated.automaticProposals`). Değerlendirilen videolar hiç karar taşımasa bile okur bu kararların var olduğunu görür.
 - `--pred` seçeneği bir analizörün çıktısını alır: `segment` komutunun yazdığı biçimde JSON ya da `video_id`, `start_ms`, `end_ms` ve `proposed_winner` sütunlarını taşıyan CSV. `confidence` sütunu isteğe bağlıdır.
 - Komut yalnız `proposedWinner` alanını okur. Komut kullanıcının kararını taşıyan `winner` alanını okumaz.

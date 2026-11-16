@@ -74,6 +74,7 @@ def test_a_run_without_a_manifest_is_a_pilot_run_and_says_so_first(tmp_path, cap
     assert "Rally winner evaluation, rallies paired at +/-1000 ms on start and on end" in out
     assert "analyzer: next-serve-rule 0.1" in out
     assert "videos evaluated: 1 (V1)" in out
+    assert "not evaluated" not in out
     assert "gold rallies: 40   predicted rallies: 36   automatic proposals: 30" in out
     assert "layer GOLD (double-agreed or adjudicated labels): 40 eligible rallies in 1 video(s)" in out
     assert "  correct 27   wrong 3   UNKNOWN 6   not proposed 4" in out
@@ -1210,8 +1211,9 @@ def test_a_value_on_the_end_of_its_range_is_accepted():
     assert parser.parse_args(["evaluate", "--gold", "g", "--pred", "p", "--resamples", "1000000"]).resamples == 1_000_000
     assert parser.parse_args(["evaluate-winner", "--gold", "g", "--pred", "p", "--high-confidence", "1"]).high_confidence == 1
     arguments = parser.parse_args(["segment", "v.mp4", "--enter-level", "1", "--exit-level", "1", "--frame-width", "4096",
-                                   "--frame-height", "4096", "--smooth-window-ms", "86400000"])
+                                   "--frame-height", "4096", "--smooth-window-ms", "86400000", "--sample-fps", "240"])
     assert (arguments.enter_level, arguments.frame_width, arguments.smooth_window_ms) == (1, 4096, 86_400_000)
+    assert arguments.sample_fps == 240
 
 
 def test_a_huge_whole_number_is_read_exactly_and_never_crashes_the_parser(tmp_path, capsys):
