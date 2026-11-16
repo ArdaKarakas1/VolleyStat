@@ -108,7 +108,7 @@ def test_the_json_of_a_pilot_run_carries_the_same_numbers_and_no_comparison(tmp_
         "interval": {"low": pytest.approx(0.5981, abs=1e-4), "high": pytest.approx(0.8581, abs=1e-4),
                      "confidence": 0.95, "method": "wilson", "unit": "rally"}}
     assert document["layers"]["SINGLE"]["eligibleN"] == 0
-    assert document["notEvaluated"] == {"goldOnly": [], "goldEmpty": [], "goldWithoutWinner": [], "predictedOnly": [], "manifestOnly": []}
+    assert document["notEvaluated"] == {"goldOnly": [], "goldEmpty": [], "goldWithoutWinner": [], "predictedOnly": [], "manifestOnly": [], "automaticProposals": 0}
     assert document["failuresFile"] is None
     assert document["inputs"] == {
         "gold": [{"file": str(gold), "sha256": hashlib.sha256(gold.read_bytes()).hexdigest()}],
@@ -323,6 +323,17 @@ def test_a_csv_cell_beyond_the_csv_limit_is_an_error_and_not_a_traceback(tmp_pat
     gold.write_text(",".join(GOLD_HEADER) + ",notes\nV1,0,5000,HOME,OBSERVED,DOUBLE_AGREED,\"net touch?" + "x" * 140_000
                     + "\n", encoding="utf-8")
     assert_unusable(evaluate(capsys, "--gold", gold, "--pred", pred), str(gold), "a quote may not be closed")
+    # A small file is worse: the open quote swallows every later row into one cell, and the
+    # gold would silently lose those rallies.
+    small = tmp_path / "small.csv"
+    small.write_text(",".join(GOLD_HEADER) + ",notes\nV1,0,5000,HOME,OBSERVED,DOUBLE_AGREED,\"net touch?\n"
+                     "V1,10000,15000,AWAY,OBSERVED,DOUBLE_AGREED,\nV1,20000,25000,HOME,OBSERVED,DOUBLE_AGREED,\n",
+                     encoding="utf-8")
+    assert_unusable(evaluate(capsys, "--gold", small, "--pred", pred), str(small), "a quote may not be closed")
+    stray = write_rows(tmp_path / "pred.csv", ["video_id", "start_ms", "end_ms", "proposed_winner"], [["V1", 0, 5000, "HOME"]])
+    stray.write_text(stray.read_text(encoding="utf-8-sig") + 'V1,10000,15000,"AWAY\n', encoding="utf-8")
+    assert_unusable(evaluate(capsys, "--gold", gold_file(tmp_path, gold_rows("V1", ["HOME"] * 2), name="g2.csv"),
+                             "--pred", stray), str(stray), "a quote may not be closed")
 
 
 def test_proposals_outside_the_evaluated_videos_do_not_count_as_a_measurement(tmp_path, capsys):
@@ -332,6 +343,9 @@ def test_proposals_outside_the_evaluated_videos_do_not_count_as_a_measurement(tm
     assert code == 0
     assert "the evaluated videos carry no HOME or AWAY proposal, so nothing about a winner component was measured" in out
     assert "the prediction files contain no" not in out
+    # The decisions left out are named, so nobody reads the run as a component that decided nothing.
+    assert "not evaluated: 1 HOME or AWAY proposal(s) in videos that were not evaluated" in out
+    assert as_json(capsys, "--gold", gold, "--pred", *preds)["notEvaluated"]["automaticProposals"] == 1
 
 
 def test_a_gold_layer_left_empty_by_hard_cases_still_names_them(tmp_path, capsys):
@@ -404,7 +418,7 @@ def test_videos_present_on_one_side_only_are_listed_and_not_counted(tmp_path, ca
     assert "not evaluated, no gold file: V3" in out
     assert "gold rallies: 2   predicted rallies: 2   automatic proposals: 2" in out
     document = as_json(capsys, "--gold", gold, "--pred", *preds)
-    assert document["notEvaluated"] == {"goldOnly": ["V2"], "goldEmpty": [], "goldWithoutWinner": [], "predictedOnly": ["V3"], "manifestOnly": []}
+    assert document["notEvaluated"] == {"goldOnly": ["V2"], "goldEmpty": [], "goldWithoutWinner": [], "predictedOnly": ["V3"], "manifestOnly": [], "automaticProposals": 1}
 
     assert_unusable(evaluate(capsys, "--gold", gold, "--pred", preds[1]),
                     "no video id appears in both the gold and the predicted files")
@@ -617,7 +631,7 @@ def test_a_gold_file_without_rallies_does_not_count_as_an_evaluated_test_video(t
     assert "videos evaluated: 1 (V1)" in out
     assert "not evaluated, in the test split of the manifest: V2 (the gold file holds no rally)" in out
     document = as_json(capsys, *arguments)
-    assert document["notEvaluated"] == {"goldOnly": [], "goldEmpty": ["V2"], "goldWithoutWinner": [], "predictedOnly": [], "manifestOnly": []}
+    assert document["notEvaluated"] == {"goldOnly": [], "goldEmpty": ["V2"], "goldWithoutWinner": [], "predictedOnly": [], "manifestOnly": [], "automaticProposals": 35}
     assert (document["videosEvaluated"], document["matchGroups"]) == (["V1"], 1)
 
     # Without a manifest the video is named too.
@@ -690,7 +704,7 @@ def test_a_missing_test_video_is_listed_with_the_side_that_is_missing(tmp_path, 
     assert "1 of 3 videos of the split evaluated" in out
     assert "not evaluated, in the test split of the manifest: V2 (no prediction file), V7 (no gold file, no prediction file)" in out
     document = as_json(capsys, "--gold", gold, "--pred", preds[0], "--manifest", manifest, "--expect-sha256", digest)
-    assert document["notEvaluated"] == {"goldOnly": ["V2"], "goldEmpty": [], "goldWithoutWinner": [], "predictedOnly": [], "manifestOnly": ["V7"]}
+    assert document["notEvaluated"] == {"goldOnly": ["V2"], "goldEmpty": [], "goldWithoutWinner": [], "predictedOnly": [], "manifestOnly": ["V7"], "automaticProposals": 0}
     assert document["matchGroups"] == 1
     assert "test video(s) of the manifest were not evaluated: V2, V7" in document["reasons"]
 

@@ -895,6 +895,10 @@ def _evaluate_winner(args: argparse.Namespace) -> int:
     gold_groups = None if args.manifest is None else len({locked[video_id].match_group_id for video_id in gold_videos})
 
     rows = winner.failure_rows(per_video)
+    # HOME or AWAY proposals in videos that were not evaluated: named, so that a run whose
+    # evaluated videos carry none is not read as a component that decided nothing.
+    left_out = sum(proposal.automatic for video_id in gold_empty + gold_without_winner + predicted_only
+                   for proposal in proposals[video_id])
     if args.out is not None:
         # Written before anything is printed: a refused file leaves no report that looks complete.
         with open(args.out, "x", encoding="utf-8", newline="") as handle:
@@ -915,7 +919,8 @@ def _evaluate_winner(args: argparse.Namespace) -> int:
         "matchGroups": match_groups,
         **evaluation.to_dict(args.high_confidence, resamples=args.resamples, seed=args.seed),
         "notEvaluated": {"goldOnly": gold_only, "goldEmpty": gold_empty, "goldWithoutWinner": gold_without_winner,
-                         "predictedOnly": predicted_only, "manifestOnly": manifest_only},
+                         "predictedOnly": predicted_only, "manifestOnly": manifest_only,
+                         "automaticProposals": left_out},
         "inputs": {"gold": _file_digests(args.gold), "pred": _file_digests(args.pred)},
         "failuresFile": None if args.out is None else str(args.out),
         "g3": {"checked": gate is not None, "reasons": reasons,
@@ -956,6 +961,8 @@ def _evaluate_winner(args: argparse.Namespace) -> int:
         print(f"not evaluated, the gold file annotates no winner: {', '.join(gold_without_winner)}")
     if predicted_only:
         print(f"not evaluated, no gold file: {', '.join(predicted_only)}")
+    if left_out:
+        print(f"not evaluated: {left_out} HOME or AWAY proposal(s) in videos that were not evaluated")
     print(f"gold rallies: {evaluation.gold_rallies}   predicted rallies: {evaluation.predicted_rallies}   "
           f"automatic proposals: {evaluation.automatic_proposals}")
     if evaluation.excluded:

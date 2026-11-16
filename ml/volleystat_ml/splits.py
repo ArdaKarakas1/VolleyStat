@@ -333,7 +333,9 @@ def read_csv(text: str) -> tuple[list[str], list[dict[str, str]], list[str]]:
     # A spreadsheet with a Turkish locale saves CSV with semicolons.
     header = text.partition("\n")[0]
     delimiter = ";" if header.count(";") > header.count(",") else ","
-    reader = csv.DictReader(io.StringIO(text, newline=""), delimiter=delimiter, restval="")
+    # strict: a quote opened and never closed is an error. Without it the reader swallows every
+    # later row into one cell, and the file silently loses those rows.
+    reader = csv.DictReader(io.StringIO(text, newline=""), delimiter=delimiter, restval="", strict=True)
     columns = [name.strip() for name in (reader.fieldnames or [])]
     reader.fieldnames = columns
     rows, problems = [], []
