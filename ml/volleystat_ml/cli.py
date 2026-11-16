@@ -957,7 +957,12 @@ def _evaluate_winner(args: argparse.Namespace) -> int:
             print(f"not evaluated, in the {split} split of the manifest: "
                   + ", ".join(f"{video_id} ({lacks(video_id)})" for video_id in missing))
     if gold_only:
-        print(f"not evaluated, no prediction file: {', '.join(gold_only)}")
+        def what_gold_lacks(video_id: str) -> str:
+            lack = ("the gold file holds no rally" if not gold[video_id]
+                    else "the gold file annotates no winner" if annotates_no_winner(video_id) else "")
+            return f"{video_id} ({lack})" if lack else video_id
+
+        print(f"not evaluated, no prediction file: {', '.join(what_gold_lacks(video_id) for video_id in gold_only)}")
     if gold_empty and args.manifest is None:
         print(f"not evaluated, the gold file holds no rally: {', '.join(gold_empty)}")
     if gold_without_winner and args.manifest is None:
@@ -1028,13 +1033,17 @@ def _level(level: float) -> str:
 def _hard_cases(evaluation: winner.Evaluation) -> str | None:
     """The hard cases of the double-annotated set that the GOLD layer leaves out, counted by
     their status even where an empty winner gives NOT_ANNOTATED as the exclusion reason."""
+    unstated = evaluation.gold_rallies - evaluation.status_given
+    note = (f"  {unstated} of {evaluation.gold_rallies} gold rallies state no ground_truth_status, so their hard "
+            "cases are not known" if evaluation.status_given and unstated else None)
     counts = [evaluation.hard_cases.get(status, 0) for status in winner.HARD_CASES]
     if not any(counts):
-        return None
+        return note
     decided = evaluation.hard_cases_decided
-    return (f"  hard cases of the double-annotated labels, outside this layer: {counts[0]} UNRESOLVABLE, "
+    line = (f"  hard cases of the double-annotated labels, outside this layer: {counts[0]} UNRESOLVABLE, "
             f"{counts[1]} NEEDS_MORE_EVIDENCE"
             + (f"; {decided} of them got an automatic decision, which was not scored" if decided else ""))
+    return line if note is None else f"{line}\n{note}"
 
 
 def _print_layer(title: str, layer: winner.LayerEvaluation, document: dict[str, Any], measured: bool,

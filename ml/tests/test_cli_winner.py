@@ -260,7 +260,7 @@ def test_the_hard_cases_are_counted_by_their_status_even_without_a_winner(tmp_pa
     assert ("  hard cases of the double-annotated labels, outside this layer: 2 UNRESOLVABLE, 1 NEEDS_MORE_EVIDENCE; "
             "3 of them got an automatic decision, which was not scored") in out
     assert as_json(capsys, "--gold", gold, "--pred", pred)["hardCases"] == {
-        "UNRESOLVABLE": 2, "NEEDS_MORE_EVIDENCE": 1, "automaticDecisions": 3}
+        "statusGiven": 6, "UNRESOLVABLE": 2, "NEEDS_MORE_EVIDENCE": 1, "automaticDecisions": 3}
 
 
 def test_a_test_video_whose_winners_were_never_annotated_is_not_evaluated(tmp_path, capsys):
@@ -726,6 +726,31 @@ def test_a_gate_run_without_exclusions_says_zero_and_names_no_hard_case(tmp_path
     assert "  gold rallies without a definite winner: 0\n" in out
     assert "  automatic decisions that were not scored: 0\n" in out
     assert "hard cases" not in out
+
+
+def test_without_a_stated_status_the_hard_cases_are_unknown_and_not_zero(tmp_path, capsys):
+    gold = gold_file(tmp_path, [row[:5] for row in gold_rows("V1", ["HOME"] * 2)], header=GOLD_HEADER[:5])
+    pred = pred_file(tmp_path, "V1", [(0, "HOME"), (1, "AWAY")])
+    assert as_json(capsys, "--gold", gold, "--pred", pred)["hardCases"] == {
+        "statusGiven": 0, "UNRESOLVABLE": None, "NEEDS_MORE_EVIDENCE": None, "automaticDecisions": None}
+    # With some statuses stated the counts cover those, and the text says how many state none.
+    rows = gold_rows("V1", ["HOME"] * 2) + [["V1", *at(2), "HOME", "OBSERVED", ""]]
+    mixed = gold_file(tmp_path, rows, name="mixed.csv")
+    pred = pred_file(tmp_path, "V1", [(0, "HOME"), (1, "AWAY"), (2, "HOME")], name="three.json")
+    assert as_json(capsys, "--gold", mixed, "--pred", pred)["hardCases"] == {
+        "statusGiven": 2, "UNRESOLVABLE": 0, "NEEDS_MORE_EVIDENCE": 0, "automaticDecisions": 0}
+    code, out, _ = evaluate(capsys, "--gold", mixed, "--pred", pred)
+    assert "  1 of 3 gold rallies state no ground_truth_status, so their hard cases are not known\n" in out
+
+
+def test_a_video_without_predictions_names_what_its_gold_file_lacks_too(tmp_path, capsys):
+    rows = gold_rows("V1", ["HOME"] * 2) + [["V2", *at(index), "", "NOT_ANNOTATED", "DOUBLE_AGREED"] for index in range(2)]
+    gold = gold_file(tmp_path, rows)
+    empty = write_json(tmp_path / "v3.json", {"annotationVersion": "VVV_ANNOTATION_V3", "videoId": "V3", "rallies": []})
+    pred = pred_file(tmp_path, "V1", [(0, "HOME"), (1, "HOME")])
+    code, out, _ = evaluate(capsys, "--gold", gold, empty, "--pred", pred)
+    assert ("not evaluated, no prediction file: V2 (the gold file annotates no winner), "
+            "V3 (the gold file holds no rally)\n") in out
 
 
 def test_a_needs_more_evidence_case_alone_is_named_as_a_hard_case(tmp_path, capsys):

@@ -457,3 +457,33 @@ def test_reading_csv_keeps_its_rules_for_cells_rows_and_blank_lines():
     # Cells are stripped, empty rows dropped, a short row filled, a long row reported.
     assert rows == [{"video_id": "V1", "notes": "a"}, {"video_id": "V2", "notes": ""}, {"video_id": "V3", "notes": "b"}]
     assert problems == ["row 4: 3 cells, but the header has 2 columns"]
+
+
+@pytest.mark.parametrize("ending", ["\n", "\r\n"])
+def test_a_header_cell_over_two_lines_does_not_hide_an_inventory(tmp_path, ending):
+    inventory = write_inventory(tmp_path / "plain.csv", library(groups=2))
+    lines = inventory.read_text(encoding="utf-8-sig").splitlines()
+    # A spreadsheet writes a header cell with a line break in quotes.
+    text = ending.join([lines[0].replace("notes", '"notes' + ending + '(optional)"')] + lines[1:]) + ending
+    multi = tmp_path / "multi.csv"
+    multi.write_text(text, encoding="utf-8")
+    assert splits.is_lock_manifest(multi) is False
+    assert [video.video_id for video in splits.read_inventory(multi)] == [video.video_id for video in library(groups=2)]
+    # A quote left open further down is reported where it starts, not on the header.
+    broken = tmp_path / "broken.csv"
+    broken.write_text(text + 'V99,"open' + ending, encoding="utf-8")
+    with pytest.raises(splits.SplitError, match=f"^line {len(lines) + 2}: "):
+        splits.is_lock_manifest(broken)
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("", ([], [], [])),
+    # Content only beyond the header is a row of its own, and it is reported.
+    ("a,b\n,,x\n", (["a", "b"], [{"a": "", "b": ""}], ["row 2: 3 cells, but the header has 2 columns"])),
+    # Surplus cells with only spaces leave the row empty.
+    ("a,b\n,, \nV1,c\n", (["a", "b"], [{"a": "V1", "b": "c"}], [])),
+    # A later column of the same name wins, as in csv.DictReader.
+    ("a,b,a\nx,y,z\n", (["a", "b", "a"], [{"a": "z", "b": "y"}], [])),
+])
+def test_reading_csv_keeps_the_rules_of_the_old_reader_at_the_edges(text, expected):
+    assert splits.read_csv(text) == expected

@@ -36,7 +36,7 @@ where the gold has no rally. `lower_bound_precision` shows what the precision wo
 every unpaired decision of the layer's videos were a wrong one. The proposals are paired
 in an order taken from their contents, so the rows of a file can be shuffled without
 changing a number. The proposals that speak for one gold rally (those nearest to it, and
-the one the pairing scores on it) must name one winner, otherwise they are refused
+any that some best pairing pairs with it) must name one winner, otherwise they are refused
 (ContradictingProposals): the component made no single decision on that rally.
 
 With fewer than MIN_RELIABLE in its own denominator a ratio is misleading. `to_dict()`
@@ -189,6 +189,8 @@ class VideoEvaluation:
     automatic_proposals: int
     # Gold rallies whose status is one of HARD_CASES, whatever their exclusion reason.
     hard_cases: Mapping[str, int] = field(default_factory=dict)
+    # Gold rallies that state a ground_truth_status at all.
+    status_given: int = 0
 
 
 class ContradictingProposals(ValueError):
@@ -216,26 +218,72 @@ def _in_content_order(proposal: Proposal) -> tuple[Any, ...]:
             proposal.proposed_winner)
 
 
+def _best_pairing(gold: Sequence[agreement.Rally], proposals: Sequence[Proposal], tolerance_ms: int) -> tuple[int, int]:
+    """The size and the total cost of the pairing metrics chooses: the largest number of
+    pairs, and among those the smallest sum of start and end errors."""
+    pairs = metrics._match([(rally.start_ms, rally.end_ms) for rally in gold],
+                           [(proposal.start_ms, proposal.end_ms) for proposal in proposals], tolerance_ms)
+    return len(pairs), sum(_cost(proposals[predicted], gold[gold_index]) for predicted, gold_index in pairs)
+
+
 def _refuse_contradictions(gold: Sequence[agreement.Rally], proposals: Sequence[Proposal],
                            proposal_of: Mapping[int, int], tolerance_ms: int) -> None:
-    """Each proposal belongs to the gold rallies it is nearest to within the tolerance, and
-    the proposal the pairing scores on a gold rally speaks for that rally too. The proposals
-    that speak for one gold rally must name one winner."""
+    """A proposal speaks for a gold rally when it is nearest to that rally within the
+    tolerance, or when some best pairing pairs the two. A best pairing has the size and the
+    cost of the chosen one; several can exist when a proposal reaches two rallies. Both tests
+    read the intervals only, so the refusal never depends on a confidence or a row order.
+    The proposals that speak for one gold rally must name one winner."""
+    best = (len(proposal_of), sum(_cost(proposals[predicted], gold[index]) for index, predicted in proposal_of.items()))
     nearest = []
     for proposal in proposals:
         costs = [_cost(proposal, rally) for rally in gold if _within(proposal, rally, tolerance_ms)]
         nearest.append(min(costs) if costs else None)
     for index, rally in enumerate(gold):
-        named = {proposal.proposed_winner for proposal, best in zip(proposals, nearest)
-                 if best is not None and _within(proposal, rally, tolerance_ms) and _cost(proposal, rally) == best}
+        named = {proposal.proposed_winner for proposal, low in zip(proposals, nearest)
+                 if low is not None and _within(proposal, rally, tolerance_ms) and _cost(proposal, rally) == low}
         if index in proposal_of:
             named.add(proposals[proposal_of[index]].proposed_winner)
+        for other, proposal in enumerate(proposals):
+            if proposal.proposed_winner in named or not _within(proposal, rally, tolerance_ms):
+                continue
+            # Pair the two by force: is the best of the rest still a best pairing in all?
+            size, cost = _best_pairing([item for position, item in enumerate(gold) if position != index],
+                                       [item for position, item in enumerate(proposals) if position != other], tolerance_ms)
+            if (size + 1, cost + _cost(proposal, rally)) == best:
+                named.add(proposal.proposed_winner)
         # Two values out of HOME, AWAY and UNKNOWN always include a side, so two abstentions
         # never contradict each other.
         if len(named) > 1:
             raise ContradictingProposals(
                 f"proposals within +/-{tolerance_ms} ms of the gold rally {rally.start_ms}-{rally.end_ms} ms name "
                 f"different winners ({', '.join(sorted(named))}); the component made no single decision on that rally")
+
+
+def _more_confident(proposal: Proposal, than: Proposal) -> bool:
+    return proposal.confidence is not None and (than.confidence is None or proposal.confidence > than.confidence)
+
+
+def _score_the_confident_twin(gold: Sequence[agreement.Rally], proposals: Sequence[Proposal],
+                              proposal_of: dict[int, int], tolerance_ms: int) -> None:
+    """Where an unpaired proposal names the same winner as a gold rally's paired one, at the
+    same cost and with a higher confidence, the two change places. Size, cost and every kind
+    stay the same; the confident decision is scored. Where several rallies share proposals
+    the pairing alone does not ensure this."""
+    changed = True
+    while changed:
+        changed = False
+        paired = set(proposal_of.values())
+        for index in sorted(proposal_of):
+            rally, current = gold[index], proposals[proposal_of[index]]
+            twins = [other for other, proposal in enumerate(proposals)
+                     if other not in paired and proposal.proposed_winner == current.proposed_winner
+                     and _within(proposal, rally, tolerance_ms) and _cost(proposal, rally) == _cost(current, rally)
+                     and _more_confident(proposal, current)]
+            if twins:
+                # The proposals are in content order, so the first twin is the most confident one.
+                proposal_of[index] = twins[0]
+                changed = True
+                break
 
 
 def evaluate_video(gold: Sequence[agreement.Rally], proposals: Sequence[Proposal],
@@ -246,15 +294,16 @@ def evaluate_video(gold: Sequence[agreement.Rally], proposals: Sequence[Proposal
     The result depends on the contents of the proposals and never on their order: the
     proposals are paired in _in_content_order. Raises ContradictingProposals when the
     proposals that speak for one gold rally name different winners (HOME and AWAY, or a side
-    and UNKNOWN): those nearest to it within the tolerance and the one paired with it. The
-    component then made no single decision on that rally."""
+    and UNKNOWN): those nearest to it within the tolerance and any that some best pairing
+    pairs with it. The component then made no single decision on that rally."""
     proposals = sorted(proposals, key=_in_content_order)
     boundaries = metrics.evaluate_boundaries(
         [(rally.start_ms, rally.end_ms) for rally in gold],
         [(proposal.start_ms, proposal.end_ms) for proposal in proposals], tolerance_ms)
     proposal_of = {match.gold_index: match.predicted_index for match in boundaries.matches}
-    paired = set(proposal_of.values())
     _refuse_contradictions(gold, proposals, proposal_of, tolerance_ms)
+    _score_the_confident_twin(gold, proposals, proposal_of, tolerance_ms)
+    paired = set(proposal_of.values())
 
     excluded: Counter[str] = Counter()
     # Each item is (time, order within one moment, outcome).
@@ -297,6 +346,7 @@ def evaluate_video(gold: Sequence[agreement.Rally], proposals: Sequence[Proposal
         automatic_proposals=sum(proposal.automatic for proposal in proposals),
         hard_cases={status: count for status in HARD_CASES
                     if (count := sum(hard_case(rally) == status for rally in gold))},
+        status_given=sum(_given(rally.ground_truth_status) is not None for rally in gold),
     )
 
 
@@ -627,6 +677,8 @@ class Evaluation:
     # Gold rallies by HARD_CASES status over all videos, and the automatic decisions on them.
     hard_cases: Mapping[str, int] = field(default_factory=dict)
     hard_cases_decided: int = 0
+    # Gold rallies that state a ground_truth_status. With none the hard cases are unknown.
+    status_given: int = 0
 
     @property
     def not_measured_reason(self) -> str | None:
@@ -652,8 +704,9 @@ class Evaluation:
             "automaticProposals": self.automatic_proposals,
             "notMeasuredReason": self.not_measured_reason,
             "excluded": dict(self.excluded),
-            "hardCases": {**{status: self.hard_cases.get(status, 0) for status in HARD_CASES},
-                          "automaticDecisions": self.hard_cases_decided},
+            "hardCases": {"statusGiven": self.status_given,
+                          **{status: self.hard_cases.get(status, 0) if self.status_given else None for status in HARD_CASES},
+                          "automaticDecisions": self.hard_cases_decided if self.status_given else None},
             "layers": {name: layer.to_dict(measured, level, resamples=resamples, seed=seed)
                        for name, layer in self.layers.items()},
             "notScored": {
@@ -698,6 +751,7 @@ def pool(per_video: Mapping[str, VideoEvaluation]) -> Evaluation:
         hard_cases={status: hard[status] for status in HARD_CASES if hard[status]},
         hard_cases_decided=sum(outcome.kind == "AUTO_ON_INELIGIBLE_GOLD" and hard_case(outcome.gold) is not None
                                for video in per_video.values() for outcome in video.outcomes),
+        status_given=sum(video.status_given for video in per_video.values()),
     )
 
 

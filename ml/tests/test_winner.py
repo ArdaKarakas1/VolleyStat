@@ -247,6 +247,58 @@ def test_each_proposal_belongs_to_the_rally_with_the_smallest_sum_of_errors(gold
     assert [(outcome.kind, outcome.reason) for outcome in video.outcomes] == expected
 
 
+def test_a_nearer_rally_out_of_reach_does_not_take_the_proposal_away():
+    golds = [short(400, 1900, "HOME"), short(2001, 2500, "AWAY")]
+    rows = [Proposal(400, 1900, "HOME"), Proposal(2001, 2500, "AWAY"), Proposal(1000, 2500, "AWAY")]
+    for order in (rows, rows[::-1]):
+        with pytest.raises(winner.ContradictingProposals, match="gold rally 400-1900 ms"):
+            winner.evaluate_video(golds, order)
+
+
+def test_the_refusal_depends_on_intervals_and_sides_and_never_on_confidences():
+    # Two pairings of the same size and cost exist at this loose tolerance: the HOME
+    # proposal can be scored on the second rally, whose nearest proposal abstains.
+    golds = [short(12000, 22000, "HOME"), short(32000, 38000, "HOME"), short(46000, 50000, "AWAY")]
+    for confidences in ((0.5, 0.5, None), (0.95, None, 0.7)):
+        rows = [Proposal(12000, 22000, "HOME", confidences[0]), Proposal(24000, 25000, "HOME", confidences[1]),
+                Proposal(32000, 35000, "UNKNOWN", confidences[2])]
+        with pytest.raises(winner.ContradictingProposals, match="gold rally 32000-38000 ms"):
+            winner.evaluate_video(golds, rows, tolerance_ms=30_000)
+
+
+@pytest.mark.parametrize("golds, rows, tolerance_ms", [
+    ([short(50, 450, "AWAY"), short(550, 1350, "AWAY"), short(1400, 2400, "AWAY")],
+     [Proposal(550, 1450, "HOME", 0.5), Proposal(1500, 2400, "HOME", 0.5), Proposal(1500, 2400, "HOME", 0.5),
+      Proposal(1500, 2400, "HOME", 0.95)], 1000),
+    ([short(1250, 11250, "AWAY"), short(13750, 33750, "AWAY"), short(35000, 60000, "AWAY")],
+     [Proposal(13750, 36250, "HOME", 0.5), Proposal(37500, 60000, "HOME", 0.5), Proposal(37500, 60000, "HOME", 0.5),
+      Proposal(37500, 60000, "HOME", 0.95)], 25_000),
+])
+def test_a_confident_twin_is_scored_even_where_the_pairing_spans_several_rallies(golds, rows, tolerance_ms):
+    for order in (rows, rows[::-1]):
+        layer = winner.pool({"V1": winner.evaluate_video(golds, order, tolerance_ms)}).layers["GOLD"]
+        assert layer.calibration.high_confidence(0.9) == (1, 1)
+
+
+@pytest.mark.parametrize("golds, rows", [
+    ([short(346, 565, "AWAY"), short(671, 917, "HOME"), short(1476, 1740, "HOME")],
+     [Proposal(891, 1285, "HOME", 0.5), Proposal(1010, 1375, "HOME"), Proposal(710, 1375, "HOME")]),
+    ([short(346, 565, "AWAY"), short(671, 917, "HOME"), short(1476, 1740, "HOME")],
+     [Proposal(891, 1285, "HOME", 0.5), Proposal(1010, 1375, "HOME"), Proposal(1010, 1075, "HOME")]),
+    ([short(116, 360, "AWAY"), short(956, 1477, "AWAY"), short(1832, 2358, "AWAY"), short(2687, 3220, "HOME")],
+     [Proposal(499, 1003, "AWAY", 0.9), Proposal(1333, 2203, "HOME", 0.5), Proposal(1145, 2327, "AWAY", 0.5),
+      Proposal(1145, 2327, "HOME", 0.5)]),
+])
+def test_rallies_that_share_proposals_give_one_report_in_any_row_order(golds, rows):
+    def report(order):
+        try:
+            video = winner.evaluate_video(golds, order)
+        except winner.ContradictingProposals as error:
+            return str(error)
+        return winner.pool({"V1": video}).to_dict(resamples=50), winner.failure_rows({"V1": video})
+    assert report(rows) == report(rows[::-1])
+
+
 def test_a_contradiction_on_a_later_rally_of_the_video_is_refused_too():
     with pytest.raises(winner.ContradictingProposals, match="gold rally 10000-15000 ms"):
         winner.evaluate_video([gold(0, "HOME"), gold(1, "HOME")], [prop(0, "HOME"), prop(1, "HOME"), prop(1, "AWAY")])

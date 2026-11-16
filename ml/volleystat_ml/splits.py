@@ -306,8 +306,8 @@ def read_lock_manifest(path: Path) -> LockManifest:
 
 
 def is_lock_manifest(path: Path) -> bool:
-    first_line = read_text(path).partition("\n")[0]
-    return tuple(read_csv(first_line)[0]) == MANIFEST_COLUMNS
+    # The header is the first CSV record, which a quoted line break can spread over two lines.
+    return tuple(read_csv(read_text(path))[0]) == MANIFEST_COLUMNS
 
 
 def read_text(path: Path) -> str:
