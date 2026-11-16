@@ -49,6 +49,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return EXIT_UNUSABLE
 
 
+# More resamples than this change no printed digit and would only make a run look hung.
+MAX_RESAMPLES = 1_000_000
+
+
 def _in_range(kind: type, *, minimum: float | None = None, above: float | None = None,
               maximum: float | None = None) -> Callable[[str], Any]:
     """An argparse type: a finite number of `kind` inside the given range."""
@@ -63,7 +67,8 @@ def _in_range(kind: type, *, minimum: float | None = None, above: float | None =
             value = kind(text)
         except ValueError:
             value = math.nan
-        if (not math.isfinite(value) or (minimum is not None and value < minimum)
+        # A whole number is exact at any size; only a float can be infinite or not a number.
+        if ((isinstance(value, float) and not math.isfinite(value)) or (minimum is not None and value < minimum)
                 or (above is not None and value <= above) or (maximum is not None and value > maximum)):
             raise argparse.ArgumentTypeError(f"must be {rule}, got {text!r}")
         return value
@@ -129,7 +134,7 @@ def _parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--pred", type=Path, nargs="+", required=True,
                           help="JSON written by 'segment', or CSV with video_id,start_ms,end_ms")
     evaluate.add_argument("--tolerance-ms", type=_in_range(int, minimum=0), default=metrics.DEFAULT_TOLERANCE_MS)
-    evaluate.add_argument("--resamples", type=_in_range(int, minimum=1), default=2000,
+    evaluate.add_argument("--resamples", type=_in_range(int, minimum=1, maximum=MAX_RESAMPLES), default=2000,
                           help="bootstrap resamples for the intervals")
     evaluate.add_argument("--seed", type=_in_range(int, minimum=0), default=0, help="seed of the bootstrap generator")
     evaluate.add_argument("--json", action="store_true",
@@ -150,7 +155,7 @@ def _parser() -> argparse.ArgumentParser:
     win.add_argument("--high-confidence", type=_in_range(float, minimum=0, maximum=1),
                      default=winner.DEFAULT_HIGH_CONFIDENCE,
                      help="wrong decisions with a confidence at or above this level are counted on their own (default 0.9)")
-    win.add_argument("--resamples", type=_in_range(int, minimum=1), default=2000,
+    win.add_argument("--resamples", type=_in_range(int, minimum=1, maximum=MAX_RESAMPLES), default=2000,
                      help="resamples for the interval of Brier and for the reference of ECE")
     win.add_argument("--seed", type=_in_range(int, minimum=0), default=0, help="seed of the generator behind both")
     win.add_argument("--manifest", type=Path,
@@ -896,6 +901,9 @@ def _evaluate_winner(args: argparse.Namespace) -> int:
     # The breadth behind the G3 numbers: the videos and matches that hold GOLD-layer rallies.
     gold_videos = [video_id for video_id in shared if any(outcome.layer == "GOLD" for outcome in per_video[video_id].outcomes)]
     gold_groups = None if args.manifest is None else len({locked[video_id].match_group_id for video_id in gold_videos})
+    # The breadth behind the intervals: the videos and matches that hold eligible rallies of either layer.
+    behind = [video_id for video_id in shared if any(outcome.layer for outcome in per_video[video_id].outcomes)]
+    behind_groups = None if args.manifest is None else len({locked[video_id].match_group_id for video_id in behind})
 
     rows = winner.failure_rows(per_video)
     # HOME or AWAY proposals in videos that were not evaluated: named, so that a run whose
@@ -998,8 +1006,8 @@ def _evaluate_winner(args: argparse.Namespace) -> int:
     if confident is not None:
         print(f"not scored, with a confidence of {_level(args.high_confidence)} or more: {confident}")
     if measured:
-        groups = "" if match_groups is None else f" in {match_groups} match group(s)"
-        print(f"intervals: 95% Wilson score intervals over rallies from {len(shared)} video(s){groups}. They treat the "
+        groups = "" if behind_groups is None else f" in {behind_groups} match group(s)"
+        print(f"intervals: 95% Wilson score intervals over rallies from {len(behind)} video(s){groups}. They treat the "
               "rallies as independent draws. Rallies of one match share hall, camera and teams, so an interval for "
               "new matches is wider.")
     if args.out is not None:

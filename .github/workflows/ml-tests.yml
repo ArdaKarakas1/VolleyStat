@@ -22,6 +22,8 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # The suite takes under a minute; a pairing loop that never ends must not hold a runner for six hours.
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: ml

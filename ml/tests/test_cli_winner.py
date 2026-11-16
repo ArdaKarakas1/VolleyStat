@@ -788,6 +788,13 @@ def test_where_proposals_reach_several_rallies_the_report_says_so(tmp_path, caps
     assert as_json(capsys, "--gold", gold, "--pred", pred, "--tolerance-ms", 30000)["proposalsReachingSeveralRallies"] == 3
     code, out, _ = evaluate(capsys, "--gold", gold, "--pred", pred)
     assert "two or more gold rallies" not in out
+    near = gold_file(tmp_path, [["V1", 0, 1000, "AWAY", "OBSERVED", "DOUBLE_AGREED"],
+                                ["V1", 1500, 2500, "HOME", "OBSERVED", "DOUBLE_AGREED"]], name="near.csv")
+    one = write_json(tmp_path / "one.json", {**document, "rallies": [
+        {"startMs": 600, "endMs": 1600, "proposedWinner": "HOME", "confidence": None}]})
+    code, out, _ = evaluate(capsys, "--gold", near, "--pred", one)
+    assert "1 proposal(s) lie within +/-1000 ms of two or more gold rallies." in out
+    assert as_json(capsys, "--gold", near, "--pred", one)["proposalsReachingSeveralRallies"] == 1
 
 
 def test_a_needs_more_evidence_case_alone_is_named_as_a_hard_case(tmp_path, capsys):
@@ -876,6 +883,29 @@ def test_a_missing_test_video_is_listed_with_the_side_that_is_missing(tmp_path, 
     assert document["notEvaluated"] == {"goldOnly": ["V2"], "goldEmpty": [], "goldWithoutWinner": [], "predictedOnly": [], "manifestOnly": ["V7"], "automaticProposals": 0}
     assert document["matchGroups"] == 1
     assert "test video(s) of the manifest were not evaluated: V2, V7" in document["reasons"]
+
+
+def test_a_test_video_with_predictions_and_no_gold_is_named_with_the_side_that_is_missing(tmp_path, capsys):
+    gold = gold_file(tmp_path, gold_rows("V1", ["HOME"] * 3))
+    preds = [pred_file(tmp_path, "V1", [(0, "HOME")]), pred_file(tmp_path, "V2", [(0, "HOME")])]
+    manifest, digest = lock(tmp_path, [("V1", "M1", "test"), ("V2", "M2", "test")])
+    arguments = ("--gold", gold, "--pred", *preds, "--manifest", manifest, "--expect-sha256", digest)
+    code, out, _ = evaluate(capsys, *arguments)
+    assert "not evaluated, in the test split of the manifest: V2 (no gold file)" in out
+    assert as_json(capsys, *arguments)["notEvaluated"] == {
+        "goldOnly": [], "goldEmpty": [], "goldWithoutWinner": [], "predictedOnly": ["V2"], "manifestOnly": [],
+        "automaticProposals": 1}
+
+
+def test_the_interval_note_names_only_the_videos_and_matches_that_hold_eligible_rallies(tmp_path, capsys):
+    gold, preds, manifest, digest = gate_inputs(tmp_path)
+    rows = [row for row in csv.reader(open(gold, encoding="utf-8-sig"))][1:]
+    # V2 is a hard recording: every winner is UNKNOWN, so it holds no eligible rally.
+    gold_file(tmp_path, [row if row[0] == "V1" else [*row[:3], "UNKNOWN", "UNKNOWN", row[5]] for row in rows])
+    code, out, _ = evaluate(capsys, "--gold", gold, "--pred", *preds, "--manifest", manifest, "--expect-sha256", digest)
+    assert code == 0
+    assert "intervals: 95% Wilson score intervals over rallies from 1 video(s) in 1 match group(s)." in out
+    assert "  GOLD-layer rallies from 1 video(s) in 1 match group(s)" in out
 
 
 def test_a_manifest_that_can_not_be_trusted_or_does_not_fit_the_videos_is_refused(tmp_path, capsys):
@@ -1126,9 +1156,17 @@ def test_the_gold_role_of_evaluate_is_not_changed_by_the_new_command(tmp_path, c
     assert run(capsys, "evaluate", "--gold", lower, "--pred", pred)[0] == 0
 
 
+def test_a_huge_whole_number_is_read_exactly_and_never_crashes_the_parser(tmp_path, capsys):
+    gold = gold_file(tmp_path, gold_rows("V1", ["HOME"] * 2))
+    pred = pred_file(tmp_path, "V1", [(0, "HOME"), (1, "HOME")])
+    for option in ("--tolerance-ms", "--seed"):
+        code, out, err = evaluate(capsys, "--gold", gold, "--pred", pred, option, 10 ** 400)
+        assert (code, err) == (0, ""), err
+
+
 @pytest.mark.parametrize("option, value", [
     ("--tolerance-ms", -1), ("--high-confidence", 1.5), ("--high-confidence", -0.1), ("--resamples", 0), ("--seed", -1),
-    ("--expect-sha256", "abc"),
+    ("--expect-sha256", "abc"), ("--resamples", 1_000_001), ("--resamples", 10 ** 400), ("--tolerance-ms", "1e400"),
 ])
 def test_an_option_outside_its_range_is_refused_by_the_parser(tmp_path, capsys, option, value):
     gold = gold_file(tmp_path, gold_rows("V1", ["HOME"]))

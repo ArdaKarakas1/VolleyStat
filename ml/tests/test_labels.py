@@ -222,13 +222,17 @@ def test_winner_evidence_is_one_value_of_the_dictionary_where_a_rally_carries_it
                        for index, value in enumerate(evidence)], rally("R9", 90000, 95000))
     assert validate_annotation(every) == []
     # A misspelt RULE_CONSTRAINT would be counted as some other evidence.
+    # An empty or false value that passed would count as a stated evidence in evaluate-winner.
     wrong = document(rally("R1", 0, 5000, winnerEvidence="rule_constraint"), rally("R2", 6000, 9000, winnerEvidence=3),
-                     rally("R3", 10000, 12000, winner_evidence="VIDEO"))
+                     rally("R3", 10000, 12000, winner_evidence="VIDEO"), rally("R4", 13000, 15000, winnerEvidence=""),
+                     rally("R5", 16000, 18000, winnerEvidence=False))
     assert validate_annotation(wrong) == [
         "$.rallies[0].winnerEvidence: must be one of VIDEO, SCOREBOARD, AUDIO, RULE_CONSTRAINT, EXTERNAL_NOTES, "
         "found 'rule_constraint'",
         "$.rallies[1].winnerEvidence: expected string, found integer",
         "$.rallies[2]: 'winner_evidence' is the CSV spelling; in JSON the key is 'winnerEvidence'",
+        "$.rallies[3].winnerEvidence: must be one of VIDEO, SCOREBOARD, AUDIO, RULE_CONSTRAINT, EXTERNAL_NOTES, found ''",
+        "$.rallies[4].winnerEvidence: expected string, found boolean",
     ]
 
 

@@ -148,6 +148,15 @@ def scored(video):
             for outcome in video.outcomes]
 
 
+def test_unpaired_twins_are_listed_by_their_contents_and_a_confidence_of_zero_comes_before_none():
+    rows = [prop(3, "HOME"), prop(3, "HOME", 0.0)]
+    for order in (rows, rows[::-1]):
+        video = winner.evaluate_video([gold(0, "AWAY")], order)
+        assert scored(video) == [("NOT_PROPOSED", None, 0, None), ("AUTO_UNPAIRED", "NO_GOLD_THERE", None, 0.0),
+                                 ("AUTO_UNPAIRED", "NO_GOLD_THERE", None, None)]
+        assert [row["confidence"] for row in winner.failure_rows({"V1": video})] == [None, 0.0, None]
+
+
 def test_a_tie_is_broken_by_the_contents_of_the_file_and_never_by_its_row_order():
     # Same side, same interval, two confidences: the more confident one is scored, so a
     # confident wrong decision can not hide behind a row order.
@@ -308,10 +317,14 @@ def test_the_twin_pass_ends_on_identical_twins_and_prefers_any_confidence_to_non
     signal.alarm(10)
     try:
         video = winner.evaluate_video([gold(0, "AWAY")], [prop(0, "HOME", 0.5), prop(0, "HOME", 0.5)])
+        none_twins = winner.evaluate_video([gold(0, "AWAY")], [prop(0, "HOME"), prop(0, "HOME")])
+        mixed = winner.evaluate_video([gold(0, "AWAY")], [prop(0, "HOME"), prop(0, "HOME", 0.95)])
     finally:
         signal.alarm(0)
         signal.signal(signal.SIGALRM, previous)
     assert scored(video) == [("WRONG", None, 0, 0.5), ("AUTO_UNPAIRED", "SECOND_PROPOSAL", None, 0.5)]
+    assert scored(none_twins) == [("WRONG", None, 0, None), ("AUTO_UNPAIRED", "SECOND_PROPOSAL", None, None)]
+    assert scored(mixed) == [("WRONG", None, 0, 0.95), ("AUTO_UNPAIRED", "SECOND_PROPOSAL", None, None)]
     # A twin with a confidence takes the place of one without.
     golds = [short(50, 450, "AWAY"), short(550, 1350, "AWAY"), short(1400, 2400, "AWAY")]
     rows = [Proposal(550, 1450, "HOME", 0.5), Proposal(1500, 2400, "HOME"), Proposal(1500, 2400, "HOME"),
@@ -355,6 +368,11 @@ def test_where_whole_pairings_tie_the_report_stays_one_and_names_the_ambiguity()
         reports.append(evaluation.to_dict(resamples=50))
     assert reports[0] == reports[1]
     assert one_video([gold(0), gold(1)], [prop(0), prop(1)]).reaching_several == 0
+    # Summed over videos, and an abstention that reaches two rallies counts too.
+    video = winner.evaluate_video(golds, rows, tolerance_ms=30_000)
+    assert winner.pool({"V1": video, "V2": video}).reaching_several == 6
+    assert winner.evaluate_video([short(0, 1000, "AWAY"), short(1500, 2500, "HOME")],
+                                 [Proposal(600, 1600, "UNKNOWN")]).reaching_several == 1
 
 
 def test_in_dense_pilot_geometries_the_refusal_follows_intervals_and_sides_only():
@@ -402,6 +420,61 @@ def test_in_dense_pilot_geometries_the_refusal_follows_intervals_and_sides_only(
         reached += any(sum(abs(item.start_ms - rally.start_ms) <= 1000 and abs(item.end_ms - rally.end_ms) <= 1000
                            for rally in golds) > 1 for item in rows)
     assert reached > 100 and 30 < refused < 220
+
+
+def test_the_twin_pass_turns_any_best_pairing_into_one_that_scores_the_confident_twins():
+    import random
+    import signal
+    from volleystat_ml import metrics
+
+    def stop(*_):
+        raise TimeoutError("the twin pass did not end")
+    generator = random.Random(17)
+    swaps = 0
+    previous = signal.signal(signal.SIGALRM, stop)
+    signal.alarm(60)
+    try:
+        for _ in range(400):
+            start, golds = 0, []
+            for _ in range(generator.randint(2, 5)):
+                start += generator.randint(50, 200)
+                golds.append(short(start, start + generator.randint(400, 1000), "AWAY"))
+                start = golds[-1].end_ms
+            rows = [Proposal(max(0, rally.start_ms + shift), rally.end_ms + shift, "HOME",
+                             generator.choice([0.3, 0.5, 0.95, None]))
+                    for rally in golds for shift in [generator.choice([0, 100, -100, 500])]]
+            for _ in range(generator.randint(1, 3)):
+                twin = generator.choice(rows)
+                rows.append(Proposal(twin.start_ms, twin.end_ms, "HOME", generator.choice([0.3, 0.5, 0.95, None])))
+            rows = sorted(rows, key=winner._in_content_order)
+            # Any best pairing, found on the rows in a shuffled order.
+            shuffled = list(range(len(rows)))
+            generator.shuffle(shuffled)
+            pairs = metrics._match([(rally.start_ms, rally.end_ms) for rally in golds],
+                                   [(rows[index].start_ms, rows[index].end_ms) for index in shuffled], 1000)
+            proposal_of = {gold_index: shuffled[predicted] for predicted, gold_index in pairs}
+            before = dict(proposal_of)
+            winner._score_the_confident_twin(golds, rows, proposal_of, 1000)
+            swaps += proposal_of != before
+            assert len(set(proposal_of.values())) == len(proposal_of)
+            assert sorted(proposal_of) == sorted(before)
+            cost = sum(abs(rows[p].start_ms - golds[g].start_ms) + abs(rows[p].end_ms - golds[g].end_ms)
+                       for g, p in proposal_of.items())
+            assert (len(proposal_of), cost) == winner._best_pairing(golds, rows, 1000)
+            unpaired = [index for index in range(len(rows)) if index not in proposal_of.values()]
+            for g, p in proposal_of.items():
+                here = abs(rows[p].start_ms - golds[g].start_ms) + abs(rows[p].end_ms - golds[g].end_ms)
+                for other in unpaired:
+                    reach = (abs(rows[other].start_ms - golds[g].start_ms) <= 1000
+                             and abs(rows[other].end_ms - golds[g].end_ms) <= 1000)
+                    same = abs(rows[other].start_ms - golds[g].start_ms) + abs(rows[other].end_ms - golds[g].end_ms) == here
+                    better = rows[other].confidence is not None and (rows[p].confidence is None
+                                                                     or rows[other].confidence > rows[p].confidence)
+                    assert not (reach and same and better)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+    assert swaps > 50
 
 
 def test_the_pairing_after_the_twin_pass_is_still_a_best_one_to_one_pairing():
@@ -880,6 +953,8 @@ def test_a_ratio_exactly_on_its_target_meets_it_and_nothing_is_rounded_up(numera
 @pytest.mark.parametrize("value, target, text", [
     (0.951, 0.95, "0.951"), (0.9497487437185929, 0.95, "0.9497"), (0.949854375408217, 0.95, "0.9499"),
     (0.5999453676338891, 0.60, "0.5999"), (0.59996, 0.60, "0.59996"), (0.95, 0.95, "0.950"), (1.0, 0.95, "1.000"), (0.0, 0.60, "0.000"),
+    # Values that need up to all nine decimals, and one beyond them.
+    (0.9499999999999, 0.95, "0.9499999999999"), (winner.wilson_interval(5043, 8553).high, 0.60, "0.5999999995742058"),
 ])
 def test_a_value_beside_a_target_is_printed_on_the_same_side_of_it(value, target, text):
     # Three decimals would print 0.94975 as 0.950 next to "below the target".

@@ -487,3 +487,12 @@ def test_a_header_cell_over_two_lines_does_not_hide_an_inventory(tmp_path, endin
 ])
 def test_reading_csv_keeps_the_rules_of_the_old_reader_at_the_edges(text, expected):
     assert splits.read_csv(text) == expected
+
+
+def test_an_inventory_that_starts_with_the_manifest_columns_is_still_an_inventory(tmp_path):
+    rows = ["video_id,match_group_id,arena_id,camera_setup_id,sha256,training_allowed,split,notes"]
+    rows += [f"V{index},M{index},A1,C1,{str(index) * 64},true,{'test' if index < 2 else 'train'}," for index in range(4)]
+    path = tmp_path / "inventory.csv"
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    assert splits.is_lock_manifest(path) is False
+    assert [video.video_id for video in splits.read_inventory(path)] == ["V0", "V1", "V2", "V3"]
