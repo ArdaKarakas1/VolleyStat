@@ -101,9 +101,9 @@ def _sha256(text: str) -> str:
 # entry here stops the parser from being built.
 _SEGMENT_RANGES: dict[str, dict[str, float]] = {
     "sample_fps": {"above": 0},
-    "frame_width": {"minimum": 1},
-    "frame_height": {"minimum": 1},
-    "smooth_window_ms": {"minimum": 0},
+    "frame_width": {"minimum": 1, "maximum": segmenter.MAX_FRAME_SIDE},
+    "frame_height": {"minimum": 1, "maximum": segmenter.MAX_FRAME_SIDE},
+    "smooth_window_ms": {"minimum": 0, "maximum": segmenter.MAX_SMOOTH_WINDOW_MS},
     "noise_floor": {"above": 0},
     "min_contrast_ratio": {"above": 1},
     "enter_level": {"above": 0, "maximum": 1},
@@ -1005,7 +1005,8 @@ def _evaluate_winner(args: argparse.Namespace) -> int:
     confident = evaluation.unscored_high_confidence(args.high_confidence)
     if confident is not None:
         print(f"not scored, with a confidence of {_level(args.high_confidence)} or more: {confident}")
-    if measured:
+    # Without an eligible rally no layer prints an interval, so there is nothing to describe.
+    if measured and behind:
         groups = "" if behind_groups is None else f" in {behind_groups} match group(s)"
         print(f"intervals: 95% Wilson score intervals over rallies from {len(behind)} video(s){groups}. They treat the "
               "rallies as independent draws. Rallies of one match share hall, camera and teams, so an interval for "

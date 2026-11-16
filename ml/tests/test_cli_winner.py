@@ -914,6 +914,46 @@ def test_the_interval_note_names_only_the_videos_and_matches_that_hold_eligible_
     assert "  GOLD-layer rallies from 1 video(s) in 1 match group(s)" in out
 
 
+def test_without_an_eligible_rally_there_is_no_interval_and_no_note_about_one(tmp_path, capsys):
+    # A hard recording: every winner is UNKNOWN, and the analyzer still decides.
+    gold = gold_file(tmp_path, gold_rows("V1", ["UNKNOWN"] * 2))
+    pred = pred_file(tmp_path, "V1", [(0, "HOME", 0.95), (1, "AWAY", 0.5)])
+    manifest, digest = lock(tmp_path, [("V1", "M1", "test")])
+    for arguments in (("--gold", gold, "--pred", pred), ("--gold", gold, "--pred", pred, "--manifest", manifest,
+                                                         "--expect-sha256", digest)):
+        code, out, _ = evaluate(capsys, *arguments)
+        assert code == 0
+        assert len([line for line in out.splitlines() if line.startswith("layer ") and "no eligible rally" in line]) == 2
+        assert not [line for line in out.splitlines() if line.startswith("intervals:")]
+
+
+def test_without_a_manifest_the_interval_note_names_videos_only(tmp_path, capsys):
+    gold, pred = forty(tmp_path)
+    code, out, _ = evaluate(capsys, "--gold", gold, "--pred", pred)
+    assert "intervals: 95% Wilson score intervals over rallies from 1 video(s). They treat the" in out
+    assert "match group" not in out
+
+
+def test_one_confidence_written_two_ways_gives_the_same_failure_list_in_any_row_order(tmp_path, capsys):
+    gold = gold_file(tmp_path, [["V1", *at(0), "AWAY", "OBSERVED", "DOUBLE_AGREED"],
+                                ["V1", *at(1), "AWAY", "OBSERVED", "DOUBLE_AGREED"]])
+    header = ["video_id", "start_ms", "end_ms", "proposed_winner", "confidence"]
+    rows = [["V1", *at(0), "HOME", "0"], ["V1", *at(0), "HOME", "-0"]]
+    document = proposals("V1", [(1, "HOME", 1), (1, "HOME", 1.0)])
+    lists = []
+    for index, order in enumerate((rows, rows[::-1])):
+        csv_pred = write_rows(tmp_path / f"pred{index}.csv", header, order)
+        json_pred = write_json(tmp_path / f"pred{index}.json",
+                               {**document, "videoId": "V1", "rallies": document["rallies"][::1 - 2 * index]})
+        for pred in (csv_pred, json_pred):
+            out_file = tmp_path / f"failures_{pred.stem}_{pred.suffix[1:]}.csv"
+            code, _, err = evaluate(capsys, "--gold", gold, "--pred", pred, "--out", out_file)
+            assert code == 0, err
+            lists.append(out_file.read_bytes())
+    assert lists[0] == lists[2] and lists[1] == lists[3]
+    assert b"-0.0" not in lists[0] and b",1.0," in lists[1]
+
+
 def test_a_manifest_that_can_not_be_trusted_or_does_not_fit_the_videos_is_refused(tmp_path, capsys):
     gold, preds, manifest, digest = gate_inputs(tmp_path)
     base = ("--gold", gold, "--pred", *preds)
@@ -1160,6 +1200,18 @@ def test_the_gold_role_of_evaluate_is_not_changed_by_the_new_command(tmp_path, c
     lower = gold_file(tmp_path, [["V1", 0, 5000, "home", "OBSERVED", "double_agreed"]])
     pred = write_rows(tmp_path / "pred.csv", ["video_id", "start_ms", "end_ms"], [["V1", 0, 5000]])
     assert run(capsys, "evaluate", "--gold", lower, "--pred", pred)[0] == 0
+
+
+def test_a_value_on_the_end_of_its_range_is_accepted():
+    from volleystat_ml import cli
+    parser = cli._parser()
+    assert parser.parse_args(["evaluate-winner", "--gold", "g", "--pred", "p", "--resamples", "1000000",
+                              "--high-confidence", "1"]).resamples == 1_000_000
+    assert parser.parse_args(["evaluate", "--gold", "g", "--pred", "p", "--resamples", "1000000"]).resamples == 1_000_000
+    assert parser.parse_args(["evaluate-winner", "--gold", "g", "--pred", "p", "--high-confidence", "1"]).high_confidence == 1
+    arguments = parser.parse_args(["segment", "v.mp4", "--enter-level", "1", "--exit-level", "1", "--frame-width", "4096",
+                                   "--frame-height", "4096", "--smooth-window-ms", "86400000"])
+    assert (arguments.enter_level, arguments.frame_width, arguments.smooth_window_ms) == (1, 4096, 86_400_000)
 
 
 def test_a_huge_whole_number_is_read_exactly_and_never_crashes_the_parser(tmp_path, capsys):

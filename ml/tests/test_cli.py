@@ -95,6 +95,8 @@ def test_segment_parameters_come_from_the_command_line(clips, capsys):
     ("--frame-width", 0), ("--frame-height", 0), ("--frame-width", 96.5),
     ("--smooth-window-ms", -1), ("--merge-gap-ms", -1), ("--min-rally-ms", 0),
     ("--noise-floor", 0), ("--min-contrast-ratio", 1.0), ("--exit-level", 0), ("--enter-level", 1.5),
+    ("--frame-width", 4097), ("--frame-width", 10 ** 30), ("--frame-width", 10 ** 400), ("--frame-height", 4097),
+    ("--smooth-window-ms", 86_400_001), ("--smooth-window-ms", 10 ** 308), ("--smooth-window-ms", 10 ** 400),
 ])
 def test_segment_option_outside_its_range_is_refused_by_the_parser(capsys, tmp_path, option, value):
     # The video is never opened: the parser stops before the command runs.

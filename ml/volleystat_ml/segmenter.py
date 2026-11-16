@@ -41,6 +41,11 @@ TOO_SHORT = "TOO_SHORT"
 ONLY_SHORT_RUNS = "ONLY_SHORT_RUNS"
 
 PROBE_TIMEOUT_SECONDS = 90
+# Upper bounds that keep a mistyped value from running out of memory or overflowing a
+# float after the video has been decoded. The energy needs a few dozen pixels, so 4096
+# is far above any useful frame side, and no rally lasts a day.
+MAX_FRAME_SIDE = 4096
+MAX_SMOOTH_WINDOW_MS = 86_400_000
 # Frames read from the pipe per step; also how often progress is reported.
 _CHUNK_FRAMES = 32
 # How much of the end of ffmpeg's messages is read back for an error text.
@@ -105,10 +110,12 @@ class SegmenterParams:
     def __post_init__(self) -> None:
         if not (math.isfinite(self.sample_fps) and self.sample_fps > 0):
             raise ValueError("sample_fps must be a positive number")
-        if self.frame_width < 1 or self.frame_height < 1:
-            raise ValueError("frame_width and frame_height must be at least 1")
+        if not (1 <= self.frame_width <= MAX_FRAME_SIDE and 1 <= self.frame_height <= MAX_FRAME_SIDE):
+            raise ValueError(f"frame_width and frame_height must be from 1 to {MAX_FRAME_SIDE}")
         if self.smooth_window_ms < 0 or self.merge_gap_ms < 0:
             raise ValueError("smooth_window_ms and merge_gap_ms must not be negative")
+        if self.smooth_window_ms > MAX_SMOOTH_WINDOW_MS:
+            raise ValueError(f"smooth_window_ms must be at most {MAX_SMOOTH_WINDOW_MS}")
         if self.min_rally_ms < 1:
             raise ValueError("min_rally_ms must be at least 1")
         if not self.noise_floor > 0:

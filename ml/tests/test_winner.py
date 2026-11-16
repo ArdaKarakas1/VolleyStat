@@ -148,6 +148,14 @@ def scored(video):
             for outcome in video.outcomes]
 
 
+@pytest.mark.parametrize("first, second", [(1, 1.0), (0.0, -0.0), (0, -0.0)])
+def test_one_confidence_written_two_ways_is_listed_the_same_way_in_any_row_order(first, second):
+    rows = [prop(0, "HOME", first), prop(0, "HOME", second)]
+    listed = [[repr(row["confidence"]) for row in winner.failure_rows({"V1": winner.evaluate_video([gold(0, "AWAY")], order)})]
+              for order in (rows, rows[::-1])]
+    assert listed[0] == listed[1] == [repr(float(abs(first)))] * 2
+
+
 def test_unpaired_twins_are_listed_by_their_contents_and_a_confidence_of_zero_comes_before_none():
     rows = [prop(3, "HOME"), prop(3, "HOME", 0.0)]
     for order in (rows, rows[::-1]):
@@ -330,6 +338,12 @@ def test_the_twin_pass_ends_on_identical_twins_and_prefers_any_confidence_to_non
     rows = [Proposal(550, 1450, "HOME", 0.5), Proposal(1500, 2400, "HOME"), Proposal(1500, 2400, "HOME"),
             Proposal(1500, 2400, "HOME", 0.95)]
     assert winner.pool({"V1": winner.evaluate_video(golds, rows)}).layers["GOLD"].calibration.high_confidence(0.9) == (1, 1)
+    # A confidence of zero is still a confidence, also where the pairing spans several rallies.
+    rows = [Proposal(550, 1450, "HOME", 0.5), Proposal(1500, 2400, "HOME"), Proposal(1500, 2400, "HOME"),
+            Proposal(1500, 2400, "HOME", 0.0)]
+    for order in (rows, rows[::-1]):
+        calibration = winner.pool({"V1": winner.evaluate_video(golds, order)}).layers["GOLD"].calibration
+        assert sorted(calibration.pairs) == [(0.0, 0), (0.5, 0)] and calibration.without_confidence == 0
 
 
 def test_a_twin_out_of_reach_never_takes_the_place_of_the_paired_proposal():
@@ -441,11 +455,11 @@ def test_the_twin_pass_turns_any_best_pairing_into_one_that_scores_the_confident
                 golds.append(short(start, start + generator.randint(400, 1000), "AWAY"))
                 start = golds[-1].end_ms
             rows = [Proposal(max(0, rally.start_ms + shift), rally.end_ms + shift, "HOME",
-                             generator.choice([0.3, 0.5, 0.95, None]))
+                             generator.choice([0.0, 0.3, 0.5, 0.95, None]))
                     for rally in golds for shift in [generator.choice([0, 100, -100, 500])]]
             for _ in range(generator.randint(1, 3)):
                 twin = generator.choice(rows)
-                rows.append(Proposal(twin.start_ms, twin.end_ms, "HOME", generator.choice([0.3, 0.5, 0.95, None])))
+                rows.append(Proposal(twin.start_ms, twin.end_ms, "HOME", generator.choice([0.0, 0.3, 0.5, 0.95, None])))
             rows = sorted(rows, key=winner._in_content_order)
             # Any best pairing, found on the rows in a shuffled order.
             shuffled = list(range(len(rows)))
@@ -953,7 +967,8 @@ def test_a_ratio_exactly_on_its_target_meets_it_and_nothing_is_rounded_up(numera
 @pytest.mark.parametrize("value, target, text", [
     (0.951, 0.95, "0.951"), (0.9497487437185929, 0.95, "0.9497"), (0.949854375408217, 0.95, "0.9499"),
     (0.5999453676338891, 0.60, "0.5999"), (0.59996, 0.60, "0.59996"), (0.95, 0.95, "0.950"), (1.0, 0.95, "1.000"), (0.0, 0.60, "0.000"),
-    # Values that need up to all nine decimals, and one beyond them.
+    # A value that needs all nine decimals, and two that need more and are printed in full.
+    (0.9499999994, 0.95, "0.949999999"),
     (0.9499999999999, 0.95, "0.9499999999999"), (winner.wilson_interval(5043, 8553).high, 0.60, "0.5999999995742058"),
 ])
 def test_a_value_beside_a_target_is_printed_on_the_same_side_of_it(value, target, text):

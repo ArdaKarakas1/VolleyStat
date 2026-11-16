@@ -783,7 +783,8 @@ def failure_rows(per_video: Mapping[str, VideoEvaluation]) -> list[dict[str, Any
                 "pred_end_ms": proposal.end_ms if proposal else None,
                 "gold_winner": rally.value("winning_side") if rally else None,
                 "proposed_winner": proposal.proposed_winner if proposal else None,
-                "confidence": proposal.confidence if proposal else None,
+                # One number, one spelling: 1 and 1.0, or 0.0 and -0.0, are listed alike in any row order.
+                "confidence": None if proposal is None or proposal.confidence is None else float(proposal.confidence) + 0.0,
                 "reason": outcome.reason,
             })
     return rows

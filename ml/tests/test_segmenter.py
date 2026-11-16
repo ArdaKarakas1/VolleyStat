@@ -405,6 +405,7 @@ def test_too_few_samples_are_reported():
 @pytest.mark.parametrize("override", [
     {"sample_fps": 0}, {"frame_width": 0}, {"min_rally_ms": 0}, {"merge_gap_ms": -1}, {"noise_floor": 0},
     {"min_contrast_ratio": 1.0}, {"enter_level": 0.2, "exit_level": 0.3}, {"exit_level": 0}, {"enter_level": 1.5},
+    {"frame_width": 4097}, {"frame_height": 4097}, {"smooth_window_ms": 86_400_001},
 ])
 def test_invalid_parameters_are_rejected(override):
     with pytest.raises(ValueError):
