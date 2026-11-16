@@ -163,6 +163,19 @@ def test_a_tie_is_broken_by_the_contents_of_the_file_and_never_by_its_row_order(
     assert scored(first) == scored(second) == [("CORRECT", None, 0, 0.95), ("WRONG", None, 900, 0.5)]
     # Two abstentions say the same whatever confidence they carry: an abstention is never calibrated.
     assert kinds(winner.evaluate_video([gold(0)], [prop(0, "UNKNOWN", 0.3), prop(0, "UNKNOWN", 0.7)])) == ["UNKNOWN"]
+    # Equal cost with different intervals: still the more confident one, whichever starts first.
+    rows = [Proposal(9700, 15000, "HOME", 0.5), Proposal(10000, 14700, "HOME", 0.95)]
+    for order in (rows, rows[::-1]):
+        video = winner.evaluate_video([gold(1, "AWAY")], order)
+        # The unscored one starts 300 ms earlier, so it comes first in time.
+        assert scored(video) == [("AUTO_UNPAIRED", "SECOND_PROPOSAL", None, 0.5), ("WRONG", None, 10_000, 0.95)]
+    # A confidence of zero is still a confidence, and a proposal without one comes last.
+    for rows in ([prop(0, "HOME", 0.0), prop(0, "HOME")], [prop(0, "HOME", 0.99), prop(0, "HOME")]):
+        for order in (rows, rows[::-1]):
+            video = winner.evaluate_video([gold(0, "AWAY")], order)
+            assert scored(video) == [("WRONG", None, 0, rows[0].confidence), ("AUTO_UNPAIRED", "SECOND_PROPOSAL", None, None)]
+    assert winner.pool({"V1": winner.evaluate_video([gold(0, "AWAY")], [prop(0, "HOME"), prop(0, "HOME", 0.99)])}
+                       ).layers["GOLD"].calibration.high_confidence(0.9) == (1, 1)
 
 
 def test_shuffling_the_rows_of_a_prediction_file_changes_no_number():
@@ -197,6 +210,41 @@ def test_proposals_equally_near_two_rallies_that_name_different_winners_are_refu
     for order in (halfway, halfway[::-1]):
         with pytest.raises(winner.ContradictingProposals, match="AWAY, HOME"):
             winner.evaluate_video(golds, order, tolerance_ms=30_000)
+
+
+def short(start, end, side):
+    return Rally(start, end, side, None, "OBSERVED", ground_truth_status="DOUBLE_AGREED")
+
+
+def test_a_proposal_the_pairing_scores_on_a_rally_speaks_for_that_rally():
+    # P1 is nearer to the HOME rally, but the pairing scores it on the AWAY rally, whose own
+    # nearest proposal says AWAY: on that rally the component said two things.
+    golds = [short(1000, 1800, "AWAY"), short(1900, 2700, "HOME")]
+    rows = [Proposal(100, 1100, "AWAY", 0.9), Proposal(1500, 2500, "HOME", 0.9), Proposal(1900, 2700, "HOME", 0.9)]
+    for order in (rows, rows[::-1]):
+        with pytest.raises(winner.ContradictingProposals, match="gold rally 1000-1800 ms"):
+            winner.evaluate_video(golds, order)
+
+
+@pytest.mark.parametrize("golds, rows, expected", [
+    # The cost is the sum of both errors: the start alone would put the third proposal on the first rally.
+    ([short(0, 800, "HOME"), short(900, 1700, "AWAY")],
+     [Proposal(0, 800, "HOME"), Proposal(900, 1700, "AWAY"), Proposal(400, 1650, "AWAY")],
+     [("CORRECT", None), ("AUTO_UNPAIRED", "SECOND_PROPOSAL"), ("CORRECT", None)]),
+    # The maximum of the errors, or the end alone, would put it on the second rally.
+    ([short(0, 400, "HOME"), short(500, 1800, "AWAY")],
+     [Proposal(0, 400, "HOME"), Proposal(500, 1800, "AWAY"), Proposal(0, 1300, "HOME")],
+     [("CORRECT", None), ("AUTO_UNPAIRED", "SECOND_PROPOSAL"), ("CORRECT", None)]),
+    # An equal cost to a rally out of reach does not count.
+    ([short(0, 1000, "HOME"), short(1901, 2699, "AWAY")], [Proposal(900, 1900, "HOME"), Proposal(1901, 2699, "AWAY")],
+     [("CORRECT", None), ("CORRECT", None)]),
+    # One millisecond decides which rally is nearest.
+    ([short(0, 1000, "HOME"), short(1000, 2001, "AWAY")], [Proposal(500, 1500, "HOME"), Proposal(1000, 2001, "AWAY")],
+     [("CORRECT", None), ("CORRECT", None)]),
+])
+def test_each_proposal_belongs_to_the_rally_with_the_smallest_sum_of_errors(golds, rows, expected):
+    video = winner.evaluate_video(golds, rows)
+    assert [(outcome.kind, outcome.reason) for outcome in video.outcomes] == expected
 
 
 def test_a_contradiction_on_a_later_rally_of_the_video_is_refused_too():

@@ -429,3 +429,31 @@ def test_other_csv_files_are_not_taken_for_a_manifest(tmp_path):
     assert problems_of(lambda: read_lock_manifest(inventory))[0].startswith("not a lock manifest")
     path, _, _, _ = locked(tmp_path)
     assert splits.is_lock_manifest(path)
+
+
+@pytest.mark.parametrize("text, line", [
+    # A quote opened in the first data row and never closed.
+    ('video_id,notes\nV1,"net touch?\nV2,ok\n', 2),
+    # The same quote eleven lines down.
+    ("video_id,notes\n" + "".join(f"V{index},ok\n" for index in range(9)) + 'V9,"net touch?\nV10,ok\n', 11),
+    # Text after a closing quote.
+    ('video_id,notes\nV1,ok\nV2,"net" touch\n', 3),
+    # A valid cell over two lines, then an open quote: the line where that record starts.
+    ('video_id,notes\nV1,"two\nlines"\nV2,ok\nV3,"open\n', 5),
+    # Broken quotes in the header itself.
+    ('video_id,"notes\nV1,ok\n', 1),
+    ('video_id,"notes" x\nV1,ok\n', 1),
+    # A blank line before the broken record does not shift the count.
+    ('video_id,notes\nV1,ok\n\nV2,"open\n', 4),
+])
+def test_a_quote_that_breaks_the_csv_is_reported_on_the_line_where_its_record_starts(text, line):
+    with pytest.raises(splits.SplitError, match=f"^line {line}: .*a quote may not be closed"):
+        splits.read_csv(text)
+
+
+def test_reading_csv_keeps_its_rules_for_cells_rows_and_blank_lines():
+    columns, rows, problems = splits.read_csv(' video_id , notes \n V1 , a \n\n,\nV2\nV3,b,extra\n')
+    assert columns == ["video_id", "notes"]
+    # Cells are stripped, empty rows dropped, a short row filled, a long row reported.
+    assert rows == [{"video_id": "V1", "notes": "a"}, {"video_id": "V2", "notes": ""}, {"video_id": "V3", "notes": "b"}]
+    assert problems == ["row 4: 3 cells, but the header has 2 columns"]

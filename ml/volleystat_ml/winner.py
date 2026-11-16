@@ -35,8 +35,9 @@ proposal already pairs with, a boundary off by more than the tolerance, and a de
 where the gold has no rally. `lower_bound_precision` shows what the precision would be if
 every unpaired decision of the layer's videos were a wrong one. The proposals are paired
 in an order taken from their contents, so the rows of a file can be shuffled without
-changing a number. Proposals nearest to one gold rally that name different winners are
-refused (ContradictingProposals): the component made no single decision on that rally.
+changing a number. The proposals that speak for one gold rally (those nearest to it, and
+the one the pairing scores on it) must name one winner, otherwise they are refused
+(ContradictingProposals): the component made no single decision on that rally.
 
 With fewer than MIN_RELIABLE in its own denominator a ratio is misleading. `to_dict()`
 then writes null for it and keeps the counts and the interval, so a record built from it
@@ -206,22 +207,29 @@ def _cost(proposal: Proposal, rally: agreement.Rally) -> int:
 
 def _in_content_order(proposal: Proposal) -> tuple[Any, ...]:
     """The order in which the proposals are paired. The pairing breaks a cost tie by
-    position, so the position is taken from the contents and never from the file: at a tie
-    the more confident proposal is scored, and a confident wrong decision can not hide."""
-    return (proposal.start_ms, proposal.end_ms, proposal.proposed_winner, proposal.confidence is None,
-            -(proposal.confidence or 0.0))
+    position, so the position is taken from the contents and never from the file. The
+    confidence comes first: when two proposals could pair with one gold rally at the same
+    cost, the more confident one is scored, and a confident wrong decision can not hide. A
+    proposal without a confidence comes after every one with a confidence; the bounds and
+    the side then make the order total."""
+    return (proposal.confidence is None, -(proposal.confidence or 0.0), proposal.start_ms, proposal.end_ms,
+            proposal.proposed_winner)
 
 
-def _refuse_contradictions(gold: Sequence[agreement.Rally], proposals: Sequence[Proposal], tolerance_ms: int) -> None:
-    """Each proposal belongs to the gold rallies it is nearest to within the tolerance. The
-    proposals that belong to one gold rally must name one winner."""
+def _refuse_contradictions(gold: Sequence[agreement.Rally], proposals: Sequence[Proposal],
+                           proposal_of: Mapping[int, int], tolerance_ms: int) -> None:
+    """Each proposal belongs to the gold rallies it is nearest to within the tolerance, and
+    the proposal the pairing scores on a gold rally speaks for that rally too. The proposals
+    that speak for one gold rally must name one winner."""
     nearest = []
     for proposal in proposals:
         costs = [_cost(proposal, rally) for rally in gold if _within(proposal, rally, tolerance_ms)]
         nearest.append(min(costs) if costs else None)
-    for rally in gold:
+    for index, rally in enumerate(gold):
         named = {proposal.proposed_winner for proposal, best in zip(proposals, nearest)
                  if best is not None and _within(proposal, rally, tolerance_ms) and _cost(proposal, rally) == best}
+        if index in proposal_of:
+            named.add(proposals[proposal_of[index]].proposed_winner)
         # Two values out of HOME, AWAY and UNKNOWN always include a side, so two abstentions
         # never contradict each other.
         if len(named) > 1:
@@ -237,16 +245,16 @@ def evaluate_video(gold: Sequence[agreement.Rally], proposals: Sequence[Proposal
 
     The result depends on the contents of the proposals and never on their order: the
     proposals are paired in _in_content_order. Raises ContradictingProposals when the
-    proposals nearest to one gold rally within the tolerance name different winners (HOME
-    and AWAY, or a side and UNKNOWN): the component made no single decision on that rally.
-    A proposal nearest to a neighbouring rally belongs to that rally."""
+    proposals that speak for one gold rally name different winners (HOME and AWAY, or a side
+    and UNKNOWN): those nearest to it within the tolerance and the one paired with it. The
+    component then made no single decision on that rally."""
     proposals = sorted(proposals, key=_in_content_order)
-    _refuse_contradictions(gold, proposals, tolerance_ms)
     boundaries = metrics.evaluate_boundaries(
         [(rally.start_ms, rally.end_ms) for rally in gold],
         [(proposal.start_ms, proposal.end_ms) for proposal in proposals], tolerance_ms)
     proposal_of = {match.gold_index: match.predicted_index for match in boundaries.matches}
     paired = set(proposal_of.values())
+    _refuse_contradictions(gold, proposals, proposal_of, tolerance_ms)
 
     excluded: Counter[str] = Counter()
     # Each item is (time, order within one moment, outcome).

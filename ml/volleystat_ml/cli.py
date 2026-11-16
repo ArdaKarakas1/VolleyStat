@@ -834,10 +834,13 @@ def _evaluate_winner(args: argparse.Namespace) -> int:
     # whose every rally is NOT_ANNOTATED: the intervals are there, the winners were never
     # labelled. A video whose winners an annotator looked at and could not tell (UNKNOWN,
     # UNRESOLVABLE) is evaluated: a hard recording stays in the test split.
+    def annotates_no_winner(video_id: str) -> bool:
+        return bool(gold[video_id]) and all(
+            winner.exclusion(rally) == "NOT_ANNOTATED" and winner.hard_case(rally) is None for rally in gold[video_id])
+
     both = sorted(set(gold) & set(proposals))
     gold_empty = [video_id for video_id in both if not gold[video_id]]
-    gold_without_winner = [video_id for video_id in both if gold[video_id] and all(
-        winner.exclusion(rally) == "NOT_ANNOTATED" and winner.hard_case(rally) is None for rally in gold[video_id])]
+    gold_without_winner = [video_id for video_id in both if annotates_no_winner(video_id)]
     shared = [video_id for video_id in both if video_id not in gold_empty and video_id not in gold_without_winner]
     if not shared:
         if gold_empty or gold_without_winner:
@@ -948,7 +951,7 @@ def _evaluate_winner(args: argparse.Namespace) -> int:
         if missing:
             def lacks(video_id: str) -> str:
                 sides = (["no gold file"] if video_id not in gold else ["the gold file holds no rally"] if not gold[video_id]
-                         else ["the gold file annotates no winner"] if video_id in gold_without_winner else [])
+                         else ["the gold file annotates no winner"] if annotates_no_winner(video_id) else [])
                 return ", ".join(sides + ["no prediction file"] * (video_id not in proposals))
 
             print(f"not evaluated, in the {split} split of the manifest: "

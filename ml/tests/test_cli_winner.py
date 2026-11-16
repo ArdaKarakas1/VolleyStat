@@ -273,9 +273,14 @@ def test_a_test_video_whose_winners_were_never_annotated_is_not_evaluated(tmp_pa
     assert code == 0
     assert out.splitlines()[:2] == ["PILOT RUN, NOT A GATE CHECK", "  - test video(s) of the manifest were not evaluated: V2"]
     assert "not evaluated, in the test split of the manifest: V2 (the gold file annotates no winner)" in out
+    # Under a manifest the video is named once, in the line of the split.
+    assert "not evaluated, the gold file annotates no winner" not in out
     document = as_json(capsys, *arguments)
     assert document["notEvaluated"]["goldWithoutWinner"] == ["V2"]
     assert (document["videosEvaluated"], document["matchGroups"]) == (["V1"], 1)
+    # Without its prediction file the video is named with both sides that are missing.
+    code, out, _ = evaluate(capsys, "--gold", gold, "--pred", preds[0], "--manifest", manifest, "--expect-sha256", digest)
+    assert "V2 (the gold file annotates no winner, no prediction file)" in out
     # A video whose winners an annotator looked at and could not tell is evaluated: a hard
     # recording stays in the test split.
     rows = [row if row[0] == "V1" else [row[0], row[1], row[2], "UNKNOWN", "UNKNOWN", row[5]] for row in rows]
@@ -289,12 +294,39 @@ def test_a_test_video_whose_winners_were_never_annotated_is_not_evaluated(tmp_pa
     document = as_json(capsys, "--gold", tmp_path / "unresolvable.csv", "--pred", *preds, "--manifest", manifest,
                        "--expect-sha256", digest)
     assert document["videosEvaluated"] == ["V1", "V2"] and document["notEvaluated"]["goldWithoutWinner"] == []
+    # And one whose labels await more evidence.
+    rows = [row if row[0] == "V1" else [row[0], row[1], row[2], "", "", "NEEDS_MORE_EVIDENCE"] for row in rows]
+    gold_file(tmp_path, rows, name="evidence.csv")
+    document = as_json(capsys, "--gold", tmp_path / "evidence.csv", "--pred", *preds, "--manifest", manifest,
+                       "--expect-sha256", digest)
+    assert document["videosEvaluated"] == ["V1", "V2"] and document["notEvaluated"]["goldWithoutWinner"] == []
+
+
+def test_a_video_without_any_winner_label_is_named_without_a_manifest_and_refused_alone(tmp_path, capsys):
+    rows = gold_rows("V1", ["HOME"] * 2) + [["V2", *at(index), "", "NOT_ANNOTATED", "DOUBLE_AGREED"] for index in range(2)]
+    gold = gold_file(tmp_path, rows)
+    preds = [pred_file(tmp_path, "V1", [(0, "HOME"), (1, "HOME")]), pred_file(tmp_path, "V2", [(0, "HOME"), (1, "AWAY")])]
+    code, out, _ = evaluate(capsys, "--gold", gold, "--pred", *preds)
+    assert code == 0
+    assert "not evaluated, the gold file annotates no winner: V2" in out
+    assert "not evaluated: 2 HOME or AWAY proposal(s) in videos that were not evaluated" in out
+    assert as_json(capsys, "--gold", gold, "--pred", *preds)["notEvaluated"]["automaticProposals"] == 2
+    # Alone, nothing is left to evaluate.
+    only = gold_file(tmp_path, [row for row in rows if row[0] == "V2"], name="v2.csv")
+    assert_unusable(evaluate(capsys, "--gold", only, "--pred", preds[1]),
+                    "no gold file of a video in the predicted files annotates a winner: V2")
 
 
 def test_the_gate_block_names_the_videos_and_matches_behind_the_gold_layer(tmp_path, capsys):
     gold, preds, manifest, digest = gate_inputs(tmp_path)
     rows = [row for row in csv.reader(open(gold, encoding="utf-8-sig"))][1:]
-    gold_file(tmp_path, [row[:5] + ["SINGLE_HUMAN" if row[0] == "V2" else row[5]] for row in rows])
+    gold_file(tmp_path, [row[:5] + ["SINGLE_HUMAN" if row[0] == "V2" else row[5]] for row in rows]
+              + [["V1", *at(150), "UNKNOWN", "UNKNOWN", "DOUBLE_AGREED"]])
+    # V1 also decides on a rally without a definite winner; V2 also decides where no rally is.
+    for path, extra in ((preds[0], (150, "HOME")), (preds[1], (160, "HOME"))):
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document["rallies"] += proposals(document["videoId"], [extra])["rallies"]
+        write_json(path, document)
     arguments = ("--gold", gold, "--pred", *preds, "--manifest", manifest, "--expect-sha256", digest)
     code, out, _ = evaluate(capsys, *arguments)
     assert code == 0
@@ -316,6 +348,24 @@ def test_the_bounds_of_an_interval_beside_a_target_are_not_rounded_onto_it(tmp_p
     code, out, _ = evaluate(capsys, "--gold", gold, "--pred", *preds, "--manifest", manifest, "--expect-sha256", digest)
     assert "  automatic coverage: 52/73 eligible rallies got an automatic decision (0.712)\n    95% Wilson interval: 0.5999 to 0.803" in out
 
+    # Upper ends: 50/56 reaches 0.94996 and 57/112 reaches 0.5997, neither one is the target.
+    for name, counts, line in (
+            ("upper", (50, 6, 30), "  selective precision: 50/56 automatic decisions are correct (0.893)\n    95% Wilson interval: 0.785 to 0.94996\n"),
+            ("cover", (57, 0, 55), "  automatic coverage: 57/112 eligible rallies got an automatic decision (0.509)\n    95% Wilson interval: 0.418 to 0.5997\n")):
+        (tmp_path / name).mkdir()
+        gold, preds, manifest, digest = gate_inputs(tmp_path / name, *counts)
+        code, out, _ = evaluate(capsys, "--gold", gold, "--pred", *preds, "--manifest", manifest, "--expect-sha256", digest)
+        assert line in out
+
+    # The interval of the lower bound.
+    (tmp_path / "bound").mkdir()
+    gold, preds, manifest, digest = gate_inputs(tmp_path / "bound", correct=108, wrong=0, unknown=12)
+    document = json.loads(preds[0].read_text(encoding="utf-8"))
+    document["rallies"] += proposals("V1", [(500, "HOME")])["rallies"]
+    write_json(preds[0], document)
+    code, out, _ = evaluate(capsys, "--gold", gold, "--pred", *preds, "--manifest", manifest, "--expect-sha256", digest)
+    assert "    if each were a wrong decision: 108/109 (0.991), 95% Wilson interval 0.9499 to 0.998\n" in out
+
 
 def test_a_csv_cell_beyond_the_csv_limit_is_an_error_and_not_a_traceback(tmp_path, capsys):
     pred = pred_file(tmp_path, "V1", [(0, "HOME")])
@@ -334,6 +384,19 @@ def test_a_csv_cell_beyond_the_csv_limit_is_an_error_and_not_a_traceback(tmp_pat
     stray.write_text(stray.read_text(encoding="utf-8-sig") + 'V1,10000,15000,"AWAY\n', encoding="utf-8")
     assert_unusable(evaluate(capsys, "--gold", gold_file(tmp_path, gold_rows("V1", ["HOME"] * 2), name="g2.csv"),
                              "--pred", stray), str(stray), "a quote may not be closed")
+
+
+def test_a_broken_quote_in_a_csv_header_is_an_error_with_its_line(tmp_path, capsys):
+    pred = pred_file(tmp_path, "V1", [(0, "HOME")])
+    for name, header in (("unclosed.csv", 'video_id,start_ms,end_ms,winning_side,observation_status,"notes'),
+                         ("text.csv", 'video_id,start_ms,end_ms,"winning_side" ,observation_status')):
+        gold = tmp_path / name
+        gold.write_text(header + "\nV1,0,5000,HOME,OBSERVED\n", encoding="utf-8")
+        assert_unusable(evaluate(capsys, "--gold", gold, "--pred", pred), f"{gold}: line 1: ")
+    stray = tmp_path / "pred.csv"
+    stray.write_text('video_id,start_ms,end_ms,"proposed_winner\nV1,0,5000,HOME\n', encoding="utf-8")
+    assert_unusable(evaluate(capsys, "--gold", gold_file(tmp_path, gold_rows("V1", ["HOME"])), "--pred", stray),
+                    f"{stray}: line 1: ")
 
 
 def test_proposals_outside_the_evaluated_videos_do_not_count_as_a_measurement(tmp_path, capsys):
@@ -663,6 +726,13 @@ def test_a_gate_run_without_exclusions_says_zero_and_names_no_hard_case(tmp_path
     assert "  gold rallies without a definite winner: 0\n" in out
     assert "  automatic decisions that were not scored: 0\n" in out
     assert "hard cases" not in out
+
+
+def test_a_needs_more_evidence_case_alone_is_named_as_a_hard_case(tmp_path, capsys):
+    gold = gold_file(tmp_path, gold_rows("V1", ["HOME"] * 2) + [["V1", *at(2), "HOME", "OBSERVED", "NEEDS_MORE_EVIDENCE"]])
+    pred = pred_file(tmp_path, "V1", [(0, "HOME"), (1, "HOME")])
+    code, out, _ = evaluate(capsys, "--gold", gold, "--pred", pred)
+    assert "  hard cases of the double-annotated labels, outside this layer: 0 UNRESOLVABLE, 1 NEEDS_MORE_EVIDENCE\n" in out
 
 
 def test_hard_cases_without_a_decision_say_nothing_about_decisions(tmp_path, capsys):

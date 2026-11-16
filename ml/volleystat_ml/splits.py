@@ -335,20 +335,27 @@ def read_csv(text: str) -> tuple[list[str], list[dict[str, str]], list[str]]:
     delimiter = ";" if header.count(";") > header.count(",") else ","
     # strict: a quote opened and never closed is an error. Without it the reader swallows every
     # later row into one cell, and the file silently loses those rows.
-    reader = csv.DictReader(io.StringIO(text, newline=""), delimiter=delimiter, restval="", strict=True)
-    columns = [name.strip() for name in (reader.fieldnames or [])]
-    reader.fieldnames = columns
-    rows, problems = [], []
+    reader = csv.reader(io.StringIO(text, newline=""), delimiter=delimiter, strict=True)
+    records: list[list[str]] = []
+    start = 1
     try:
-        listed = list(reader)
+        while True:
+            # The line on which the next record starts. A blank line is a record of its own,
+            # so the count stays exact.
+            start = reader.line_num + 1
+            try:
+                records.append(next(reader))
+            except StopIteration:
+                break
     except csv.Error as error:
-        # A quote that is never closed swallows the rest of the file into one cell.
-        raise SplitError([f"line {reader.line_num}: {error}; a quote may not be closed, "
+        raise SplitError([f"line {start}: {error}; a quote may not be closed, "
                           "or a cell is longer than the CSV limit"]) from error
-    for row in listed:
-        cells = {name: (row.get(name) or "").strip() for name in columns}
-        # The reader collects the cells beyond the last column under the key None.
-        surplus = row.get(None) or []
+    columns = [name.strip() for name in records[0]] if records else []
+    rows, problems = [], []
+    for record in records[1:]:
+        # A later column of the same name wins, as it does in csv.DictReader.
+        cells = {name: (record[index] if index < len(record) else "").strip() for index, name in enumerate(columns)}
+        surplus = record[len(columns):]
         if any(cells.values()) or any(cell.strip() for cell in surplus):
             rows.append(cells)
             if surplus:
