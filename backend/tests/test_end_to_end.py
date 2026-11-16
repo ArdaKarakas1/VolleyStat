@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
-from tests.helpers import wait_for_state
+from tests.helpers import one_match, wait_for_state
 
 DEMO = {"id": "demo", "version": "0.1", "kind": "MOCK"}
 UNKNOWN_VALUE = {"value": None, "status": "UNKNOWN"}
@@ -128,7 +128,7 @@ def test_match_upload_demo_analysis_review_and_report(storage, make_clip, monkey
         assert (draft["matchId"], draft["jobId"], draft["revision"]) == (match_id, job_id, 0)
         assert (draft["mock"], draft["analyzer"]) == (True, DEMO)
         assert draft["verificationStatus"] == "DRAFT"
-        assert draft["score"] == {"status": "UNKNOWN", "setsWon": {"home": None, "away": None}, "sets": [], "stoppedAtRally": 1}
+        assert draft["score"] == {"status": "UNKNOWN", "matches": [], "stoppedAtRally": 1, "unplacedRallies": 3}
         for side in ("home", "away"):
             assert draft["teams"][side] == {field: UNKNOWN_VALUE for field in TEAM_FIELDS}
         assert draft["players"] == []
@@ -178,7 +178,7 @@ def test_match_upload_demo_analysis_review_and_report(storage, make_clip, monkey
         assert report["rallies"] == case["rallies"]
         assert report["rallies"]["verified"] == sum(answer in ("HOME", "AWAY") for answer in case["answers"])
         assert report["ralliesMayBeMissing"] is True
-        assert report["score"] == case["score"]
+        assert one_match(report["score"]) == case["score"]
         for side in ("home", "away"):
             assert report["teams"][side]["points"] == case["points"][side]
             # No TERMINAL_ACTION card was answered: the kinds of points are unknown, not zero.

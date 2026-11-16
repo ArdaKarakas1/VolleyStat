@@ -190,7 +190,7 @@ Kararlar:
 
 - Kullanıcı maçı açarken üç şey seçer: maçı kaç set alan takımın kazandığını (2 ya da 3), setin kaç sayıda bittiğini ve karar setinin kaç sayıda bittiğini (25, 21 ya da 15). Uygulama FIVB kuralını seçili getirir, bu yüzden kullanıcı standart kuralla oynanan maçta hiçbir şeye dokunmaz.
 - Sunucu kuralı maçın kaydında tutar ve her sayımda oradan okur. Karar seti 2 × setsToWin − 1 numaralı settir. Her set iki farkla biter.
-- Sunucu maçı bitirmez (ADR-0112). Bir takım gereken seti aldıktan sonra da ralliler yeni set açar ve karar setinden sonraki set yine setin sayısına gider.
+- Sunucu maçı bitirmez (ADR-0112). Bir takım gereken seti aldıktan sonra da ralliler yeni set açar ve karar setinden sonraki set yine setin sayısına gider. ADR-0118 bu maddeyi değiştirdi: Maç bir takım gereken setleri alınca biter ve sonraki ralli yeni bir maç açar.
 - Sunucu yalnız uygulamanın sunduğu değerleri kabul eder. Kuralı olmayan maçı sunucu FIVB kuralıyla sayar. Sunucu 0.5 sürümünün yazdığı her maçı da böyle okur, bu yüzden güncelleme hiçbir sayıyı ve hiçbir onayı değiştirmez.
 - Kullanıcı kuralı ralli listesinden de değiştirir. Kural değişince sunucu aynı işlemde maçın incelenen her işinde liste sürümünü artırır. Kullanıcı listeyi eski kuralın set skorlarıyla onayladı, bu yüzden onay düşer. Kararlar, kartlar ve düzeltmeler kalır. Aynı kural yeniden gelirse sunucu hiçbir şey yazmaz.
 - Kural değişikliği telefonun sunucudan son okuduğu kuralı da taşır (`expectedRules`). Maçın kuralı o kural değilse sunucu isteği `409 MATCH_RULES_STALE` ile reddeder ve hiçbir şey yazmaz. Telefonun beklemekten vazgeçtiği bir istek sonradan gelirse sunucu böylece kullanıcının başka bir kurala yaptığı sonraki değişikliği geri almaz. Kural ekranı bu reddi sunucunun şimdiki kuralıyla birlikte yazar ve kullanıcının seçimini korur. Uygulama kuralın ne zaman değiştiğini bilmez, bu yüzden ekran yalnız kuralın değiştiğini söyler ve bir zaman vermez. Aynı kural yeniden gelirse sunucu bu alana bakmaz, bu yüzden telefon yanıtı kaybolan isteği güvenle yineler.
@@ -269,3 +269,24 @@ Kararlar:
 - **Bulut ve GPU:** Ürün sahibinin NVIDIA ekran kartlı bir bilgisayarı yok. Analiz ve ölçüm yerelde işlemcide çalışır. Eğitim ileride ancak ücretsiz not defteri ortamlarında yapılır. Ekip oyuncu görüntüsünü bu ortamlara ancak izin metni eğitimi ve yurt dışına aktarımı kapsadığında yükler.
 - **KVKK:** Ürün sahibi KVKK incelemesini sonraya bıraktı. Ekip hesap ve takım katmanında veriyi en aza indirir: kullanıcı adı, şifre ve görünen ad. Uygulama başka takımlara KVKK incelemesinden önce açılmaz.
 - **Hesap ve takım:** Ürün sahibi giriş, takım kurma ve takıma katılma, kaptanlar arası maç isteği, kişi ve takım istatistiği istedi. Ekip bu katmanı ayrı bir tasarımla ve ayrı dilimlerle kurar. İki kaptanın farklı yerlerden bağlanması için sunucunun internete açılması gerekir. Barındırma ayrı bir karardır.
+
+## ADR-0118: Bir video birden çok maç taşır ve maç gereken setlerde biter
+
+**Tarih:** 16 Kasım 2026 · **Durum:** Kabul edildi
+
+**Bağlam:** Sunucu maçı bitirmiyordu (ADR-0112, ADR-0115). Takımlar 3-2 biten bir maçtan sonra oynamaya devam edince sunucu sonraki setleri aynı maçın setleri sayıyordu ve kazanılan setlere katıyordu. Rapor bu yüzden maçın gerçek sonucunu yazmıyordu. Ürün sahibi 16 Kasım 2026'da kuralı verdi.
+
+Kararlar:
+
+- Bir takım `setsToWin` sete ulaşınca maç biter (FIVB 6.3.1). Sonraki ralli aynı kuralla ve aynı iki takımla yeni bir maç açar. Yeni maçın setleri 1'den sayılır ve onun karar seti de `decidingSetTarget` sayıya gider.
+- Sunucu videoyu bölümlere ayırır. Biten her maç bir `MATCH` bölümüdür. Biten son maçtan sonra oynanan ve bir maçı bitirmeyen setler `AFTER_MATCH` bölümüdür ("maç sonrası"). Hiçbir maç bitmediyse aynı setler `UNFINISHED` bölümüdür ("bitmemiş maç"). Ürün sahibinin örnekleri: 3-2 ve ardından 2-3 iki maçtır. 3-2 ve ardından 1-1 bir maç ve bir maç sonrası bölümüdür. 3-2, 3-1 ve ardından 0-1 iki maç ve bir maç sonrası bölümüdür.
+- Sayım kazananı belli olmayan bir rallide durursa sunucu o rallinin bulunduğu bölümü `STOPPED` diye yazar. O bölüm sonradan bir maça dönüşebilir ve sunucu bunu bilemez. Sunucu bölümü bu yüzden "maç sonrası" diye adlandırmaz.
+- Her bölüm kendi takım ve oyuncu istatistiğini taşır. Videonun alanları bütün videonun toplamıdır. Sayımın durduğu ralliden sonraki doğrulanmış ralliler hiçbir bölüme girmez ve yalnız video toplamında sayılır. Rapor onların sayısını `unplacedRallies` alanında verir.
+- API 0.7 oldu. Rapor `score.sets` ve `score.setsWon` alanları yerine `score.matches` taşır. Ralli listesi `sets` yerine `matches` taşır. `scoreAfter` rallinin bölüm numarasını da taşır. Sunucu ile uygulama birlikte güncellenir ve eski bir uygulama yeni sunucunun skorunu okuyamaz.
+
+Sınırlar:
+
+- Sunucu her maçta aynı iki takımı varsayar. Salonda takımlar sırayla giriyorsa, örneğin kazanan kalıyorsa, sunucu bunu ayırt etmez.
+- Bir videonun bütün maçları aynı kuralla sayılır.
+- Kaçan bir ralli bir set sınırını ve bir maç sınırını kaydırabilir. Liste onaylanana kadar hiçbir bölüm `MEASURED` olmaz.
+

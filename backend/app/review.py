@@ -74,12 +74,13 @@ def match_rules(db, match_id: str) -> report.MatchRules:
 
 
 def scored_rallies(db, job) -> tuple[list[dict[str, Any]], list[dict[str, Any]], report.MatchRules]:
-    """Every rally of a job in match order, each with the set score after it where the count reaches it,
-    the sets of that count, and the rule of the match it was counted with."""
+    """Every rally of a job in match order, each with the score after it where the count reaches it,
+    the parts of that count (matches and the sets after the last one), and the rule of the match
+    it was counted with."""
     rules = match_rules(db, job["match_id"])
     rallies = db.execute("SELECT * FROM rallies WHERE job_id=? ORDER BY sequence", (job["id"],)).fetchall()
-    sets, after = report.running_score([dict(rally) for rally in rallies], rules=rules)
-    return [rally_payload(rally, after.get(rally["sequence"])) for rally in rallies], sets, rules
+    parts, after = report.running_score([dict(rally) for rally in rallies], rules=rules)
+    return [rally_payload(rally, after.get(rally["sequence"])) for rally in rallies], parts, rules
 
 
 def rally_payloads(db, job) -> list[dict[str, Any]]:
@@ -216,14 +217,15 @@ def router(connect) -> APIRouter:
         with connect() as db:
             job = find_job(db, job_id)
             media = db.execute("SELECT media_json FROM videos WHERE id=?", (job["video_id"],)).fetchone()
-            rallies, sets, rules = scored_rallies(db, job)
+            rallies, parts, rules = scored_rallies(db, job)
             return {
                 "rallies": rallies,
                 "rallyListVersion": job["rally_list_version"], "listConfirmed": list_confirmed(job),
                 # The bound of every interval a correction may name.
                 "videoDurationMs": int(json.loads(media["media_json"])["durationMs"]),
-                # The set scores of this version of the list: what the user compares with the match before confirming.
-                "sets": sets,
+                # The matches and set scores of this version of the list: what the user compares with
+                # the match before confirming. The report counts the same parts.
+                "matches": parts,
                 # The rule those sets were counted with, read in the same transaction.
                 "rules": rules.payload(),
             }

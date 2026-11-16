@@ -12,7 +12,7 @@ import pytest
 from app.analyzers.base import MOCK, MODEL, AnalyzerInfo, RallyProposal
 from app.main import create_app
 from fastapi.testclient import TestClient
-from tests.helpers import ScriptedAnalyzer, card_of, cards, decide, proposals, request_job, rows, run_pending, serve
+from tests.helpers import ScriptedAnalyzer, card_of, cards, decide, one_match, only_sets, proposals, request_job, rows, run_pending, serve, without_statistics
 from tests.test_media import store
 
 # Four rallies with dead time between them, inside the one-minute clip.
@@ -125,7 +125,7 @@ def revision(storage, job_id):
 def test_the_rally_list_carries_its_version_the_video_length_and_where_each_rally_came_from(match):
     client, job_id, _ = match
     found = listing(client, job_id)
-    assert set(found) == {"rallies", "rallyListVersion", "listConfirmed", "videoDurationMs", "sets", "rules"}
+    assert set(found) == {"rallies", "rallyListVersion", "listConfirmed", "videoDurationMs", "matches", "rules"}
     assert (found["rallyListVersion"], found["listConfirmed"], found["videoDurationMs"]) == (0, False, VIDEO_MS)
     assert [(item["sequence"], item["origin"], item["scoreAfter"]) for item in found["rallies"]] == [
         (1, "ANALYZER", None), (2, "ANALYZER", None), (3, "ANALYZER", None), (4, "ANALYZER", None)]
@@ -138,7 +138,7 @@ def test_the_score_after_each_rally_follows_the_walk_of_the_report_and_stops_whe
     answer_all(client, job_id, ["HOME", "NOT_A_RALLY", "AWAY", "UNSURE"])
     after = [item["scoreAfter"] for item in listing(client, job_id)["rallies"]]
     # A rejected rally is skipped and has no score of its own; an unsure rally ends the walk.
-    assert after == [{"set": 1, "home": 1, "away": 0}, None, {"set": 1, "home": 1, "away": 1}, None]
+    assert after == [{"match": 1, "set": 1, "home": 1, "away": 0}, None, {"match": 1, "set": 1, "home": 1, "away": 1}, None]
 
     decide(client, card_of(client, job_id, 1), "UNSURE")
     assert [item["scoreAfter"] for item in listing(client, job_id)["rallies"]] == [None, None, None, None]
@@ -146,14 +146,14 @@ def test_the_score_after_each_rally_follows_the_walk_of_the_report_and_stops_whe
 
 def test_the_rally_list_carries_the_set_scores_that_the_user_is_asked_to_check(match):
     client, job_id, _ = match
-    assert listing(client, job_id)["sets"] == []
+    assert only_sets(listing(client, job_id)) == []
 
     answer_all(client, job_id, ["HOME", "NOT_A_RALLY", "AWAY", "HOME"])
 
     found = listing(client, job_id)
-    assert found["sets"] == [{"number": 1, "home": 2, "away": 1, "complete": False}]
+    assert only_sets(found) == [{"number": 1, "home": 2, "away": 1, "complete": False}]
     # One count for both: the scores a user confirms on the list are the scores the report prints.
-    assert found["sets"] == report_of(client, job_id)["score"]["sets"]
+    assert found["matches"] == without_statistics(report_of(client, job_id)["score"]["matches"])
 
 
 def test_the_job_tells_how_many_rallies_the_analyzer_proposed_apart_from_how_many_the_list_holds(match):
@@ -580,7 +580,7 @@ def test_the_counts_are_lower_bounds_until_the_user_confirms_the_list(match):
     assert TIMESTAMP.fullmatch(exact["rallyList"]["confirmedAt"])
     assert (exact["teams"]["home"]["points"], exact["teams"]["away"]["points"]) == (
         {"value": 3, "status": "MEASURED"}, {"value": 1, "status": "MEASURED"})
-    assert (exact["score"]["status"], exact["score"]["sets"]) == ("MEASURED", [{"number": 1, "home": 3, "away": 1, "complete": False}])
+    assert (exact["score"]["status"], one_match(exact["score"])["sets"]) == ("MEASURED", [{"number": 1, "home": 3, "away": 1, "complete": False}])
 
     assert add(client, job_id, 10_000, 13_000).status_code == 201
     again = report_of(client, job_id)
