@@ -1,8 +1,9 @@
 """Tests of the rally winner measurement. Every rally list here is made up: no winner
 component exists yet, so these tests prove the arithmetic and nothing about a model."""
+import numpy as np
 import pytest
 
-from volleystat_ml import winner
+from volleystat_ml import metrics, winner
 from volleystat_ml.agreement import Rally
 from volleystat_ml.winner import Proposal
 
@@ -117,10 +118,38 @@ def test_an_unpaired_automatic_decision_is_told_apart_by_whether_the_gold_has_a_
         ("NOT_PROPOSED", None), ("AUTO_UNPAIRED", "OVERLAPS_GOLD"), ("AUTO_UNPAIRED", "NO_GOLD_THERE"),
     ]
     evaluation = winner.pool({"V1": video})
-    assert evaluation.unpaired == {"OVERLAPS_GOLD": 1, "NO_GOLD_THERE": 1}
+    assert evaluation.unpaired == {"SECOND_PROPOSAL": 0, "OVERLAPS_GOLD": 1, "NO_GOLD_THERE": 1}
     layer = evaluation.layers["GOLD"]
     # Neither is a wrong decision: the gold rally they miss is counted as not proposed.
     assert (layer.eligible, layer.auto, layer.wrong, layer.not_proposed) == (1, 0, 0, 1)
+
+
+def test_a_second_proposal_for_a_paired_rally_is_not_called_a_boundary_miss():
+    # Both lie within the tolerance of the gold rally; the closer one pairs with it.
+    video = winner.evaluate_video([gold(0, "HOME")], [prop(0, "HOME", 0.6), prop(0, "HOME", 0.95, shift=300)])
+    assert [(outcome.kind, outcome.reason) for outcome in video.outcomes] == [
+        ("CORRECT", None), ("AUTO_UNPAIRED", "SECOND_PROPOSAL")]
+    assert winner.pool({"V1": video}).unpaired == {"SECOND_PROPOSAL": 1, "OVERLAPS_GOLD": 0, "NO_GOLD_THERE": 0}
+
+
+@pytest.mark.parametrize("sides", [("HOME", "AWAY"), ("AWAY", "HOME"), ("HOME", "UNKNOWN"), ("UNKNOWN", "AWAY")])
+def test_proposals_that_name_different_winners_for_one_rally_are_refused_in_either_order(sides):
+    # The pairing would keep whichever comes first, so the score would depend on the order of the file.
+    with pytest.raises(winner.ContradictingProposals, match=r"0-5000 ms .*AWAY|0-5000 ms .*HOME"):
+        winner.evaluate_video([gold(0, "HOME")], [prop(0, sides[0], 0.6), prop(0, sides[1], 0.95, shift=200)])
+    # Two abstentions on one rally decide nothing, so there is nothing to contradict.
+    assert kinds(winner.evaluate_video([gold(0)], [prop(0, "UNKNOWN"), prop(0, "UNKNOWN", shift=200)])) == ["UNKNOWN"]
+
+
+def test_a_proposal_that_only_touches_a_gold_rally_does_not_overlap_it():
+    video = winner.evaluate_video([gold(0, "HOME")], [prop(0, "HOME", shift=5000)])
+    assert [(outcome.kind, outcome.reason) for outcome in video.outcomes] == [
+        ("NOT_PROPOSED", None), ("AUTO_UNPAIRED", "NO_GOLD_THERE")]
+
+
+def test_at_one_moment_the_gold_rally_comes_before_the_unpaired_decision():
+    video = winner.evaluate_video([gold(0, "HOME")], [Proposal(0, 9000, "HOME")])
+    assert kinds(video) == ["NOT_PROPOSED", "AUTO_UNPAIRED"]
 
 
 def test_outcomes_are_listed_in_time_order():
@@ -133,7 +162,7 @@ def test_a_proposal_must_name_a_side_or_unknown_and_a_confidence_from_zero_to_on
     for side in ("home", "", "DRAW", None):
         with pytest.raises(ValueError, match="proposed_winner"):
             Proposal(0, 1000, side)
-    for confidence in (-0.01, 1.01, float("nan"), float("inf"), True, "0.9"):
+    for confidence in (-0.01, 1.01, float("nan"), float("inf"), True, "0.9", 10 ** 400, -(10 ** 400)):
         with pytest.raises(ValueError, match="confidence"):
             Proposal(0, 1000, "HOME", confidence)
     assert Proposal(0, 1000, "HOME", 0).confidence == 0
@@ -320,11 +349,15 @@ def test_how_the_gold_winner_is_known_is_counted_within_the_eligible_rallies():
     layer = one_video(rallies, [prop(0), prop(1), prop(2, "AWAY")]).layers["GOLD"]
     # (eligible, automatic, correct) for each way.
     assert layer.by_observation == {"OBSERVED": (1, 1, 1), "INFERRED": (2, 2, 1), "NOT_GIVEN": (1, 0, 0)}
-    # The excluded rally is not counted.
-    assert layer.rule_constraint == 1
+    # The excluded rally is not counted, and an empty cell states no evidence.
+    assert (layer.rule_constraint, layer.evidence_given) == (1, 3)
 
     # A file that has no evidence column says nothing about it: unknown, not zero.
     assert one_video([gold(0)], [prop(0)]).layers["GOLD"].rule_constraint is None
+    # Nor does a column whose cells are all empty, as in a template nobody filled in.
+    empty = one_video([gold(0, evidence=""), gold(1, evidence="  ")], [prop(0), prop(1)]).layers["GOLD"]
+    assert (empty.rule_constraint, empty.evidence_given) == (None, 0)
+    assert empty.to_dict()["ruleConstraintEvidence"] is None and empty.to_dict()["evidenceGiven"] == 0
 
 
 def test_nothing_is_measured_when_the_predictions_hold_no_automatic_proposal():
@@ -386,6 +419,8 @@ def test_an_overconfident_bin_and_an_underconfident_bin_do_not_cancel_out():
 def test_an_abstention_is_no_decision_even_when_it_carries_a_confidence():
     layer = one_video([gold(0), gold(1), gold(2)], [prop(0, "HOME", 0.95), prop(1, "UNKNOWN", 0.97), prop(2, "UNKNOWN")]).layers["GOLD"]
     assert (layer.correct, layer.unknown) == (1, 2)
+    # (eligible, automatic, correct): an abstention is no automatic decision here either.
+    assert layer.by_observation["OBSERVED"] == (3, 1, 1)
     calibration = layer.calibration
     assert (calibration.n, calibration.without_confidence) == (1, 0)
     assert calibration.high_confidence(0.9) == (1, 0)
@@ -433,6 +468,14 @@ def test_brier_and_ece_are_quoted_from_thirty_decisions_with_a_confidence_on():
     assert document["reliable"] is True
     assert document["brier"]["value"] == pytest.approx((27 * 0.01 + 3 * 0.81) / 30)
     assert document["brier"]["interval"]["resamples"] == 200 and document["brier"]["interval"]["seed"] == 3
+    # The interval is drawn with that seed, not only labelled with it.
+    squared = np.array([(confidence - right) ** 2 for confidence, right in enough.pairs])
+    drawn = metrics.bootstrap_ci(squared, resamples=200, seed=3)
+    assert drawn.high != metrics.bootstrap_ci(squared, resamples=200, seed=0).high
+    assert (document["brier"]["interval"]["low"], document["brier"]["interval"]["high"]) == pytest.approx((drawn.low, drawn.high))
+    reference = winner.calibrated_ece_reference([0.9] * 30, resamples=200, seed=3)
+    assert reference != winner.calibrated_ece_reference([0.9] * 30, resamples=200, seed=0)
+    assert (document["eceIfCalibrated"]["mean"], document["eceIfCalibrated"]["p95"]) == pytest.approx((reference.mean, reference.p95))
     # 27 of 30 correct at a stated 0.9: the bin agrees with itself.
     assert document["ece"] == pytest.approx(0.0, abs=1e-12)
     assert document["highConfidence"] == {"level": 0.9, "n": 30, "wrong": 3, "notMeasuredReason": None}
@@ -472,6 +515,20 @@ def test_a_target_is_compared_with_the_point_estimate_and_with_the_interval(nume
 ])
 def test_a_ratio_exactly_on_its_target_meets_it_and_nothing_is_rounded_up(numerator, denominator, target, meets):
     assert winner.check_target(winner.Ratio(numerator, denominator), target).point_estimate_meets is meets
+
+
+@pytest.mark.parametrize("value, target, text", [
+    (0.951, 0.95, "0.951"), (0.9497487437185929, 0.95, "0.9497"), (0.949854375408217, 0.95, "0.9499"),
+    (0.5999453676338891, 0.60, "0.5999"), (0.59996, 0.60, "0.59996"), (0.95, 0.95, "0.950"), (1.0, 0.95, "1.000"), (0.0, 0.60, "0.000"),
+])
+def test_a_value_beside_a_target_is_printed_on_the_same_side_of_it(value, target, text):
+    # Three decimals would print 0.94975 as 0.950 next to "below the target".
+    assert winner.against(value, target) == text
+
+
+def test_the_wording_never_rounds_an_interval_end_onto_the_target():
+    check = winner.check_target(winner.Ratio(108, 109), 0.95)
+    assert "interval reaches down to 0.9499" in check.wording
 
 
 def test_a_target_is_not_checked_on_fewer_than_thirty_or_without_any_decision():
@@ -535,7 +592,7 @@ def test_the_gate_block_carries_the_lower_bound_next_to_the_precision():
 
 
 ALL_HOLD = dict(manifest_given=True, digest_compared=True, split="test", missing_test_videos=(),
-                tolerance_ms=1000, analyzer_stated=True, gold_layer_eligible=120)
+                tolerance_ms=1000, analyzer_stated=True, automatic_proposals=1, gold_layer_eligible=120)
 
 
 def test_a_run_is_input_for_the_gate_only_when_every_condition_holds():
@@ -548,7 +605,9 @@ def test_a_run_is_input_for_the_gate_only_when_every_condition_holds():
     (dict(split="validation"), "validation split"),
     (dict(missing_test_videos=("V4", "V9")), "V4, V9"),
     (dict(tolerance_ms=5000), "5000 ms"),
+    (dict(tolerance_ms=500), "+/-500 ms"),
     (dict(analyzer_stated=False), "analyzer"),
+    (dict(automatic_proposals=0), "no HOME or AWAY proposal"),
     (dict(gold_layer_eligible=0), "double-agreed or adjudicated"),
 ])
 def test_each_missing_condition_makes_the_run_a_pilot_run_and_is_named(change, fragment):
@@ -559,11 +618,12 @@ def test_each_missing_condition_makes_the_run_a_pilot_run_and_is_named(change, f
 
 def test_every_reason_that_applies_is_given_in_a_fixed_order():
     reasons = winner.pilot_reasons(manifest_given=True, digest_compared=False, split="train", missing_test_videos=(),
-                                   tolerance_ms=2000, analyzer_stated=False, gold_layer_eligible=0)
-    assert len(reasons) == 5
+                                   tolerance_ms=2000, analyzer_stated=False, automatic_proposals=0, gold_layer_eligible=0)
+    assert len(reasons) == 6
     assert ["--expect-sha256" in reasons[0], "train split" in reasons[1], "2000 ms" in reasons[2],
-            "analyzer" in reasons[3], "double-agreed or adjudicated" in reasons[4]] == [True] * 5
+            "analyzer" in reasons[3], "no HOME or AWAY proposal" in reasons[4],
+            "double-agreed or adjudicated" in reasons[5]] == [True] * 6
     # Without a manifest nothing can be said about the split, the digest or the videos of the split.
     without = winner.pilot_reasons(manifest_given=False, digest_compared=False, split=None, missing_test_videos=(),
-                                   tolerance_ms=1000, analyzer_stated=True, gold_layer_eligible=50)
+                                   tolerance_ms=1000, analyzer_stated=True, automatic_proposals=3, gold_layer_eligible=50)
     assert len(without) == 1

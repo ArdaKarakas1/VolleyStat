@@ -347,12 +347,15 @@ _COMPARED_ROLES = ("annotator A", "annotator B", _WINNER_GOLD)
 
 def _label_values(role: str) -> dict[str, list[str]]:
     """The values each categorical CSV column may carry: those of the annotation schema,
-    and for the winner gold the ground truth statuses."""
+    and for the winner gold also the ground truth statuses, the review statuses and the
+    winner evidence, because each of them decides whether or how a rally is scored."""
     rally = labels.load_schema()["properties"]["rallies"]["items"]["properties"]
     values = {"serving_side": rally["servingSide"]["enum"], "winning_side": rally["winningSide"]["enum"],
               "observation_status": rally["observationStatus"]["enum"]}
     if role == _WINNER_GOLD:
         values["ground_truth_status"] = list(labels.GROUND_TRUTH_STATUSES)
+        values["review_status"] = rally["reviewStatus"]["enum"]
+        values["winner_evidence"] = list(labels.WINNER_EVIDENCE)
     return values
 
 
@@ -400,6 +403,9 @@ def _read_json(path: Path) -> Any:
         return json.loads(_named(path, splits.read_text))
     except json.JSONDecodeError as error:
         raise InputError(f"{path}: not valid JSON (line {error.lineno}, column {error.colno}): {error.msg}") from error
+    except (ValueError, RecursionError) as error:
+        # A number with thousands of digits, or arrays nested deeper than the parser goes.
+        raise InputError(f"{path}: not usable JSON: {error}") from error
 
 
 def _rallies_from_json(path: Path, role: str) -> tuple[str, list[agreement.Rally]]:
@@ -728,8 +734,9 @@ def _proposals_from_json(path: Path) -> tuple[str, list[winner.Proposal], tuple[
         side, confidence = rally["proposedWinner"], rally.get("confidence")
         if not (isinstance(side, str) and side in _PROPOSED_VALUES):
             raise InputError(f"{where}: proposedWinner must be HOME, AWAY or UNKNOWN, found {side!r}")
+        # The range test also refuses NaN and the infinities, and compares a huge integer exactly.
         if confidence is not None and not (isinstance(confidence, (int, float)) and not isinstance(confidence, bool)
-                                           and math.isfinite(confidence) and 0 <= confidence <= 1):
+                                           and 0 <= confidence <= 1):
             raise InputError(f"{where}: confidence must be a number from 0 to 1 or null, found {confidence!r}")
         proposals.append(winner.Proposal(start, end, side, confidence))
     _checked([(proposal.start_ms, proposal.end_ms) for proposal in proposals], str(path))
@@ -741,6 +748,9 @@ def _proposals_from_csv(path: Path) -> dict[str, list[winner.Proposal]]:
     missing = [name for name in ("video_id", "start_ms", "end_ms", "proposed_winner") if name not in columns]
     if missing:
         raise InputError(f"{path}: missing column(s): {', '.join(missing)}")
+    for name in columns:
+        if name in (*_USER_WORK_KEYS, *_REVIEWED_LIST_KEYS, "rally_list_version", "list_confirmed"):
+            raise InputError(f"{path}: carries the column '{name}', so the file is a reviewed rally list; {_REVIEWED_LIST}")
     if shape_problems:
         raise InputError(f"{path}: {'; '.join(shape_problems)}")
     groups: dict[str, list[winner.Proposal]] = {}
@@ -820,8 +830,12 @@ def _evaluate_winner(args: argparse.Namespace) -> int:
             raise InputError(f"--out {args.out}: the folder does not exist")
     gold = _load_rallies(args.gold, _WINNER_GOLD)
     proposals, analyzer = _load_proposals(args.pred)
-    shared = sorted(set(gold) & set(proposals))
+    # A gold file without a single rally is a placeholder, not an annotated video.
+    gold_empty = sorted(video_id for video_id in set(gold) & set(proposals) if not gold[video_id])
+    shared = sorted(video_id for video_id in set(gold) & set(proposals) if gold[video_id])
     if not shared:
+        if gold_empty:
+            raise InputError("no gold file of a video in the predicted files holds a rally: " + ", ".join(gold_empty))
         raise InputError("no video id appears in both the gold and the predicted files")
     # A video without gold is not annotated and a video without a prediction file was not
     # analysed. Neither is counted; with a manifest both are named again below.
@@ -843,6 +857,9 @@ def _evaluate_winner(args: argparse.Namespace) -> int:
         strangers = [video_id for video_id in read if video_id not in locked]
         if strangers:
             raise InputError(f"--manifest {args.manifest}: video(s) not in the manifest: {', '.join(strangers)}")
+        unsplit = [video_id for video_id in read if not locked[video_id].split]
+        if unsplit:
+            raise InputError(f"--manifest {args.manifest}: video(s) without a split in the manifest: {', '.join(unsplit)}")
         if len({locked[video_id].split for video_id in read}) > 1:
             raise InputError("the videos are in more than one split ("
                              + ", ".join(f"{video_id}: {locked[video_id].split}" for video_id in read)
@@ -853,13 +870,18 @@ def _evaluate_winner(args: argparse.Namespace) -> int:
     missing = [video_id for video_id in of_split if video_id not in shared]
     manifest_only = [video_id for video_id in missing if video_id not in gold and video_id not in proposals]
 
-    per_video = {video_id: winner.evaluate_video(gold[video_id], proposals[video_id], args.tolerance_ms)
-                 for video_id in shared}
+    per_video = {}
+    for video_id in shared:
+        try:
+            per_video[video_id] = winner.evaluate_video(gold[video_id], proposals[video_id], args.tolerance_ms)
+        except winner.ContradictingProposals as error:
+            raise InputError(f"video {video_id}: {error}") from error
     evaluation = winner.pool(per_video)
     reasons = winner.pilot_reasons(
         manifest_given=args.manifest is not None, digest_compared=args.expect_sha256 is not None, split=split,
         missing_test_videos=missing if split == "test" else (), tolerance_ms=args.tolerance_ms,
-        analyzer_stated=analyzer is not None, gold_layer_eligible=evaluation.layers["GOLD"].eligible)
+        analyzer_stated=analyzer is not None, automatic_proposals=evaluation.automatic_proposals,
+        gold_layer_eligible=evaluation.layers["GOLD"].eligible)
     gate = winner.g3(evaluation.layers["GOLD"]) if not reasons else None
 
     rows = winner.failure_rows(per_video)
@@ -882,7 +904,8 @@ def _evaluate_winner(args: argparse.Namespace) -> int:
         "videosEvaluated": shared,
         "matchGroups": match_groups,
         **evaluation.to_dict(args.high_confidence, resamples=args.resamples, seed=args.seed),
-        "notEvaluated": {"goldOnly": gold_only, "predictedOnly": predicted_only, "manifestOnly": manifest_only},
+        "notEvaluated": {"goldOnly": gold_only, "goldEmpty": gold_empty, "predictedOnly": predicted_only,
+                         "manifestOnly": manifest_only},
         "inputs": {"gold": _file_digests(args.gold), "pred": _file_digests(args.pred)},
         "failuresFile": None if args.out is None else str(args.out),
         "g3": {"checked": gate is not None, "reasons": reasons, **(gate.to_dict() if gate is not None else {})},
@@ -906,12 +929,16 @@ def _evaluate_winner(args: argparse.Namespace) -> int:
         print(f"manifest: split {split}, content_sha256 {digest} ({compared}), "
               f"{len(of_split) - len(missing)} of {len(of_split)} videos of the split evaluated")
         if missing:
-            sides = {video_id: ", ".join(side for side, files in (("no gold file", gold), ("no prediction file", proposals))
-                                         if video_id not in files) for video_id in missing}
+            def lacks(video_id: str) -> str:
+                sides = ["no gold file" if video_id not in gold else "the gold file holds no rally"] if not gold.get(video_id) else []
+                return ", ".join(sides + ["no prediction file"] * (video_id not in proposals))
+
             print(f"not evaluated, in the {split} split of the manifest: "
-                  + ", ".join(f"{video_id} ({sides[video_id]})" for video_id in missing))
+                  + ", ".join(f"{video_id} ({lacks(video_id)})" for video_id in missing))
     if gold_only:
         print(f"not evaluated, no prediction file: {', '.join(gold_only)}")
+    if gold_empty and args.manifest is None:
+        print(f"not evaluated, the gold file holds no rally: {', '.join(gold_empty)}")
     if predicted_only:
         print(f"not evaluated, no gold file: {', '.join(predicted_only)}")
     print(f"gold rallies: {evaluation.gold_rallies}   predicted rallies: {evaluation.predicted_rallies}   "
@@ -922,18 +949,20 @@ def _evaluate_winner(args: argparse.Namespace) -> int:
     if not measured:
         print(evaluation.not_measured_reason)
     for name, title in _LAYER_TITLES:
-        _print_layer(title, evaluation.layers[name], document["layers"][name], measured, args)
+        _print_layer(title, evaluation.layers[name], document["layers"][name], measured, args,
+                     _hard_cases(evaluation) if name == "GOLD" else None)
     if evaluation.not_scored_ineligible:
         print("not scored, automatic decisions on gold rallies without a definite winner: "
               f"{sum(evaluation.not_scored_ineligible.values())} ({_by_reason(evaluation.not_scored_ineligible)})")
     unpaired = sum(evaluation.unpaired.values())
     if unpaired:
         print(f"not scored, automatic decisions that pair with no gold rally within +/-{args.tolerance_ms} ms: {unpaired} "
-              f"({evaluation.unpaired['OVERLAPS_GOLD']} overlap a gold rally whose boundary is further off, "
+              f"({evaluation.unpaired['SECOND_PROPOSAL']} second proposals for a gold rally that another proposal "
+              f"pairs with, {evaluation.unpaired['OVERLAPS_GOLD']} overlap a gold rally whose boundary is further off, "
               f"{evaluation.unpaired['NO_GOLD_THERE']} lie where the gold has no rally)")
     confident = evaluation.unscored_high_confidence(args.high_confidence)
     if confident is not None:
-        print(f"not scored, with a confidence of {args.high_confidence:.2f} or more: {confident}")
+        print(f"not scored, with a confidence of {_level(args.high_confidence)} or more: {confident}")
     if measured:
         groups = "" if match_groups is None else f" in {match_groups} match group(s)"
         print(f"intervals: 95% Wilson score intervals over rallies from {len(shared)} video(s){groups}. They treat the "
@@ -957,16 +986,42 @@ def _by_reason(counts: Any) -> str:
     return ", ".join(f"{count} {reason}" for reason, count in counts.items())
 
 
-def _quoted(ratio: winner.Ratio) -> str:
-    return f" ({ratio.value:.3f})" if ratio.reliable else ""
+def _quoted(ratio: winner.Ratio, target: float | None = None) -> str:
+    """The share in brackets once it may be quoted. Beside a G3 target it never rounds onto
+    the other side of that target."""
+    if not ratio.reliable:
+        return ""
+    return f" ({ratio.value:.3f})" if target is None else f" ({winner.against(ratio.value, target)})"
+
+
+def _level(level: float) -> str:
+    """A confidence level as given: 0.90 stays 0.90, 0.995 is not rounded to 0.99."""
+    text = f"{level:.2f}"
+    return text if float(text) == level else np.format_float_positional(level, trim="-")
+
+
+def _hard_cases(evaluation: winner.Evaluation) -> str | None:
+    """The hard cases of the double-annotated set that the GOLD layer leaves out."""
+    reasons = ("UNRESOLVABLE", "NEEDS_MORE_EVIDENCE")
+    counts = [evaluation.excluded.get(reason, 0) for reason in reasons]
+    if not any(counts):
+        return None
+    decided = sum(evaluation.not_scored_ineligible.get(reason, 0) for reason in reasons)
+    return (f"  hard cases of the double-annotated labels, outside this layer: {counts[0]} UNRESOLVABLE, "
+            f"{counts[1]} NEEDS_MORE_EVIDENCE"
+            + (f"; {decided} of them got an automatic decision, which was not scored" if decided else ""))
 
 
 def _print_layer(title: str, layer: winner.LayerEvaluation, document: dict[str, Any], measured: bool,
-                 args: argparse.Namespace) -> None:
+                 args: argparse.Namespace, hard_cases: str | None = None) -> None:
     if not layer.eligible:
         print(f"layer {layer.name} ({title}): no eligible rally")
+        if hard_cases:
+            print(hard_cases)
         return
     print(f"layer {layer.name} ({title}): {layer.eligible} eligible rallies in {layer.videos} video(s)")
+    if hard_cases:
+        print(hard_cases)
     print(f"  correct {layer.correct}   wrong {layer.wrong}   UNKNOWN {layer.unknown}   not proposed {layer.not_proposed}")
     if not measured:
         return
@@ -984,7 +1039,8 @@ def _print_layer(title: str, layer: winner.LayerEvaluation, document: dict[str, 
 
     precision, coverage = layer.precision, layer.coverage
     if precision.denominator:
-        print(f"  selective precision: {layer.correct}/{layer.auto} automatic decisions are correct" + _quoted(precision))
+        print(f"  selective precision: {layer.correct}/{layer.auto} automatic decisions are correct"
+              + _quoted(precision, winner.G3_MIN_PRECISION))
         print(f"    95% Wilson interval: {interval(precision)}")
         note(precision)
     else:
@@ -992,19 +1048,23 @@ def _print_layer(title: str, layer: winner.LayerEvaluation, document: dict[str, 
     if layer.unpaired_auto:
         bound = layer.lower_bound_precision
         print(f"  automatic decisions that pair with no gold rally in these videos: {layer.unpaired_auto} (not scored)")
-        print(f"    if each were a wrong decision: {bound.numerator}/{bound.denominator}{_quoted(bound)}, "
+        print(f"    if each were a wrong decision: {bound.numerator}/{bound.denominator}{_quoted(bound, winner.G3_MIN_PRECISION)}, "
               f"95% Wilson interval {interval(bound)}")
-    print(f"  automatic coverage: {layer.auto}/{layer.eligible} eligible rallies got an automatic decision" + _quoted(coverage))
+    print(f"  automatic coverage: {layer.auto}/{layer.eligible} eligible rallies got an automatic decision"
+          + _quoted(coverage, winner.G3_MIN_COVERAGE))
     print(f"    95% Wilson interval: {interval(coverage)}")
     note(coverage)
     print(f"  UNKNOWN from the component: {layer.unknown}/{layer.eligible}" + _quoted(layer.unknown_rate))
+    print(f"    95% Wilson interval: {interval(layer.unknown_rate)}")
     print(f"  not proposed: {layer.not_proposed}/{layer.eligible}" + _quoted(layer.not_proposed_rate))
+    print(f"    95% Wilson interval: {interval(layer.not_proposed_rate)}")
     for side in winner.SIDES:
         row = [layer.confusion[side, proposed] for proposed in winner.PROPOSED]
         print(f"  gold {side} {sum(row)}: proposed HOME {row[0]}, AWAY {row[1]}, UNKNOWN {row[2]}, not proposed {row[3]}")
     inferred, by_rule = layer.by_observation["INFERRED"][0], layer.rule_constraint
     if inferred or by_rule:
-        evidence = "" if by_rule is None else f" ({by_rule} with the evidence RULE_CONSTRAINT)"
+        evidence = ("" if by_rule is None
+                    else f" (evidence RULE_CONSTRAINT: {by_rule} of the {layer.evidence_given} that state an evidence)")
         print(f"  gold winners that were inferred and not seen: {inferred} of {layer.eligible} eligible{evidence}. "
               "Such a winner may come from the rule under test.")
     if layer.auto:
@@ -1013,7 +1073,7 @@ def _print_layer(title: str, layer: winner.LayerEvaluation, document: dict[str, 
 
 def _print_calibration(calibration: winner.Calibration, document: dict[str, Any], automatic: int,
                        args: argparse.Namespace) -> None:
-    level = f"wrong with a confidence of {args.high_confidence:.2f} or more"
+    level = f"wrong with a confidence of {_level(args.high_confidence)} or more"
     if not calibration.n:
         print(f"  calibration: not measured, {winner.NO_CONFIDENCE}")
         print(f"  {level}: not measured, {winner.NO_CONFIDENCE}")
@@ -1048,7 +1108,7 @@ def _print_g3(gate: winner.G3, evaluation: winner.Evaluation, videos: int, match
     layer = evaluation.layers["GOLD"]
 
     def line(name: str, check: winner.TargetCheck) -> str:
-        value = f" ({check.ratio.value:.3f})" if check.checked else ""
+        value = f" ({winner.against(check.ratio.value, check.target)})" if check.checked else ""
         return f"{name} {check.ratio.numerator}/{check.ratio.denominator}{value}: {check.wording}"
 
     print(f"G3 targets on the GOLD layer: precision at least {winner.G3_MIN_PRECISION:.2f}, "
@@ -1064,9 +1124,13 @@ def _print_g3(gate: winner.G3, evaluation: winner.Evaluation, videos: int, match
                   else "the targets could not be checked on this sample"))
     print(f"  {videos} video(s) in {match_groups} match group(s), paired at +/-{args.tolerance_ms} ms, analyzer "
           f"{analyzer['id']} {analyzer['version']}")
-    unscored = sum(evaluation.not_scored_ineligible.values()) + sum(evaluation.unpaired.values())
-    print(f"  gold rallies without a definite winner: {sum(evaluation.excluded.values())}; automatic decisions that "
-          f"were not scored: {unscored}")
+    excluded = sum(evaluation.excluded.values())
+    print(f"  gold rallies without a definite winner: {excluded}"
+          + (f" ({_by_reason(evaluation.excluded)})" if excluded else ""))
+    ineligible, unpaired = sum(evaluation.not_scored_ineligible.values()), sum(evaluation.unpaired.values())
+    print(f"  automatic decisions that were not scored: {ineligible + unpaired}"
+          + (f" ({ineligible} on gold rallies without a definite winner, {unpaired} that pair with no gold rally)"
+             if ineligible + unpaired else ""))
     print("  the intervals treat the rallies as independent draws; an interval that lies above a target does so "
           "only under that assumption")
     print("  video ids were compared by name; file hashes were not verified")

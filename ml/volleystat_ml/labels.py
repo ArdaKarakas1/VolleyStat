@@ -16,12 +16,14 @@ Two layers:
    - `groundTruthStatus`, where a file carries it, is one of GROUND_TRUTH_STATUSES and
      is given for every rally of the file; the CSV spelling `ground_truth_status` is
      refused, because the winner evaluation would not see a status written under it
+   - `winnerEvidence`, where a rally carries it, is one of WINNER_EVIDENCE or null; the
+     CSV spelling `winner_evidence` is refused for the same reason
 
-`sequence`, `setNumber`, `endEvent` and `groundTruthStatus` are not part of the JSON
-schema, which allows additional properties. They are the JSON spelling of CSV columns of
-the handover templates: `sequence`, `set_number` and `ground_truth_status` of
-03_RALLI_GOLD.csv, and `end_event` of 04_AKSIYON_GOLD.csv (that template is not copied
-into schemas/).
+`sequence`, `setNumber`, `endEvent`, `groundTruthStatus` and `winnerEvidence` are not part
+of the JSON schema, which allows additional properties. They are the JSON spelling of CSV
+columns of the handover templates: `sequence`, `set_number`, `ground_truth_status` and
+`winner_evidence` of 03_RALLI_GOLD.csv, and `end_event` of 04_AKSIYON_GOLD.csv (that
+template is not copied into schemas/).
 
 Every error is one string that starts with the location of the problem.
 """
@@ -39,6 +41,9 @@ UNKNOWN = "UNKNOWN"
 # spelling `groundTruthStatus`. The first four are the dictionary of the handover report;
 # NEEDS_MORE_EVIDENCE is the third result an adjudication can have (docs/AI_PLAN.md 4.3).
 GROUND_TRUTH_STATUSES = ("SINGLE_HUMAN", "DOUBLE_AGREED", "ADJUDICATED", "UNRESOLVABLE", "NEEDS_MORE_EVIDENCE")
+# How the winner of a rally is known: the `evidence` dictionary of the handover report (V4)
+# for the CSV column `winner_evidence` and its JSON spelling `winnerEvidence`.
+WINNER_EVIDENCE = ("VIDEO", "SCOREBOARD", "AUDIO", "RULE_CONSTRAINT", "EXTERNAL_NOTES")
 
 # Keywords the interpreter enforces, and the ones that carry no constraint.
 _ENFORCED = {"type", "required", "properties", "items", "enum", "const", "minimum", "minLength"}
@@ -240,6 +245,15 @@ def _check_rallies(rallies: list[Any], video_duration_ms: int | None, errors: li
                 errors.append(f"{path}.groundTruthStatus: expected string, found {_type_name(status)}")
             elif status not in GROUND_TRUTH_STATUSES:
                 errors.append(f"{path}.groundTruthStatus: must be one of {', '.join(GROUND_TRUTH_STATUSES)}, found {status!r}")
+
+        if "winner_evidence" in rally:
+            errors.append(f"{path}: 'winner_evidence' is the CSV spelling; in JSON the key is 'winnerEvidence'")
+        evidence = rally.get("winnerEvidence")
+        if evidence is not None:
+            if not isinstance(evidence, str):
+                errors.append(f"{path}.winnerEvidence: expected string, found {_type_name(evidence)}")
+            elif evidence not in WINNER_EVIDENCE:
+                errors.append(f"{path}.winnerEvidence: must be one of {', '.join(WINNER_EVIDENCE)}, found {evidence!r}")
 
         unknown_fields = [name for name in ("servingSide", "winningSide", "observationStatus")
                           if rally.get(name) == UNKNOWN]

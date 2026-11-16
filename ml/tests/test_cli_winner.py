@@ -84,7 +84,7 @@ def test_a_run_without_a_manifest_is_a_pilot_run_and_says_so_first(tmp_path, cap
     assert "layer SINGLE (one annotator, or no status given): no eligible rally" in out
     # A pilot run is compared with no target, and nothing reads as a verdict.
     assert "G3 targets: not checked, this is a pilot run" in out
-    assert "PASS" not in out and "FAIL" not in out and "met by" not in out
+    assert "PASS" not in out and "FAIL" not in out and "point estimate" not in out
     assert out.rstrip().endswith("The gate decision is made and signed by a person.")
 
 
@@ -108,7 +108,7 @@ def test_the_json_of_a_pilot_run_carries_the_same_numbers_and_no_comparison(tmp_
         "interval": {"low": pytest.approx(0.5981, abs=1e-4), "high": pytest.approx(0.8581, abs=1e-4),
                      "confidence": 0.95, "method": "wilson", "unit": "rally"}}
     assert document["layers"]["SINGLE"]["eligibleN"] == 0
-    assert document["notEvaluated"] == {"goldOnly": [], "predictedOnly": [], "manifestOnly": []}
+    assert document["notEvaluated"] == {"goldOnly": [], "goldEmpty": [], "predictedOnly": [], "manifestOnly": []}
     assert document["failuresFile"] is None
     assert document["inputs"] == {
         "gold": [{"file": str(gold), "sha256": hashlib.sha256(gold.read_bytes()).hexdigest()}],
@@ -130,6 +130,18 @@ def test_below_thirty_only_the_counts_and_the_interval_are_printed(tmp_path, cap
     layer = as_json(capsys, "--gold", gold, "--pred", pred)["layers"]["GOLD"]
     assert layer["selectivePrecision"]["value"] is None
     assert layer["selectivePrecision"]["interval"]["low"] == pytest.approx(0.699, abs=1e-3)
+
+
+def test_the_unknown_and_not_proposed_rates_carry_an_interval_and_follow_the_thirty_rule(tmp_path, capsys):
+    gold = gold_file(tmp_path, gold_rows("V1", ["HOME"] * 20))
+    pred = pred_file(tmp_path, "V1", [(index, "HOME") for index in range(14)] + [(index, "UNKNOWN") for index in range(14, 18)])
+    code, out, _ = evaluate(capsys, "--gold", gold, "--pred", pred)
+    assert code == 0
+    assert "  UNKNOWN from the component: 4/20\n    95% Wilson interval: 0.081 to 0.416\n" in out
+    assert "  not proposed: 2/20\n    95% Wilson interval: 0.028 to 0.301\n" in out
+    assert "    n = 20 is below 30: a percentage is not reliable at this sample size and is not printed. Quote the counts." in out
+    assert "    n = 14 is below 30" in out
+    assert "(0." not in out and "(1." not in out
 
 
 def test_labels_of_one_annotator_are_reported_in_their_own_layer(tmp_path, capsys):
@@ -215,13 +227,18 @@ def test_excluded_gold_and_unscored_decisions_are_counted_and_stay_out_of_the_ra
     assert "    if each were a wrong decision: 31/35 (0.886), 95% Wilson interval 0.740 to 0.955" in out
     assert "not scored, automatic decisions on gold rallies without a definite winner: 2 (1 UNRESOLVABLE, 1 WINNER_UNKNOWN)" in out
     assert ("not scored, automatic decisions that pair with no gold rally within +/-1000 ms: 3 "
-            "(1 overlap a gold rally whose boundary is further off, 2 lie where the gold has no rally)") in out
+            "(0 second proposals for a gold rally that another proposal pairs with, 1 overlap a gold rally whose "
+            "boundary is further off, 2 lie where the gold has no rally)") in out
+    # The GOLD layer names the hard cases of the double-annotated set that it leaves out.
+    gold_block = out[out.index("layer GOLD"):out.index("layer SINGLE")]
+    assert ("  hard cases of the double-annotated labels, outside this layer: 1 UNRESOLVABLE, 1 NEEDS_MORE_EVIDENCE; "
+            "1 of them got an automatic decision, which was not scored") in gold_block
 
     result = as_json(capsys, "--gold", gold, "--pred", pred)
     assert result["excluded"] == {"NOT_ANNOTATED": 1, "NEEDS_MORE_EVIDENCE": 1, "UNRESOLVABLE": 1, "WINNER_UNKNOWN": 1}
     assert result["notScored"] == {
         "onIneligibleGold": {"UNRESOLVABLE": 1, "WINNER_UNKNOWN": 1},
-        "unpaired": {"overlapsGold": 1, "noGoldThere": 2},
+        "unpaired": {"secondProposal": 0, "overlapsGold": 1, "noGoldThere": 2},
         "highConfidence": {"level": 0.9, "n": None},
     }
     layer = result["layers"]["GOLD"]
@@ -250,11 +267,25 @@ def test_inferred_gold_winners_are_pointed_out(tmp_path, capsys):
     pred = pred_file(tmp_path, "V1", [(index, "HOME") for index in range(5)])
     code, out, _ = evaluate(capsys, "--gold", gold, "--pred", pred)
     assert code == 0
-    assert ("  gold winners that were inferred and not seen: 2 of 5 eligible (1 with the evidence RULE_CONSTRAINT). "
-            "Such a winner may come from the rule under test.") in out
+    assert ("  gold winners that were inferred and not seen: 2 of 5 eligible (evidence RULE_CONSTRAINT: 1 of the 5 "
+            "that state an evidence). Such a winner may come from the rule under test.") in out
     layer = as_json(capsys, "--gold", gold, "--pred", pred)["layers"]["GOLD"]
     assert layer["byObservationStatus"]["INFERRED"] == {"eligibleN": 2, "autoN": 2, "correct": 0}
-    assert layer["ruleConstraintEvidence"] == 1
+    assert (layer["ruleConstraintEvidence"], layer["evidenceGiven"]) == (1, 5)
+
+    # A winner taken from the rule is pointed out even when the annotator saw the rally.
+    seen = gold_file(tmp_path, [["V1", *at(0), "HOME", "OBSERVED", "DOUBLE_AGREED", "RULE_CONSTRAINT"],
+                                ["V1", *at(1), "HOME", "OBSERVED", "DOUBLE_AGREED", ""]], name="seen.csv", header=header)
+    code, out, _ = evaluate(capsys, "--gold", seen, "--pred", pred)
+    assert ("  gold winners that were inferred and not seen: 0 of 2 eligible (evidence RULE_CONSTRAINT: 1 of the 1 "
+            "that state an evidence).") in out
+
+    # An evidence column that nobody filled in states nothing: unknown, not zero.
+    blank = gold_file(tmp_path, [[*row[:6], ""] for row in rows], name="blank.csv", header=header)
+    code, out, _ = evaluate(capsys, "--gold", blank, "--pred", pred)
+    assert "  gold winners that were inferred and not seen: 2 of 5 eligible. Such a winner" in out
+    layer = as_json(capsys, "--gold", blank, "--pred", pred)["layers"]["GOLD"]
+    assert (layer["ruleConstraintEvidence"], layer["evidenceGiven"]) == (None, 0)
 
     plain = gold_file(tmp_path, gold_rows("V1", ["HOME"] * 5), name="plain.csv")
     code, out, _ = evaluate(capsys, "--gold", plain, "--pred", pred)
@@ -272,7 +303,7 @@ def test_videos_present_on_one_side_only_are_listed_and_not_counted(tmp_path, ca
     assert "not evaluated, no gold file: V3" in out
     assert "gold rallies: 2   predicted rallies: 2   automatic proposals: 2" in out
     document = as_json(capsys, "--gold", gold, "--pred", *preds)
-    assert document["notEvaluated"] == {"goldOnly": ["V2"], "predictedOnly": ["V3"], "manifestOnly": []}
+    assert document["notEvaluated"] == {"goldOnly": ["V2"], "goldEmpty": [], "predictedOnly": ["V3"], "manifestOnly": []}
 
     assert_unusable(evaluate(capsys, "--gold", gold, "--pred", preds[1]),
                     "no video id appears in both the gold and the predicted files")
@@ -345,6 +376,23 @@ def test_calibration_below_thirty_gives_the_table_and_no_brier_or_ece(tmp_path, 
     assert "Brier 0." not in out and "ECE over" not in out
     assert "    confidence 0.9 to 1.0: 20 decisions, mean confidence 0.900, 18 correct" in out
     assert "  wrong with a confidence of 0.90 or more: 2 of 20" in out
+
+
+def test_an_unscored_decision_at_the_level_itself_is_counted_as_confident(tmp_path, capsys):
+    gold = gold_file(tmp_path, gold_rows("V1", ["HOME"] * 2))
+    pred = pred_file(tmp_path, "V1", [(0, "HOME"), (1, "HOME"), (5, "AWAY", 0.9), (6, "AWAY", 0.89)])
+    code, out, _ = evaluate(capsys, "--gold", gold, "--pred", pred)
+    assert "not scored, with a confidence of 0.90 or more: 1" in out
+    assert as_json(capsys, "--gold", gold, "--pred", pred)["notScored"]["highConfidence"] == {"level": 0.9, "n": 1}
+
+
+def test_a_level_with_more_than_two_decimals_is_printed_as_given(tmp_path, capsys):
+    gold = gold_file(tmp_path, gold_rows("V1", ["HOME"] * 2))
+    pred = pred_file(tmp_path, "V1", [(0, "AWAY", 0.992), (1, "AWAY", 0.5), (5, "AWAY", 0.992)])
+    code, out, _ = evaluate(capsys, "--gold", gold, "--pred", pred, "--high-confidence", 0.995)
+    # Rounded to two decimals the level would read 0.99, and 0.992 is 0.99 or more.
+    assert "  wrong with a confidence of 0.995 or more: 0 of 0" in out
+    assert "not scored, with a confidence of 0.995 or more: 0" in out
 
 
 def test_the_level_of_a_confident_decision_is_an_option_and_the_output_is_reproducible(tmp_path, capsys):
@@ -422,13 +470,76 @@ def test_a_missed_coverage_is_named_even_when_too_few_decisions_are_left_for_the
 def test_the_gate_block_names_unscored_decisions_and_the_lower_bound(tmp_path, capsys):
     gold, preds, manifest, digest = gate_inputs(tmp_path)
     document = json.loads(preds[0].read_text(encoding="utf-8"))
-    document["rallies"] += proposals("V1", [(index, "HOME") for index in range(150, 160)])["rallies"]
+    document["rallies"] += proposals("V1", [(index, "HOME") for index in range(150, 160)] + [(170, "AWAY")])["rallies"]
     write_json(preds[0], document)
+    # Two hard cases of the double-annotated set; one of them got a decision.
+    rows = [row for row in csv.reader(open(gold, encoding="utf-8-sig"))][1:]
+    rows += [["V1", *at(170), "HOME", "OBSERVED", "UNRESOLVABLE"], ["V1", *at(171), "HOME", "OBSERVED", "NEEDS_MORE_EVIDENCE"]]
+    gold_file(tmp_path, rows)
     code, out, _ = evaluate(capsys, "--gold", gold, "--pred", *preds, "--manifest", manifest, "--expect-sha256", digest)
     assert code == 0
     assert ("  counting the 10 automatic decisions that pair with no gold rally as wrong: precision 130/145 (0.897): "
             "whole interval below the target") in out
     assert "  the point estimates meet both targets" in out
+    assert "  gold rallies without a definite winner: 2 (1 NEEDS_MORE_EVIDENCE, 1 UNRESOLVABLE)" in out
+    assert ("  automatic decisions that were not scored: 11 (1 on gold rallies without a definite winner, "
+            "10 that pair with no gold rally)") in out
+    assert ("  hard cases of the double-annotated labels, outside this layer: 1 UNRESOLVABLE, 1 NEEDS_MORE_EVIDENCE; "
+            "1 of them got an automatic decision, which was not scored") in out
+
+
+def test_a_run_without_a_single_home_or_away_proposal_is_no_input_for_the_gate(tmp_path, capsys):
+    # Today's segment output abstains everywhere. Its coverage of 0 measures no winner component.
+    gold, preds, manifest, digest = gate_inputs(tmp_path, correct=0, wrong=0, unknown=200)
+    arguments = ("--gold", gold, "--pred", *preds, "--manifest", manifest, "--expect-sha256", digest)
+    code, out, _ = evaluate(capsys, *arguments)
+    assert code == 0
+    assert out.splitlines()[:2] == ["PILOT RUN, NOT A GATE CHECK",
+                                    "  - the prediction files contain no HOME or AWAY proposal, so there is no winner "
+                                    "decision to compare with the targets"]
+    assert "0.000" not in out and "coverage 0/" not in out and "point estimate" not in out and "whole interval" not in out
+    document = as_json(capsys, *arguments)
+    assert document["runKind"] == "PILOT" and len(document["reasons"]) == 1
+    assert document["g3"] == {"checked": False, "reasons": document["reasons"]}
+
+
+def test_a_gold_file_without_rallies_does_not_count_as_an_evaluated_test_video(tmp_path, capsys):
+    gold, preds, manifest, digest = gate_inputs(tmp_path)
+    rows = [row for row in csv.reader(open(gold, encoding="utf-8-sig"))][1:]
+    only_v1 = gold_file(tmp_path, [row for row in rows if row[0] == "V1"], name="v1.csv")
+    empty = write_json(tmp_path / "v2.json", {"annotationVersion": "VVV_ANNOTATION_V3", "videoId": "V2", "rallies": []})
+    arguments = ("--gold", only_v1, empty, "--pred", *preds, "--manifest", manifest, "--expect-sha256", digest)
+    code, out, _ = evaluate(capsys, *arguments)
+    assert code == 0
+    assert out.splitlines()[0] == "PILOT RUN, NOT A GATE CHECK"
+    assert "  - test video(s) of the manifest were not evaluated: V2" in out
+    assert "videos evaluated: 1 (V1)" in out
+    assert "not evaluated, in the test split of the manifest: V2 (the gold file holds no rally)" in out
+    document = as_json(capsys, *arguments)
+    assert document["notEvaluated"] == {"goldOnly": [], "goldEmpty": ["V2"], "predictedOnly": [], "manifestOnly": []}
+    assert (document["videosEvaluated"], document["matchGroups"]) == (["V1"], 1)
+
+    # Without a manifest the video is named too.
+    code, out, _ = evaluate(capsys, "--gold", only_v1, empty, "--pred", *preds)
+    assert "not evaluated, the gold file holds no rally: V2" in out
+
+
+def test_a_share_just_below_a_target_is_not_printed_as_the_target(tmp_path, capsys):
+    gold, preds, manifest, digest = gate_inputs(tmp_path, correct=189, wrong=10, unknown=101)
+    code, out, _ = evaluate(capsys, "--gold", gold, "--pred", *preds, "--manifest", manifest, "--expect-sha256", digest)
+    assert code == 0
+    assert "  selective precision: 189/199 automatic decisions are correct (0.9497)" in out
+    assert "  precision 189/199 (0.9497): point estimate below the target, interval reaches up to 0.972" in out
+    assert "0.950" not in out
+
+
+def test_targets_that_could_not_be_checked_are_not_read_as_missed(tmp_path, capsys):
+    gold, preds, manifest, digest = gate_inputs(tmp_path, correct=20, wrong=0, unknown=0)
+    code, out, _ = evaluate(capsys, "--gold", gold, "--pred", *preds, "--manifest", manifest, "--expect-sha256", digest)
+    assert code == 0
+    assert "  precision 20/20: not checked: 20 is below 30" in out
+    assert "  the targets could not be checked on this sample" in out
+    assert "do not meet" not in out
 
 
 @pytest.mark.parametrize("case, fragment", [
@@ -478,7 +589,8 @@ def test_a_missing_test_video_is_listed_with_the_side_that_is_missing(tmp_path, 
     assert "1 of 3 videos of the split evaluated" in out
     assert "not evaluated, in the test split of the manifest: V2 (no prediction file), V7 (no gold file, no prediction file)" in out
     document = as_json(capsys, "--gold", gold, "--pred", preds[0], "--manifest", manifest, "--expect-sha256", digest)
-    assert document["notEvaluated"] == {"goldOnly": ["V2"], "predictedOnly": [], "manifestOnly": ["V7"]}
+    assert document["notEvaluated"] == {"goldOnly": ["V2"], "goldEmpty": [], "predictedOnly": [], "manifestOnly": ["V7"]}
+    assert document["matchGroups"] == 1
     assert "test video(s) of the manifest were not evaluated: V2, V7" in document["reasons"]
 
 
@@ -501,6 +613,13 @@ def test_a_manifest_that_can_not_be_trusted_or_does_not_fit_the_videos_is_refuse
     assert_unusable(evaluate(capsys, *base, "--manifest", mixed),
                     "the videos are in more than one split (V1: test, V2: validation)")
 
+    # A row without a split, under a digest that matches it.
+    unsplit, _ = lock(tmp_path, [("V1", "M1", "test"), ("V2", "M2", "test")], name="unsplit.csv")
+    content = unsplit.read_text(encoding="utf-8").split("# content_sha256=")[0]
+    content = "\n".join(line.replace(",test,", ",,") if line.startswith("V2,") else line for line in content.split("\n"))
+    unsplit.write_text(f"{content}# content_sha256={hashlib.sha256(content.encode()).hexdigest()}\n", encoding="utf-8")
+    assert_unusable(evaluate(capsys, *base, "--manifest", unsplit), "video(s) without a split in the manifest: V2")
+
 
 # --- input that is refused ---------------------------------------------------------------
 
@@ -510,6 +629,8 @@ def test_a_manifest_that_can_not_be_trusted_or_does_not_fit_the_videos_is_refuse
     ({"analyzer": {"id": "demo", "version": "1", "kind": "MOCK"}}, "is the output of a mock analyzer"),
     ({"rallyListVersion": 3}, "is a reviewed rally list"),
     ({"listConfirmed": False}, "is a reviewed rally list"),
+    ({"analyzer": {"kind": "BASELINE"}}, "'analyzer' must carry an id and a version"),
+    ({"analyzer": {"id": 5, "version": "1"}}, "'analyzer' must carry an id and a version"),
 ])
 def test_a_prediction_document_that_is_no_analyzer_output_is_refused(tmp_path, capsys, change, fragment):
     gold = gold_file(tmp_path, gold_rows("V1", ["HOME"] * 2))
@@ -536,6 +657,8 @@ def test_a_rally_list_that_carries_user_work_is_refused(tmp_path, capsys, key, v
     ({"startMs": 0, "endMs": 5000, "proposedWinner": "HOME", "confidence": "0.9"}, "rallies[0]: confidence must be a number from 0 to 1 or null, found '0.9'"),
     ({"startMs": 5000, "endMs": 5000, "proposedWinner": "HOME"}, "interval 5000..5000 does not satisfy 0 <= start < end"),
     ({"startMs": "0", "endMs": 5000, "proposedWinner": "HOME"}, "rallies[0]: startMs and endMs must be whole milliseconds"),
+    ({"startMs": 0.5, "endMs": 5000, "proposedWinner": "HOME"}, "rallies[0]: startMs and endMs must be whole milliseconds"),
+    ({"startMs": 0, "endMs": 5000, "proposedWinner": "HOME", "confidence": 10 ** 400}, "confidence must be a number from 0 to 1 or null"),
 ])
 def test_a_proposal_that_breaks_a_rule_is_refused_with_its_position(tmp_path, capsys, rally, fragment):
     gold = gold_file(tmp_path, gold_rows("V1", ["HOME"] * 2))
@@ -567,6 +690,62 @@ def test_prediction_csv_is_read_with_its_own_rules(tmp_path, capsys):
     assert as_json(capsys, "--gold", gold, "--pred", no_confidence)["layers"]["GOLD"]["correct"] == 1
     no_winner = write_rows(tmp_path / "intervals.csv", ["video_id", "start_ms", "end_ms", "winner"], [["V1", *at(0), "HOME"]])
     assert_unusable(evaluate(capsys, "--gold", gold, "--pred", no_winner), "missing column(s): proposed_winner")
+
+
+@pytest.mark.parametrize("column", ["origin", "status", "winner", "rallyListVersion", "rally_list_version", "list_confirmed"])
+def test_a_rally_list_with_user_work_is_refused_in_csv_too(tmp_path, capsys, column):
+    gold = gold_file(tmp_path, gold_rows("V1", ["HOME"] * 2))
+    pred = write_rows(tmp_path / "reviewed.csv", ["video_id", "start_ms", "end_ms", "proposed_winner", column],
+                      [["V1", *at(0), "HOME", "x"]])
+    assert_unusable(evaluate(capsys, "--gold", gold, "--pred", pred),
+                    f"carries the column '{column}', so the file is a reviewed rally list", "the analyzer's own proposals are needed")
+
+
+def test_a_csv_proposal_with_a_reversed_or_negative_interval_is_refused(tmp_path, capsys):
+    gold = gold_file(tmp_path, gold_rows("V1", ["HOME"] * 2))
+    header = ["video_id", "start_ms", "end_ms", "proposed_winner"]
+    for name, row in (("reversed.csv", ["V1", 15000, 10000, "HOME"]), ("negative.csv", ["V1", -500, 5000, "HOME"])):
+        pred = write_rows(tmp_path / name, header, [row])
+        assert_unusable(evaluate(capsys, "--gold", gold, "--pred", pred), "does not satisfy 0 <= start < end")
+
+
+def test_numbers_that_python_can_not_read_end_in_an_error_and_not_a_traceback(tmp_path, capsys):
+    gold = gold_file(tmp_path, gold_rows("V1", ["HOME"] * 2))
+    long_number = tmp_path / "long.json"
+    long_number.write_text('{"videoId": "V1", "rallies": [{"startMs": 0, "endMs": 5000, "proposedWinner": "HOME", '
+                           '"confidence": 1' + "0" * 5000 + '}]}', encoding="utf-8")
+    assert_unusable(evaluate(capsys, "--gold", gold, "--pred", long_number), "not usable JSON")
+    deep = tmp_path / "deep.json"
+    deep.write_text("[" * 100_000 + "]" * 100_000, encoding="utf-8")
+    assert_unusable(evaluate(capsys, "--gold", gold, "--pred", deep), "not usable JSON")
+    assert_unusable(evaluate(capsys, "--gold", deep, "--pred", long_number), "not usable JSON")
+    huge = pred_file(tmp_path, "V1", [])
+    document = json.loads(huge.read_text(encoding="utf-8"))
+    document["rallies"] = [{"startMs": 10 ** 400, "endMs": 10 ** 400 + 5000, "proposedWinner": "HOME"}]
+    write_json(huge, document)
+    # A start far beyond any video is a decision where the gold has no rally.
+    code, out, err = evaluate(capsys, "--gold", gold, "--pred", huge)
+    assert (code, err) == (0, "")
+    assert "(0 second proposals for a gold rally that another proposal pairs with, 0 overlap a gold rally whose " \
+           "boundary is further off, 1 lie where the gold has no rally)" in out
+
+
+def test_proposals_that_name_different_winners_for_one_rally_are_refused(tmp_path, capsys):
+    gold = gold_file(tmp_path, gold_rows("V1", ["HOME"] * 2))
+    pred = pred_file(tmp_path, "V1", [(0, "HOME", 0.6), (0, "AWAY", 0.95), (1, "HOME")])
+    assert_unusable(evaluate(capsys, "--gold", gold, "--pred", pred),
+                    "video V1: proposals within +/-1000 ms of the gold rally 0-5000 ms name different winners (AWAY, HOME)")
+
+
+def test_a_second_proposal_for_a_rally_is_counted_and_named_as_such(tmp_path, capsys):
+    gold = gold_file(tmp_path, gold_rows("V1", ["HOME"] * 2))
+    pred = pred_file(tmp_path, "V1", [(0, "HOME", 0.6), (0, "HOME", 0.95), (1, "HOME")])
+    code, out, _ = evaluate(capsys, "--gold", gold, "--pred", pred)
+    assert code == 0
+    assert ("not scored, automatic decisions that pair with no gold rally within +/-1000 ms: 1 (1 second proposals for a "
+            "gold rally that another proposal pairs with, 0 overlap") in out
+    assert as_json(capsys, "--gold", gold, "--pred", pred)["notScored"]["unpaired"] == {
+        "secondProposal": 1, "overlapsGold": 0, "noGoldThere": 0}
 
 
 def test_every_bad_cell_of_a_prediction_csv_is_reported_with_its_row(tmp_path, capsys):
@@ -609,6 +788,27 @@ def test_gold_labels_must_be_schema_values_for_this_command(tmp_path, capsys):
     assert "row 2: winning_side must be one of HOME, AWAY, UNKNOWN or empty, found 'home'" in err
     assert ("row 2: ground_truth_status must be one of SINGLE_HUMAN, DOUBLE_AGREED, ADJUDICATED, UNRESOLVABLE, "
             "NEEDS_MORE_EVIDENCE or empty, found 'double_agreed'") in err
+
+    header = GOLD_HEADER + ["review_status", "winner_evidence"]
+    misspelt = gold_file(tmp_path, [["V1", 0, 5000, "HOME", "OBSERVED", "", "disputed", "rule_constraint"],
+                                    ["V1", 10000, 15000, "HOME", "OBSERVED", "", "UNRESOLVED", "VIDEO"]],
+                         name="misspelt.csv", header=header)
+    code, out, err = evaluate(capsys, "--gold", misspelt, "--pred", pred)
+    assert (code, out) == (2, "")
+    assert ("row 2: review_status must be one of UNREVIEWED, ACCEPTED, CORRECTED, UNRESOLVABLE, DISPUTED or empty, "
+            "found 'disputed'") in err
+    assert ("row 2: winner_evidence must be one of VIDEO, SCOREBOARD, AUDIO, RULE_CONSTRAINT, EXTERNAL_NOTES or empty, "
+            "found 'rule_constraint'") in err
+    assert "row 3: review_status must be one of" in err and "found 'UNRESOLVED'" in err
+
+    reviewed = gold_file(tmp_path, [["V1", 0, 5000, "HOME", "OBSERVED", "", "DISPUTED", ""],
+                                    ["V1", 10000, 15000, "HOME", "OBSERVED", "", "UNRESOLVABLE", ""],
+                                    ["V1", 20000, 25000, "HOME", "OBSERVED", "", "ACCEPTED", ""]],
+                         name="reviewed.csv", header=header)
+    two = pred_file(tmp_path, "V1", [(0, "AWAY"), (1, "AWAY"), (2, "HOME")], name="two.json")
+    document = as_json(capsys, "--gold", reviewed, "--pred", two)
+    assert document["excluded"] == {"REVIEW_DISPUTED": 1, "REVIEW_UNRESOLVABLE": 1}
+    assert document["layers"]["SINGLE"]["correct"] == 1 and document["layers"]["SINGLE"]["wrong"] == 0
 
     overlapping = gold_file(tmp_path, [["V1", 0, 5000, "HOME", "OBSERVED", ""], ["V1", 4000, 9000, "HOME", "OBSERVED", ""]])
     code, out, err = evaluate(capsys, "--gold", overlapping, "--pred", pred)

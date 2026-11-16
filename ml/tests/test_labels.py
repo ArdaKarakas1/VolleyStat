@@ -215,6 +215,23 @@ def test_the_csv_spelling_of_ground_truth_status_is_refused_in_json():
     ]
 
 
+def test_winner_evidence_is_one_value_of_the_dictionary_where_a_rally_carries_it():
+    evidence = ["VIDEO", "SCOREBOARD", "AUDIO", "RULE_CONSTRAINT", "EXTERNAL_NOTES"]
+    assert list(labels.WINNER_EVIDENCE) == evidence
+    every = document(*[rally(f"R{index}", index * 10000, index * 10000 + 5000, winnerEvidence=value)
+                       for index, value in enumerate(evidence)], rally("R9", 90000, 95000))
+    assert validate_annotation(every) == []
+    # A misspelt RULE_CONSTRAINT would be counted as some other evidence.
+    wrong = document(rally("R1", 0, 5000, winnerEvidence="rule_constraint"), rally("R2", 6000, 9000, winnerEvidence=3),
+                     rally("R3", 10000, 12000, winner_evidence="VIDEO"))
+    assert validate_annotation(wrong) == [
+        "$.rallies[0].winnerEvidence: must be one of VIDEO, SCOREBOARD, AUDIO, RULE_CONSTRAINT, EXTERNAL_NOTES, "
+        "found 'rule_constraint'",
+        "$.rallies[1].winnerEvidence: expected string, found integer",
+        "$.rallies[2]: 'winner_evidence' is the CSV spelling; in JSON the key is 'winnerEvidence'",
+    ]
+
+
 @pytest.mark.parametrize("field", ["winningSide", "servingSide", "observationStatus"])
 @pytest.mark.parametrize("reason", ["missing", None, "", "   "])
 def test_unknown_needs_an_uncertainty_reason(field, reason):

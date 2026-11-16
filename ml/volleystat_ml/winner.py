@@ -29,10 +29,13 @@ ADJUDICATED) or SINGLE (one annotator, or no status given). The G3 targets are r
 the GOLD layer only (docs/AI_PLAN.md 4.3).
 
 Two kinds of automatic decision are counted and never scored: one on a gold rally that
-is not eligible, and one that pairs with no gold rally. The second kind is split by an
-overlap test, because "the boundary is off by more than the tolerance" and "the gold has
-no rally there" are different faults. `lower_bound_precision` shows what the precision
-would be if every unpaired decision of the layer's videos were a wrong one.
+is not eligible, and one that pairs with no gold rally. The second kind is split three
+ways, because they are different faults: a second proposal for a gold rally that another
+proposal already pairs with, a boundary off by more than the tolerance, and a decision
+where the gold has no rally. `lower_bound_precision` shows what the precision would be if
+every unpaired decision of the layer's videos were a wrong one. Proposals that name
+different winners for one gold rally are refused (ContradictingProposals): the pairing
+would keep whichever comes first in the file, so the score would depend on its order.
 
 With fewer than MIN_RELIABLE in its own denominator a ratio is misleading. `to_dict()`
 then writes null for it and keeps the counts and the interval, so a record built from it
@@ -86,7 +89,7 @@ EXCLUSIONS = (
     "WINNER_UNKNOWN", "OBSERVATION_UNKNOWN", "OBSERVATION_NOT_APPLICABLE",
 )
 SCORED = ("CORRECT", "WRONG", "UNKNOWN", "NOT_PROPOSED")
-UNPAIRED = ("OVERLAPS_GOLD", "NO_GOLD_THERE")
+UNPAIRED = ("SECOND_PROPOSAL", "OVERLAPS_GOLD", "NO_GOLD_THERE")
 OBSERVATIONS = ("OBSERVED", "INFERRED", "NOT_GIVEN")
 PROPOSED = ("HOME", "AWAY", "UNKNOWN", "NOT_PROPOSED")
 # The rows of the failure list: everything except a correct decision.
@@ -110,9 +113,11 @@ class Proposal:
     def __post_init__(self) -> None:
         if self.proposed_winner not in (*SIDES, UNKNOWN):
             raise ValueError(f"proposed_winner must be HOME, AWAY or UNKNOWN, found {self.proposed_winner!r}")
+        # The range is tested first: Python compares an integer of any size exactly, while
+        # math.isfinite would overflow on one. NaN and the infinities fail the range test.
         if self.confidence is not None and not (
                 isinstance(self.confidence, (int, float)) and not isinstance(self.confidence, bool)
-                and math.isfinite(self.confidence) and 0 <= self.confidence <= 1):
+                and 0 <= self.confidence <= 1):
             raise ValueError(f"confidence must be a number from 0 to 1 or None, found {self.confidence!r}")
 
     @property
@@ -172,10 +177,28 @@ class VideoEvaluation:
     automatic_proposals: int
 
 
+class ContradictingProposals(ValueError):
+    """Proposals within the tolerance of one gold rally name different winners."""
+
+
+def _within(proposal: Proposal, rally: agreement.Rally, tolerance_ms: int) -> bool:
+    """The pairing test of metrics: both ends within the tolerance."""
+    return abs(proposal.start_ms - rally.start_ms) <= tolerance_ms and abs(proposal.end_ms - rally.end_ms) <= tolerance_ms
+
+
 def evaluate_video(gold: Sequence[agreement.Rally], proposals: Sequence[Proposal],
                    tolerance_ms: int = DEFAULT_TOLERANCE_MS) -> VideoEvaluation:
     """Score the proposals of ONE video. Never mix videos in one call: a proposal could
-    then pair with a rally of another video. Combine videos with pool()."""
+    then pair with a rally of another video. Combine videos with pool().
+
+    Raises ContradictingProposals when proposals within the tolerance of one gold rally name
+    different winners and at least one of them decides: HOME and AWAY, or a side and UNKNOWN."""
+    for rally in gold:
+        named = {proposal.proposed_winner for proposal in proposals if _within(proposal, rally, tolerance_ms)}
+        if len(named) > 1 and named & set(SIDES):
+            raise ContradictingProposals(
+                f"proposals within +/-{tolerance_ms} ms of the gold rally {rally.start_ms}-{rally.end_ms} ms name "
+                f"different winners ({', '.join(sorted(named))}); the component made no single decision on that rally")
     boundaries = metrics.evaluate_boundaries(
         [(rally.start_ms, rally.end_ms) for rally in gold],
         [(proposal.start_ms, proposal.end_ms) for proposal in proposals], tolerance_ms)
@@ -204,9 +227,15 @@ def evaluate_video(gold: Sequence[agreement.Rally], proposals: Sequence[Proposal
     for index, proposal in enumerate(proposals):
         if index in paired or not proposal.automatic:
             continue
-        overlaps = any(proposal.start_ms < rally.end_ms and rally.start_ms < proposal.end_ms for rally in gold)
-        found.append((proposal.start_ms, 1, Outcome(
-            "AUTO_UNPAIRED", None, None, proposal, "OVERLAPS_GOLD" if overlaps else "NO_GOLD_THERE")))
+        # The pairing has the largest possible number of pairs, so a decision within the
+        # tolerance of a gold rally stays unpaired only when another proposal took that rally.
+        if any(_within(proposal, rally, tolerance_ms) for rally in gold):
+            reason = "SECOND_PROPOSAL"
+        elif any(proposal.start_ms < rally.end_ms and rally.start_ms < proposal.end_ms for rally in gold):
+            reason = "OVERLAPS_GOLD"
+        else:
+            reason = "NO_GOLD_THERE"
+        found.append((proposal.start_ms, 1, Outcome("AUTO_UNPAIRED", None, None, proposal, reason)))
 
     found.sort(key=lambda item: (item[0], item[1]))
     return VideoEvaluation(
@@ -423,9 +452,11 @@ class LayerEvaluation:
     confusion: Mapping[tuple[str, str], int]
     # How the gold winner is known -> (eligible, automatic decisions, correct ones).
     by_observation: Mapping[str, tuple[int, int, int]]
-    # Eligible rallies whose winner evidence is RULE_CONSTRAINT. None when no rally of the
-    # layer carries the field: unknown, not zero.
+    # Eligible rallies whose winner evidence is RULE_CONSTRAINT, among the `evidence_given`
+    # eligible rallies that state an evidence at all. None when none states one: unknown,
+    # not zero. A missing column and an empty cell both state nothing.
     rule_constraint: int | None
+    evidence_given: int
     calibration: Calibration
 
     @property
@@ -478,6 +509,7 @@ class LayerEvaluation:
                 name: {"eligibleN": eligible, "autoN": auto, "correct": correct}
                 for name, (eligible, auto, correct) in self.by_observation.items()},
             "ruleConstraintEvidence": self.rule_constraint,
+            "evidenceGiven": self.evidence_given,
             "calibration": self.calibration.to_dict(level, resamples=resamples, seed=seed),
         }
 
@@ -512,13 +544,14 @@ def _layer(name: str, per_video: Mapping[str, VideoEvaluation]) -> LayerEvaluati
         elif automatic:
             without_confidence += 1
             wrong_without_confidence += 1 - right
-    evidence = [outcome.gold.winner_evidence for outcome in outcomes if outcome.gold.winner_evidence is not None]
+    stated = [value for value in (_given(outcome.gold.winner_evidence) for outcome in outcomes) if value is not None]
     return LayerEvaluation(
         name=name,
         correct=kinds["CORRECT"], wrong=kinds["WRONG"], unknown=kinds["UNKNOWN"], not_proposed=kinds["NOT_PROPOSED"],
         unpaired_auto=unpaired, videos=videos, confusion=confusion,
         by_observation={observation: tuple(row) for observation, row in observed.items()},
-        rule_constraint=sum(_given(value) == "RULE_CONSTRAINT" for value in evidence) if evidence else None,
+        rule_constraint=sum(value == "RULE_CONSTRAINT" for value in stated) if stated else None,
+        evidence_given=len(stated),
         calibration=Calibration(tuple(pairs), without_confidence, wrong_without_confidence),
     )
 
@@ -567,7 +600,8 @@ class Evaluation:
                        for name, layer in self.layers.items()},
             "notScored": {
                 "onIneligibleGold": dict(self.not_scored_ineligible),
-                "unpaired": {"overlapsGold": self.unpaired["OVERLAPS_GOLD"], "noGoldThere": self.unpaired["NO_GOLD_THERE"]},
+                "unpaired": {"secondProposal": self.unpaired["SECOND_PROPOSAL"], "overlapsGold": self.unpaired["OVERLAPS_GOLD"],
+                             "noGoldThere": self.unpaired["NO_GOLD_THERE"]},
                 "highConfidence": {"level": level, "n": self.unscored_high_confidence(level)},
             },
             "videos": {video_id: {layer: dict(counts) for layer, counts in layers.items()}
@@ -630,6 +664,17 @@ def failure_rows(per_video: Mapping[str, VideoEvaluation]) -> list[dict[str, Any
     return rows
 
 
+def against(value: float, target: float) -> str:
+    """A share printed with three decimals, or with more when three would land it on the
+    other side of the target: 0.94975 is printed 0.9497, never 0.950, beside 0.95."""
+    meets = value >= target
+    for digits in range(3, 10):
+        text = f"{value:.{digits}f}"
+        if (float(text) >= target) == meets:
+            return text
+    return repr(value)
+
+
 @dataclass(frozen=True)
 class TargetCheck:
     ratio: Ratio
@@ -661,10 +706,10 @@ class TargetCheck:
         if self.point_estimate_meets:
             if self.interval_low_meets:
                 return "point estimate and whole interval at or above the target"
-            return (f"point estimate at or above the target, interval reaches down to {interval.low:.3f}: "
+            return (f"point estimate at or above the target, interval reaches down to {against(interval.low, self.target)}: "
                     "this sample is also compatible with a value below the target")
         if interval.high >= self.target:
-            return (f"point estimate below the target, interval reaches up to {interval.high:.3f}: "
+            return (f"point estimate below the target, interval reaches up to {against(interval.high, self.target)}: "
                     "this sample does not show a miss either")
         return "whole interval below the target"
 
@@ -728,7 +773,7 @@ def g3(layer: LayerEvaluation) -> G3:
 
 def pilot_reasons(*, manifest_given: bool, digest_compared: bool, split: str | None,
                   missing_test_videos: Sequence[str], tolerance_ms: int, analyzer_stated: bool,
-                  gold_layer_eligible: int) -> list[str]:
+                  automatic_proposals: int, gold_layer_eligible: int) -> list[str]:
     """Why a run is a pilot run and not input for the G3 decision: every reason that
     applies, in a fixed order. An empty list means that every condition holds."""
     reasons = []
@@ -745,6 +790,11 @@ def pilot_reasons(*, manifest_given: bool, digest_compared: bool, split: str | N
         reasons.append(f"rallies were paired at +/-{tolerance_ms} ms and not at the fixed {DEFAULT_TOLERANCE_MS} ms")
     if not analyzer_stated:
         reasons.append("the prediction files do not name the analyzer and its version")
+    if not automatic_proposals:
+        # Today's segment output abstains on every rally. Its coverage of 0 is no measurement
+        # of a winner component, so it is not compared with the targets.
+        reasons.append("the prediction files contain no HOME or AWAY proposal, so there is no winner decision "
+                       "to compare with the targets")
     if not gold_layer_eligible:
         reasons.append("no eligible rally carries a double-agreed or adjudicated label")
     return reasons
