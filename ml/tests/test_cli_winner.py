@@ -283,6 +283,12 @@ def test_a_test_video_whose_winners_were_never_annotated_is_not_evaluated(tmp_pa
     document = as_json(capsys, "--gold", tmp_path / "unknown.csv", "--pred", *preds, "--manifest", manifest,
                        "--expect-sha256", digest)
     assert document["videosEvaluated"] == ["V1", "V2"] and document["runKind"] == "GATE_INPUT"
+    # So is a video whose labels were adjudicated as unresolvable, even with the winner left empty.
+    rows = [row if row[0] == "V1" else [row[0], row[1], row[2], "", "", "UNRESOLVABLE"] for row in rows]
+    gold_file(tmp_path, rows, name="unresolvable.csv")
+    document = as_json(capsys, "--gold", tmp_path / "unresolvable.csv", "--pred", *preds, "--manifest", manifest,
+                       "--expect-sha256", digest)
+    assert document["videosEvaluated"] == ["V1", "V2"] and document["notEvaluated"]["goldWithoutWinner"] == []
 
 
 def test_the_gate_block_names_the_videos_and_matches_behind_the_gold_layer(tmp_path, capsys):
@@ -303,6 +309,12 @@ def test_the_bounds_of_an_interval_beside_a_target_are_not_rounded_onto_it(tmp_p
     assert code == 0
     assert "  selective precision: 108/109 automatic decisions are correct (0.991)\n    95% Wilson interval: 0.9499 to 0.998" in out
     assert "interval reaches down to 0.9499" in out
+
+    # The coverage target 0.60: a lower bound of 0.59995 is not printed 0.600.
+    (tmp_path / "coverage").mkdir()
+    gold, preds, manifest, digest = gate_inputs(tmp_path / "coverage", correct=52, wrong=0, unknown=21)
+    code, out, _ = evaluate(capsys, "--gold", gold, "--pred", *preds, "--manifest", manifest, "--expect-sha256", digest)
+    assert "  automatic coverage: 52/73 eligible rallies got an automatic decision (0.712)\n    95% Wilson interval: 0.5999 to 0.803" in out
 
 
 def test_a_csv_cell_beyond_the_csv_limit_is_an_error_and_not_a_traceback(tmp_path, capsys):
