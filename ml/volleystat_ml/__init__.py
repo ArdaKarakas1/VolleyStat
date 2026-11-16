@@ -4,4 +4,4 @@ Nothing in this package has been evaluated on real match video. The segmenter is
 BASELINE (a real algorithm with unmeasured accuracy), not a trained model.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

@@ -95,6 +95,9 @@ def test_segment_parameters_come_from_the_command_line(clips, capsys):
     ("--frame-width", 0), ("--frame-height", 0), ("--frame-width", 96.5),
     ("--smooth-window-ms", -1), ("--merge-gap-ms", -1), ("--min-rally-ms", 0),
     ("--noise-floor", 0), ("--min-contrast-ratio", 1.0), ("--exit-level", 0), ("--enter-level", 1.5),
+    ("--frame-width", 4097), ("--frame-width", 10 ** 30), ("--frame-width", 10 ** 400), ("--frame-height", 4097),
+    ("--smooth-window-ms", 86_400_001), ("--smooth-window-ms", 10 ** 308), ("--smooth-window-ms", 10 ** 400),
+    ("--sample-fps", 240.5), ("--sample-fps", "1e308"),
 ])
 def test_segment_option_outside_its_range_is_refused_by_the_parser(capsys, tmp_path, option, value):
     # The video is never opened: the parser stops before the command runs.
@@ -287,7 +290,7 @@ def test_evaluate_refuses_input_it_can_not_read(tmp_path, capsys):
 
 @pytest.mark.parametrize("option, value", [
     ("--resamples", 0), ("--resamples", -5), ("--resamples", "many"), ("--tolerance-ms", -1),
-    ("--tolerance-ms", 0.5), ("--seed", -1),
+    ("--tolerance-ms", 0.5), ("--seed", -1), ("--resamples", 1_000_001), ("--resamples", 10 ** 400),
 ])
 def test_evaluate_option_outside_its_range_is_refused_by_the_parser(tmp_path, capsys, option, value):
     gold = write_json(tmp_path / "gold.json", annotation("V1", [(0, 5000)]))
@@ -378,6 +381,63 @@ def test_make_splits_writes_a_lock_that_check_leakage_accepts(tmp_path, capsys):
             run(capsys, "make-splits", "--inventory", source, "--out", tmp_path / "other.csv", "--ratios", ratios),
             "argument --ratios: must be three numbers", "sum to 1")
     assert not (tmp_path / "other.csv").exists()
+
+
+def test_text_after_a_closing_quote_stops_make_splits_and_check_leakage_with_its_line(tmp_path, capsys):
+    source = inventory(tmp_path, [("V1", "M1", "true", ""), ("V2", "M2", "true", "")])
+    lines = source.read_text(encoding="utf-8").splitlines()
+    lines[1] = lines[1] + '"Final" maci'
+    source.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    for arguments in (("make-splits", "--inventory", source, "--out", tmp_path / "lock.csv"), ("check-leakage", source)):
+        assert_unusable(run(capsys, *arguments), f"{source}: line 2: ", "text may follow a closing quote")
+    assert not (tmp_path / "lock.csv").exists()
+
+
+@pytest.mark.parametrize("arena", ["Salon A\u2028Kuzey", "Spor Salonu, Kuzey\u2028Tribun", "Salon\x0bB", "Salon\x85C",
+                                   "Salon, \x0cD", "Salon\x1cE"])
+def test_a_lock_verifies_although_a_cell_holds_a_character_that_python_calls_a_line_break(tmp_path, capsys, arena):
+    # csv reads these characters as text; a lock must not split its own records at them.
+    rows = []
+    for group in range(10):
+        for letter in "ab":
+            row = dict.fromkeys(splits.INVENTORY_COLUMNS, "")
+            row.update(video_id=f"V{group}{letter}", match_group_id=f"M{group}", training_allowed="true",
+                       arena_id=arena, sha256=hashlib.sha256(f"V{group}{letter}".encode()).hexdigest())
+            rows.append([row[name] for name in splits.INVENTORY_COLUMNS])
+    source = write_rows(tmp_path / "inventory.csv", splits.INVENTORY_COLUMNS, rows)
+    lock = tmp_path / "lock.csv"
+    code, out, err = run(capsys, "make-splits", "--inventory", source, "--out", lock, "--locked-at", "2026-11-16T00:00:00Z")
+    assert code == 0, err
+    digest = out.split("content_sha256 ")[1].split()[0]
+    code, out, err = run(capsys, "check-leakage", lock, "--expect-sha256", digest)
+    assert (code, err) == (0, "") and "20 of 20 video(s) have a split; 0 problem(s)" in out
+    test_video = next(video.video_id for video in splits.read_lock_manifest(lock).videos if video.split == "test")
+    gold = write_rows(tmp_path / "gold.csv", ["video_id", "start_ms", "end_ms", "winning_side", "observation_status",
+                                               "ground_truth_status"], [[test_video, 0, 5000, "HOME", "OBSERVED", "DOUBLE_AGREED"]])
+    pred = write_json(tmp_path / "pred.json", {"videoId": test_video, "mock": False, "rallies": [
+        {"startMs": 0, "endMs": 5000, "proposedWinner": "HOME", "confidence": 0.9}]})
+    code, out, err = run(capsys, "evaluate-winner", "--gold", gold, "--pred", pred, "--manifest", lock, "--expect-sha256", digest)
+    assert (code, err) == (0, "")
+
+
+def test_a_line_break_in_a_locked_cell_that_becomes_another_break_character_is_an_edit(tmp_path, capsys):
+    rows = []
+    for group in range(10):
+        for letter in "ab":
+            row = dict.fromkeys(splits.INVENTORY_COLUMNS, "")
+            row.update(video_id=f"V{group}{letter}", match_group_id=f"M{group}", training_allowed="true",
+                       arena_id="Salon\nKuzey", sha256=hashlib.sha256(f"V{group}{letter}".encode()).hexdigest())
+            rows.append([row[name] for name in splits.INVENTORY_COLUMNS])
+    source = write_rows(tmp_path / "inventory.csv", splits.INVENTORY_COLUMNS, rows)
+    lock = tmp_path / "lock.csv"
+    code, out, _ = run(capsys, "make-splits", "--inventory", source, "--out", lock, "--locked-at", "2026-11-16T00:00:00Z")
+    assert code == 0
+    digest = out.split("content_sha256 ")[1].split()[0]
+    text = lock.read_text(encoding="utf-8")
+    assert '"Salon\nKuzey"' in text
+    lock.write_text(text.replace('"Salon\nKuzey"', '"Salon\x0bKuzey"', 1), encoding="utf-8")
+    code, out, _ = run(capsys, "check-leakage", lock, "--expect-sha256", digest)
+    assert code == 1 and "the manifest was changed after it was locked" in out
 
 
 def test_check_leakage_detects_an_edited_lock(tmp_path, capsys):
@@ -567,6 +627,16 @@ def labelled(video_id, rallies):
             for index, (start, end, winner, serving) in enumerate(rallies, start=1)
         ],
     }
+
+
+def test_agreement_leaves_the_winner_gold_columns_unchecked(tmp_path, capsys):
+    # review_status, ground_truth_status and winner_evidence are checked by evaluate-winner only.
+    a = write_rows(tmp_path / "a.csv", ["video_id", "start_ms", "end_ms", "winning_side", "review_status",
+                                        "ground_truth_status", "winner_evidence"], [["V1", 0, 5000, "HOME", "disputed", "x", "y"]])
+    b = write_rows(tmp_path / "b.csv", ["video_id", "start_ms", "end_ms", "winning_side"], [["V1", 0, 5000, "HOME"]])
+    code, out, err = run(capsys, "agreement", "--a", a, "--b", b)
+    assert (code, err) == (0, "")
+    assert "matched pairs 1" in out
 
 
 def test_agreement_of_identical_labels_in_csv_and_json(tmp_path, capsys):

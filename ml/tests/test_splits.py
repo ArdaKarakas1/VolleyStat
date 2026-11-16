@@ -429,3 +429,76 @@ def test_other_csv_files_are_not_taken_for_a_manifest(tmp_path):
     assert problems_of(lambda: read_lock_manifest(inventory))[0].startswith("not a lock manifest")
     path, _, _, _ = locked(tmp_path)
     assert splits.is_lock_manifest(path)
+
+
+@pytest.mark.parametrize("text, line", [
+    # A quote opened in the first data row and never closed.
+    ('video_id,notes\nV1,"net touch?\nV2,ok\n', 2),
+    # The same quote eleven lines down.
+    ("video_id,notes\n" + "".join(f"V{index},ok\n" for index in range(9)) + 'V9,"net touch?\nV10,ok\n', 11),
+    # Text after a closing quote.
+    ('video_id,notes\nV1,ok\nV2,"net" touch\n', 3),
+    # A valid cell over two lines, then an open quote: the line where that record starts.
+    ('video_id,notes\nV1,"two\nlines"\nV2,ok\nV3,"open\n', 5),
+    # Broken quotes in the header itself.
+    ('video_id,"notes\nV1,ok\n', 1),
+    ('video_id,"notes" x\nV1,ok\n', 1),
+    # A blank line before the broken record does not shift the count.
+    ('video_id,notes\nV1,ok\n\nV2,"open\n', 4),
+])
+def test_a_quote_that_breaks_the_csv_is_reported_on_the_line_where_its_record_starts(text, line):
+    with pytest.raises(splits.SplitError, match=f"^line {line}: .*a quote may not be closed"):
+        splits.read_csv(text)
+
+
+def test_reading_csv_keeps_its_rules_for_cells_rows_and_blank_lines():
+    columns, rows, problems = splits.read_csv(' video_id , notes \n V1 , a \n\n,\nV2\nV3,b,extra\n')
+    assert columns == ["video_id", "notes"]
+    # Cells are stripped, empty rows dropped, a short row filled, a long row reported.
+    assert rows == [{"video_id": "V1", "notes": "a"}, {"video_id": "V2", "notes": ""}, {"video_id": "V3", "notes": "b"}]
+    assert problems == ["row 4: 3 cells, but the header has 2 columns"]
+
+
+@pytest.mark.parametrize("ending", ["\n", "\r\n"])
+def test_a_header_cell_over_two_lines_does_not_hide_an_inventory(tmp_path, ending):
+    inventory = write_inventory(tmp_path / "plain.csv", library(groups=2))
+    lines = inventory.read_text(encoding="utf-8-sig").splitlines()
+    # A spreadsheet writes a header cell with a line break in quotes.
+    text = ending.join([lines[0].replace("notes", '"notes' + ending + '(optional)"')] + lines[1:]) + ending
+    multi = tmp_path / "multi.csv"
+    multi.write_text(text, encoding="utf-8")
+    assert splits.is_lock_manifest(multi) is False
+    assert [video.video_id for video in splits.read_inventory(multi)] == [video.video_id for video in library(groups=2)]
+    # A quote left open further down is reported where it starts, not on the header.
+    broken = tmp_path / "broken.csv"
+    broken.write_text(text + 'V99,"open' + ending, encoding="utf-8")
+    with pytest.raises(splits.SplitError, match=f"^line {len(lines) + 2}: "):
+        splits.is_lock_manifest(broken)
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("", ([], [], [])),
+    # Content only beyond the header is a row of its own, and it is reported.
+    ("a,b\n,,x\n", (["a", "b"], [{"a": "", "b": ""}], ["row 2: 3 cells, but the header has 2 columns"])),
+    # Surplus cells with only spaces leave the row empty.
+    ("a,b\n,, \nV1,c\n", (["a", "b"], [{"a": "V1", "b": "c"}], [])),
+    # A later column of the same name wins, as in csv.DictReader.
+    ("a,b,a\nx,y,z\n", (["a", "b", "a"], [{"a": "z", "b": "y"}], [])),
+])
+def test_reading_csv_keeps_the_rules_of_the_old_reader_at_the_edges(text, expected):
+    assert splits.read_csv(text) == expected
+
+
+def test_an_inventory_that_starts_with_the_manifest_columns_is_still_an_inventory(tmp_path):
+    rows = ["video_id,match_group_id,arena_id,camera_setup_id,sha256,training_allowed,split,notes"]
+    rows += [f"V{index},M{index},A1,C1,{str(index) * 64},true,{'test' if index < 2 else 'train'}," for index in range(4)]
+    path = tmp_path / "inventory.csv"
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    assert splits.is_lock_manifest(path) is False
+    assert [video.video_id for video in splits.read_inventory(path)] == ["V0", "V1", "V2", "V3"]
+    # Every manifest column and one more: still an inventory.
+    rows = [",".join([*splits.MANIFEST_COLUMNS, "training_allowed"])]
+    rows += [f"V{index},M{index},A1,C1,{str(index) * 64},{'test' if index < 2 else 'train'},,,,true" for index in range(4)]
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    assert splits.is_lock_manifest(path) is False
+    assert [video.video_id for video in splits.read_inventory(path)] == ["V0", "V1", "V2", "V3"]

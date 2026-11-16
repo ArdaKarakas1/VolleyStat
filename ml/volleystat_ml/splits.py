@@ -287,7 +287,10 @@ def read_lock_manifest(path: Path) -> LockManifest:
     added or removed row does. A cell appended after the last column lies outside the
     hash and is listed in `.problems` instead.
     """
-    lines = read_text(path).splitlines()
+    # Only the line breaks of the csv module: str.splitlines also breaks at characters
+    # such as U+2028 or a vertical tab, which csv keeps inside a cell. read_text has
+    # already turned "\r\n" and "\r" into "\n".
+    lines = read_text(path).split("\n")
     while lines and not lines[-1].strip():
         lines.pop()
     stored = None
@@ -306,8 +309,8 @@ def read_lock_manifest(path: Path) -> LockManifest:
 
 
 def is_lock_manifest(path: Path) -> bool:
-    first_line = read_text(path).partition("\n")[0]
-    return tuple(read_csv(first_line)[0]) == MANIFEST_COLUMNS
+    # The header is the first CSV record, which a quoted line break can spread over two lines.
+    return tuple(read_csv(read_text(path))[0]) == MANIFEST_COLUMNS
 
 
 def read_text(path: Path) -> str:
@@ -333,14 +336,29 @@ def read_csv(text: str) -> tuple[list[str], list[dict[str, str]], list[str]]:
     # A spreadsheet with a Turkish locale saves CSV with semicolons.
     header = text.partition("\n")[0]
     delimiter = ";" if header.count(";") > header.count(",") else ","
-    reader = csv.DictReader(io.StringIO(text, newline=""), delimiter=delimiter, restval="")
-    columns = [name.strip() for name in (reader.fieldnames or [])]
-    reader.fieldnames = columns
+    # strict: a quote opened and never closed is an error. Without it the reader swallows every
+    # later row into one cell, and the file silently loses those rows.
+    reader = csv.reader(io.StringIO(text, newline=""), delimiter=delimiter, strict=True)
+    records: list[list[str]] = []
+    start = 1
+    try:
+        while True:
+            # The line on which the next record starts. A blank line is a record of its own,
+            # so the count stays exact.
+            start = reader.line_num + 1
+            try:
+                records.append(next(reader))
+            except StopIteration:
+                break
+    except csv.Error as error:
+        raise SplitError([f"line {start}: {error}; a quote may not be closed, text may follow a closing quote, "
+                          "or a cell is longer than the CSV limit"]) from error
+    columns = [name.strip() for name in records[0]] if records else []
     rows, problems = [], []
-    for row in reader:
-        cells = {name: (row.get(name) or "").strip() for name in columns}
-        # The reader collects the cells beyond the last column under the key None.
-        surplus = row.get(None) or []
+    for record in records[1:]:
+        # A later column of the same name wins, as it does in csv.DictReader.
+        cells = {name: (record[index] if index < len(record) else "").strip() for index, name in enumerate(columns)}
+        surplus = record[len(columns):]
         if any(cells.values()) or any(cell.strip() for cell in surplus):
             rows.append(cells)
             if surplus:
