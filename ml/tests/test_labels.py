@@ -181,6 +181,40 @@ def test_sequence_restarts_with_each_set():
     ]
 
 
+def test_ground_truth_status_is_checked_as_the_json_spelling_of_the_csv_column():
+    statuses = ["SINGLE_HUMAN", "DOUBLE_AGREED", "ADJUDICATED", "UNRESOLVABLE", "NEEDS_MORE_EVIDENCE"]
+    assert list(labels.GROUND_TRUTH_STATUSES) == statuses
+    every = document(*[rally(f"R{index}", index * 10000, index * 10000 + 5000, groundTruthStatus=status)
+                       for index, status in enumerate(statuses)])
+    assert validate_annotation(every) == []
+
+    wrong = document(rally("R1", 0, 5000, groundTruthStatus="double_agreed"),
+                     rally("R2", 6000, 9000, groundTruthStatus=1),
+                     rally("R3", 10000, 12000, groundTruthStatus=None))
+    assert validate_annotation(wrong) == [
+        "$.rallies[0].groundTruthStatus: must be one of SINGLE_HUMAN, DOUBLE_AGREED, ADJUDICATED, UNRESOLVABLE, "
+        "NEEDS_MORE_EVIDENCE, found 'double_agreed'",
+        "$.rallies[1].groundTruthStatus: expected string, found integer",
+        "$.rallies[2].groundTruthStatus: expected string, found null",
+    ]
+
+
+def test_ground_truth_status_is_given_for_every_rally_of_a_file_or_for_none():
+    # A rally without the key would count as labelled by one annotator, next to 49 double-checked ones.
+    partial = document(rally("R1", 0, 5000, groundTruthStatus="DOUBLE_AGREED"), rally("R2", 6000, 9000))
+    assert validate_annotation(partial) == [
+        "$.rallies[1]: 'groundTruthStatus' is missing although other rallies of this file have one",
+    ]
+
+
+def test_the_csv_spelling_of_ground_truth_status_is_refused_in_json():
+    # The evaluation reads groundTruthStatus. An UNRESOLVABLE written under the CSV name would not be seen.
+    snake = document(rally("R1", 0, 5000, ground_truth_status="UNRESOLVABLE"))
+    assert validate_annotation(snake) == [
+        "$.rallies[0]: 'ground_truth_status' is the CSV spelling; in JSON the key is 'groundTruthStatus'",
+    ]
+
+
 @pytest.mark.parametrize("field", ["winningSide", "servingSide", "observationStatus"])
 @pytest.mark.parametrize("reason", ["missing", None, "", "   "])
 def test_unknown_needs_an_uncertainty_reason(field, reason):

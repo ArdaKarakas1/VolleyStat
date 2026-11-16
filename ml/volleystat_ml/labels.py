@@ -13,11 +13,15 @@ Two layers:
    - a rally whose winningSide, servingSide or observationStatus is UNKNOWN
      states an uncertaintyReason
    - at most one action per rally is flagged as the end event (`endEvent: true`)
+   - `groundTruthStatus`, where a file carries it, is one of GROUND_TRUTH_STATUSES and
+     is given for every rally of the file; the CSV spelling `ground_truth_status` is
+     refused, because the winner evaluation would not see a status written under it
 
-`sequence`, `setNumber` and `endEvent` are not part of the JSON schema, which allows
-additional properties. They are the JSON spelling of CSV columns of the handover
-templates: `sequence` and `set_number` of 03_RALLI_GOLD.csv, and `end_event` of
-04_AKSIYON_GOLD.csv (that template is not copied into schemas/).
+`sequence`, `setNumber`, `endEvent` and `groundTruthStatus` are not part of the JSON
+schema, which allows additional properties. They are the JSON spelling of CSV columns of
+the handover templates: `sequence`, `set_number` and `ground_truth_status` of
+03_RALLI_GOLD.csv, and `end_event` of 04_AKSIYON_GOLD.csv (that template is not copied
+into schemas/).
 
 Every error is one string that starts with the location of the problem.
 """
@@ -196,6 +200,7 @@ def interval_problems(
 def _check_rallies(rallies: list[Any], video_duration_ms: int | None, errors: list[str]) -> None:
     previous_sequence: dict[Any, tuple[int, int]] = {}
     with_sequence = [index for index, rally in enumerate(rallies) if isinstance(rally, dict) and "sequence" in rally]
+    with_status = any(isinstance(rally, dict) and "groundTruthStatus" in rally for rally in rallies)
     spans = [(rally.get("startMs"), rally.get("endMs")) if isinstance(rally, dict) else (None, None)
              for rally in rallies]
     time_problems, overlaps = interval_problems(spans, "$.rallies[{}]".format, video_duration_ms=video_duration_ms)
@@ -224,6 +229,17 @@ def _check_rallies(rallies: list[Any], video_duration_ms: int | None, errors: li
                         f"of $.rallies[{previous_sequence[key][1]}]; the sequence{scope} must strictly increase"
                     )
                 previous_sequence[key] = (sequence, index)
+
+        if "ground_truth_status" in rally:
+            errors.append(f"{path}: 'ground_truth_status' is the CSV spelling; in JSON the key is 'groundTruthStatus'")
+        if with_status:
+            status = rally.get("groundTruthStatus")
+            if "groundTruthStatus" not in rally:
+                errors.append(f"{path}: 'groundTruthStatus' is missing although other rallies of this file have one")
+            elif not isinstance(status, str):
+                errors.append(f"{path}.groundTruthStatus: expected string, found {_type_name(status)}")
+            elif status not in GROUND_TRUTH_STATUSES:
+                errors.append(f"{path}.groundTruthStatus: must be one of {', '.join(GROUND_TRUTH_STATUSES)}, found {status!r}")
 
         unknown_fields = [name for name in ("servingSide", "winningSide", "observationStatus")
                           if rally.get(name) == UNKNOWN]
