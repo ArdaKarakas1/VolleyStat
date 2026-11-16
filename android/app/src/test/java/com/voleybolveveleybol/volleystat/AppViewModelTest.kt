@@ -7,9 +7,12 @@ import com.voleybolveveleybol.volleystat.data.LocalStore
 import com.voleybolveveleybol.volleystat.data.StoredState
 import com.voleybolveveleybol.volleystat.model.Draft
 import com.voleybolveveleybol.volleystat.model.LocalVideo
+import com.voleybolveveleybol.volleystat.model.MatchPart
 import com.voleybolveveleybol.volleystat.model.MatchRecord
 import com.voleybolveveleybol.volleystat.model.MatchReport
 import com.voleybolveveleybol.volleystat.model.MatchRules
+import com.voleybolveveleybol.volleystat.model.SetPoint
+import com.voleybolveveleybol.volleystat.model.SetScore
 import com.voleybolveveleybol.volleystat.model.UploadSession
 import com.voleybolveveleybol.volleystat.model.VideoCheck
 import com.voleybolveveleybol.volleystat.model.VideoSource
@@ -544,6 +547,29 @@ class AppViewModelTest {
         assertEquals(5, vm.analysis.value.rallies!!.version)
     }
 
+    @Test fun aCorrectionWhoseAnswerTheAppCanNotReadIsJudgedByTheListAndDoesNotStopTheApp() {
+        var version = 3
+        val vm = withRallyList {
+            if (version == 3) rallies(3, rally("r1", 1, 2_000, 9_000), rally("r2", 2, 15_000, 24_000))
+            // The user made the new rally, and the list says so.
+            else rallies(version, rally("r1", 1, 2_000, 9_000), rally("r-new", 2, 10_000, 13_000).put("origin", "USER"), rally("r2", 3, 15_000, 24_000))
+        }
+        on("POST /analyses/J/rallies") {
+            version = 4
+            // The server added the rally, and its answer names a score without the match: the app can not read it.
+            val unreadable = rally("r-new", 2, 10_000, 13_000).put("scoreAfter", JSONObject().put("set", 1).put("home", 1).put("away", 0))
+            MockResponse().setResponseCode(201).setHeader("Content-Type", "application/json").setBody(corrected(job("J", "video-A", "NEEDS_REVIEW", open = 3), unreadable).toString())
+        }
+        on("GET /analyses/J/review-cards") { ok(deck(card("c1", 1, "HOME"), card("c-new", 2).put("rallyId", "r-new"), card("c2", 3))) }
+        var done = false
+        vm.addRally(10_000, 13_000) { done = true }
+        await("the correction") { done }
+        // The list the app read after the request holds the new rally, so the correction was made.
+        assertEquals(listOf("r1", "r-new", "r2"), vm.analysis.value.rallies!!.rallies.map { it.id })
+        assertNull(vm.analysis.value.correctionProblem)
+        assertFalse(vm.analysis.value.correcting)
+    }
+
     @Test fun aCorrectionThatNeverReachedTheServerSaysSoAndIsNotCalledDone() {
         val vm = withRallyList { rallies(3, rally("r1", 1, 2_000, 9_000), rally("r2", 2, 15_000, 24_000)) }
         on("POST /rallies/r2/merge-previous") { MockResponse().setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AFTER_REQUEST) }
@@ -1050,6 +1076,28 @@ class AppViewModelTest {
         assertEquals(MatchRules(2, 21, 15), vm.analysis.value.rallies!!.rules)
     }
 
+    @Test fun aRallyListNamesTheMatchOfEachCountedRally() {
+        val vm = withRallyList {
+            rallies(3, rally("r1", 31, 2_000, 9_000, status = "VERIFIED").put("scoreAfter", JSONObject().put("match", 2).put("set", 1).put("home", 1).put("away", 0)))
+        }
+        assertEquals(SetPoint(1, 1, 0, match = 2), vm.analysis.value.rallies!!.rallies.single().scoreAfter)
+    }
+
+    @Test fun aRallyListWhoseScoresNameNoMatchIsTheAnswerOfAnOlderServer() {
+        on("GET /videos/video-A/analyses/latest") { ok(job("J", "video-A", "NEEDS_REVIEW")) }
+        // Server 0.6 counts one match per video, so the score after a rally names no match.
+        on("GET /analyses/J/rallies") {
+            ok(rallies(3, rally("r1", 1, 2_000, 9_000, status = "VERIFIED").put("scoreAfter", JSONObject().put("set", 1).put("home", 1).put("away", 0))))
+        }
+        val vm = viewModel(StoredState(matches = listOf(accepted("A"))))
+        vm.watchAnalysis("A", startIfMissing = false)
+        await("the job") { vm.analysis.value.job != null }
+        vm.loadRallies("A")
+        await("the answer") { vm.analysis.value.ralliesLoad != RalliesLoad.LOADING }
+        assertEquals(RalliesLoad.OUTDATED, vm.analysis.value.ralliesLoad)
+        assertNull(vm.analysis.value.rallies)
+    }
+
     @Test fun aRallyListWithoutARuleIsTheAnswerOfAnOlderServer() {
         on("GET /videos/video-A/analyses/latest") { ok(job("J", "video-A", "NEEDS_REVIEW")) }
         // Server 0.5 sends the sets of the list and no rule: it counts every match with the FIVB rule.
@@ -1076,10 +1124,53 @@ class AppViewModelTest {
         assertEquals(MatchRules(2, 21, 15), reportWith(rulesJson(MatchRules(2, 21, 15)))!!.rules)
     }
 
-    @Test fun aReportOfAServerBeforeMatchRulesNamesItsRuleFromTheDecidingSet() {
-        // Server 0.5 named its fixed rule without setsToWin. The deciding set number tells it.
+    @Test fun aReportOfAServerBeforeTheSplitIntoMatchesSaysTheServerIsOutdatedAndDoesNotStopTheApp() {
+        // Server 0.6 sends the sets of one match and its sets won; server 0.5 also names its rule without setsToWin.
+        val olderScore = JSONObject().put("status", "UNKNOWN").put("setsWon", JSONObject().put("home", JSONObject.NULL).put("away", JSONObject.NULL))
+            .put("sets", JSONArray()).put("stoppedAtRally", 1)
         val fixed = JSONObject().put("setTarget", 25).put("decidingSetTarget", 15).put("winBy", 2).put("decidingSetNumber", 5)
-        assertEquals(MatchRules.FIVB, reportWith(fixed)!!.rules)
+        for (rules in listOf(rulesJson(MatchRules.FIVB), fixed)) {
+            on("GET /matches/server-A/report") { ok(report(rules).put("score", olderScore)) }
+            val vm = viewModel(StoredState(matches = listOf(accepted("A"))))
+            vm.loadReport("A")
+            await("the answer") { vm.analysis.value.reportLoad != ReportLoad.LOADING }
+            assertEquals(ReportLoad.OUTDATED, vm.analysis.value.reportLoad)
+            assertNull(vm.analysis.value.report)
+        }
+    }
+
+    @Test fun aReportOfSeveralMatchesBringsEachMatchWithItsOwnStatistics() {
+        fun team(points: Int) = JSONObject().apply {
+            put("points", JSONObject().put("value", points).put("status", "MEASURED"))
+            listOf("attackPoints", "blockPoints", "aces", "opponentErrors").forEach { put(it, JSONObject().put("value", JSONObject.NULL).put("status", "UNKNOWN")) }
+        }
+        fun player(side: String, jersey: Int, points: Int) = JSONObject().put("side", side).put("jersey", jersey).put("points", points)
+            .put("attackPoints", points).put("blockPoints", 0).put("aces", 0)
+        val first = partJson(listOf(SetScore(1, 25, 20, true), SetScore(2, 25, 18, true)), kind = MatchPart.MATCH, winner = "HOME",
+            teams = JSONObject().put("home", team(50)).put("away", team(38)), players = JSONArray(listOf(player("HOME", 7, 12))),
+            unattributed = JSONObject().put("home", 38).put("away", 38)).put("firstRally", 1).put("lastRally", 90)
+        val second = partJson(listOf(SetScore(1, 25, 24, false)), number = 2, kind = MatchPart.STOPPED,
+            teams = JSONObject().put("home", team(25)).put("away", team(24)), players = JSONArray(listOf(player("AWAY", 9, 4))),
+            unattributed = JSONObject().put("home", 25).put("away", 20)).put("firstRally", 92).put("lastRally", 140)
+        on("GET /matches/server-A/report") {
+            ok(report(rulesJson(MatchRules(2, 25, 15))).put("score", JSONObject().put("status", "PARTIAL").put("matches", JSONArray(listOf(first, second)))
+                .put("stoppedAtRally", 141).put("unplacedRallies", 3)))
+        }
+        val vm = viewModel(StoredState(matches = listOf(accepted("A"))))
+        vm.loadReport("A")
+        await("the report") { vm.analysis.value.reportLoad != ReportLoad.LOADING }
+        val report = vm.analysis.value.report!!
+        assertEquals(141, report.scoreStoppedAtRally)
+        assertEquals(3, report.unplacedRallies)
+        val (match, stopped) = report.matches
+        assertEquals(listOf(1, 2), report.matches.map { it.number })
+        assertEquals(Triple(MatchPart.MATCH, "HOME", 2 to 0), Triple(match.kind, match.winner, match.setsWonHome to match.setsWonAway))
+        assertEquals(Triple(MatchPart.STOPPED, null, 0 to 0), Triple(stopped.kind, stopped.winner, stopped.setsWonHome to stopped.setsWonAway))
+        assertEquals(listOf(1 to 90, 92 to 140), report.matches.map { it.firstRally to it.lastRally })
+        assertEquals(listOf(50 to 38, 25 to 24), report.matches.map { it.home!!.points.value to it.away!!.points.value })
+        assertEquals(listOf(38 to 38, 25 to 20), report.matches.map { it.unattributedHome to it.unattributedAway })
+        assertEquals(listOf(listOf(true to 7), listOf(false to 9)), report.matches.map { part -> part.players.map { it.home to it.jersey } })
+        assertEquals(listOf(SetScore(1, 25, 24, false)), stopped.sets)
     }
 
     @Test fun aReportWithoutRulesStillLoads() {

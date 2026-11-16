@@ -981,6 +981,14 @@ class RallyScreensTest {
         assertEquals(2, compose.onAllNodesWithText(text(R.string.rallies_set_header, 1)).fetchSemanticsNodes().size)
     }
 
+    @Test fun aCountThatNamesTheSameSetTwiceStillOpensTheList() {
+        // No server count does this. The list still opens and shows both headers instead of stopping the app.
+        val repeated = severalParts.copy(rallies = severalParts.rallies.take(2) + rally(3, 30_000, 41_000, Rally.VERIFIED, "HOME", SetPoint(1, 26, 20, match = 1)))
+        list(state(repeated))
+        reach(text(R.string.rallies_set_header, 2))
+        assertEquals(2, compose.onAllNodesWithText(text(R.string.rallies_set_header, 1)).fetchSemanticsNodes().size)
+    }
+
     @Test fun aListOfOnePartNamesNoPart() {
         list(state(decided))
         assertFalse(shown(text(R.string.part_match, 1)))

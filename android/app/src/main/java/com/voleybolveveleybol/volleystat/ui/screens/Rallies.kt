@@ -83,8 +83,9 @@ import kotlinx.coroutines.flow.drop
  * the start of a set, the place where the count stops, a rally, or the time between two rallies.
  */
 private sealed interface Line {
-    data class PartStart(val part: MatchPart) : Line
-    data class SetStart(val match: Int, val number: Int) : Line
+    // A start carries the id of the rally that opens it, so its key stays unique even if a count named a set twice.
+    data class PartStart(val part: MatchPart, val opener: String) : Line
+    data class SetStart(val match: Int, val number: Int, val opener: String) : Line
     data object NotCounted : Line
     data class OfRally(val rally: Rally) : Line
     data class Gap(val startMs: Long, val endMs: Long) : Line
@@ -107,10 +108,10 @@ private fun lines(list: RallyList): List<Line> = buildList {
             if (after.match != part) {
                 // A new part of the video: its sets count from 1 again (ADR-0118).
                 part = after.match
-                if (list.matches.size > 1) list.matches.firstOrNull { it.number == part }?.let { add(Line.PartStart(it)) }
+                if (list.matches.size > 1) list.matches.firstOrNull { it.number == part }?.let { add(Line.PartStart(it, rally.id)) }
             }
             set = after.set
-            add(Line.SetStart(part, set))
+            add(Line.SetStart(part, set, rally.id))
         } else if (counted && rally.waits) {
             // The server's count ends at the first rally without a winner. No rally from here on has a score.
             counted = false
@@ -275,8 +276,8 @@ fun RalliesScreen(
                 item(key = "state") { ListState(list, analysis, scoresDiffer, statusPlace, onCheck = { checking = true }, onOpenReview = onOpenReview, onChangeRules = onChangeRules) }
                 items(lines(list), key = { line ->
                     when (line) {
-                        is Line.PartStart -> "part-${line.part.number}"
-                        is Line.SetStart -> "set-${line.match}-${line.number}"
+                        is Line.PartStart -> "part-${line.opener}"
+                        is Line.SetStart -> "set-${line.opener}"
                         Line.NotCounted -> "not-counted"
                         is Line.OfRally -> line.rally.id
                         is Line.Gap -> "gap-${line.startMs}"

@@ -284,15 +284,7 @@ class ApiClient(
             players = parsePlayers(json.getJSONArray("players")),
             unattributedHome = unattributed.intOrNull("home"), unattributedAway = unattributed.intOrNull("away"),
             coverage = json.getJSONArray("coverage").objects().map { Coverage(it.getString("metricId"), it.getInt("eligibleN"), it.getInt("verifiedN")) },
-            // A server before 0.6 names its fixed rule without setsToWin; its deciding set tells it.
-            rules = json.optJSONObject("rules")?.let { rules ->
-                runCatching {
-                    MatchRules(
-                        if (rules.has("setsToWin")) rules.getInt("setsToWin") else (rules.getInt("decidingSetNumber") + 1) / 2,
-                        rules.getInt("setTarget"), rules.getInt("decidingSetTarget"),
-                    )
-                }.getOrNull()
-            },
+            rules = json.optJSONObject("rules")?.let { rules -> runCatching { parseRules(rules) }.getOrNull() },
         )
     }
 

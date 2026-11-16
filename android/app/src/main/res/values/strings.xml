@@ -456,6 +456,7 @@
     <string name="report_unavailable_title">Rapor henüz yok</string>
     <string name="report_unavailable_body">Bu maç için analiz işi yok.</string>
     <string name="report_load_failed">Uygulama raporu sunucudan alamadı.</string>
+    <string name="report_outdated_server">Sunucu raporu bu uygulamanın okuyabildiği biçimde vermedi. Sunucunun güncel sürümle çalıştığını denetle.</string>
     <string name="value_not_measured">Ölçüm yok</string>
     <string name="value_partial_note">Artı işareti alt sınırı gösterir. Sayı doğrulama sürdükçe artabilir.</string>
     <string name="value_missing_note">Kesik çizgili kutu ölçüm olmadığını gösterir. Uygulama eksik ölçümü sıfır yazmaz.</string>

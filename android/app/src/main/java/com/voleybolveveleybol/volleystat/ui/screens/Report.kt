@@ -165,9 +165,9 @@ fun ScoreHeader(match: MatchRecord, report: MatchReport?, modifier: Modifier = M
     }
 }
 
-/** Every part of a video with its sets: shown when the video holds more than one part. */
+/** Every part of a video with its sets: shown when the video holds more than one part. Under PARTIAL each part's sets won are a lower bound. */
 @Composable
-private fun MatchesCard(parts: List<MatchPart>) {
+private fun MatchesCard(parts: List<MatchPart>, atLeast: Boolean) {
     VsCard(padding = PaddingValues(0.dp)) {
         SectionHeader(stringResource(R.string.report_matches))
         Column(Modifier.padding(horizontal = Dimens.cardPadding, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -175,12 +175,25 @@ private fun MatchesCard(parts: List<MatchPart>) {
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(partLabel(part), style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f).semantics { heading() })
-                        Text("${part.setsWonHome} - ${part.setsWonAway}", style = MaterialTheme.typography.titleSmall)
+                        val plus = if (atLeast) "+" else ""
+                        val spoken = stringResource(R.string.report_score_at_least, part.setsWonHome, part.setsWonAway)
+                        Text(
+                            "${part.setsWonHome}$plus - ${part.setsWonAway}$plus", style = MaterialTheme.typography.titleSmall,
+                            modifier = if (atLeast) Modifier.semantics { contentDescription = spoken } else Modifier,
+                        )
                     }
                     if (part.sets.isNotEmpty()) {
-                        // A set that the rule has not closed yet is marked, so it never reads as a final set score.
+                        // A set that the rule has not closed yet is marked, so it never reads as a final set score,
+                        // and a screen reader says in words that it is still running.
                         val sets = part.sets.joinToString(", ") { "${it.home}-${it.away}" + if (it.complete) "" else "…" }
-                        Text(stringResource(R.string.report_part_sets, sets), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        val open = part.sets.associate { it.number to stringResource(R.string.report_set_open, it.number) }
+                        val spokenSets = stringResource(R.string.report_part_sets, part.sets.joinToString(", ") {
+                            if (it.complete) "${it.home}-${it.away}" else "${open.getValue(it.number)}: ${it.home}-${it.away}"
+                        })
+                        Text(
+                            stringResource(R.string.report_part_sets, sets), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = if (part.sets.all { it.complete }) Modifier else Modifier.semantics { contentDescription = spokenSets },
+                        )
                     }
                     when (part.kind) {
                         MatchPart.AFTER_MATCH, MatchPart.UNFINISHED ->
@@ -259,6 +272,8 @@ fun ReportScreen(
                 Notice(stringResource(R.string.report_load_failed), Tone.NEGATIVE)
                 PrimaryButton(stringResource(R.string.action_retry), onRetry)
             }
+            // The server answered, and not with a report this app can read. Asking again would get the same answer.
+            load == ReportLoad.OUTDATED -> Notice(stringResource(R.string.report_outdated_server), Tone.NEGATIVE)
             report == null -> {
                 ScoreHeader(match, null)
                 NotYetCard(stringResource(R.string.report_unavailable_title), stringResource(R.string.report_unavailable_body))
@@ -292,7 +307,7 @@ fun ReportScreen(
                 }
 
                 val several = report.matches.size > 1
-                if (several) MatchesCard(report.matches)
+                if (several) MatchesCard(report.matches, atLeast = report.scoreStatus == StatValue.PARTIAL)
                 val part = report.matches.getOrNull(scope - 1)?.takeIf { several }
                 val home = part?.home ?: report.home
                 val away = part?.away ?: report.away
@@ -395,6 +410,7 @@ fun PlayersScreen(
                     PrimaryButton(stringResource(R.string.action_retry), onRetry)
                 }
                 ReportLoad.NONE -> NotYetCard(stringResource(R.string.report_unavailable_title), stringResource(R.string.report_unavailable_body))
+                ReportLoad.OUTDATED -> Notice(stringResource(R.string.report_outdated_server), Tone.NEGATIVE)
                 else -> ReportLoading()
             }
         }
