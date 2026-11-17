@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -11,6 +12,10 @@ from pathlib import Path
 from .errors import fail
 
 log = logging.getLogger(__name__)
+
+# How often and how far apart a deletion tries to empty the write-ahead log while a reader is busy.
+CHECKPOINT_ATTEMPTS = 20
+CHECKPOINT_PAUSE = 0.05
 
 # No comment inside a CREATE TABLE below may hold a comma. An older SQLite that drops a column
 # walks back from that column to the previous comma, and a comma inside a comment cuts the table
@@ -165,8 +170,8 @@ CREATE TABLE IF NOT EXISTS users (
   display_name TEXT NOT NULL,
   -- scrypt$N$r$p$salt$key with salt and key in base64url
   password_hash TEXT NOT NULL,
-  -- 1 after the operator reset the password: the app then suggests a new one.
-  password_temporary INTEGER NOT NULL DEFAULT 0,
+  -- Set when the operator reset the password: the temporary password logs in until then and the app suggests a new one.
+  password_temporary_until TEXT,
   created_at TEXT NOT NULL,
   password_changed_at TEXT NOT NULL,
   -- How the account opened: SIGNUP_CODE or OPEN (and INVITE or CAPTAIN_CODE from later slices).
@@ -310,9 +315,16 @@ def empty_write_ahead_log(db_path: Path) -> None:
     connection closes.
     """
     # A short wait: the deletion is already committed, and a reader must not hold its answer back.
+    # A reader in the middle of a transaction makes the checkpoint answer busy, so it is tried a
+    # few more times while such a reader finishes.
     conn = sqlite3.connect(db_path, timeout=1)
     try:
-        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        for attempt in range(CHECKPOINT_ATTEMPTS):
+            busy, _log_pages, _moved = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            if not busy:
+                return
+            time.sleep(CHECKPOINT_PAUSE)
+        log.warning("The write-ahead log stays until a reader finishes; the next deletion or the last connection empties it")
     except sqlite3.Error:
         log.exception("The write-ahead log could not be emptied")
     finally:

@@ -1344,7 +1344,12 @@
           "204": {
             "description": "Successful Response"
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/v1/me": {
@@ -1360,7 +1365,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/v1/me/display-name": {
@@ -1396,7 +1406,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/v1/me/password": {
@@ -1433,7 +1448,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/v1/me/delete": {
@@ -1465,7 +1485,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     }
   },
@@ -2000,6 +2025,13 @@
           "expectedListVersion"
         ],
         "title": "_OnList"
+      }
+    },
+    "securitySchemes": {
+      "HTTPBearer": {
+        "type": "http",
+        "description": "The session token from register or login",
+        "scheme": "bearer"
       }
     }
   }

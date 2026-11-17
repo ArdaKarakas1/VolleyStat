@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
+import gzip
 import hashlib
 import hmac
 import ipaddress
@@ -25,7 +27,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Request, Response, Security
+from fastapi.security import HTTPBearer
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -34,11 +37,11 @@ from .errors import fail, fail_with_headers
 
 log = logging.getLogger(__name__)
 
-# scrypt cost. A stored digest names its own cost, so changing this locks nobody out.
+# scrypt cost. A stored digest names its own cost, so a change of the cost locks nobody out: an
+# account answers at its stored cost until its next login, which stores a digest of the new cost.
 SCRYPT_N = 2 ** 15
 SCRYPT_R = 8
 SCRYPT_P = 3
-SCRYPT_MAXMEM = 64 * 1024 * 1024
 
 SESSION_IDLE = timedelta(days=30)
 SESSION_MAX = timedelta(days=180)
@@ -46,6 +49,8 @@ SESSION_MAX = timedelta(days=180)
 SESSION_TOUCH = timedelta(hours=1)
 DEVICE_IDLE = timedelta(days=180)
 OPERATOR_CODE_LIFE = timedelta(days=7)
+# The operator's temporary password logs in for this long; after that only a new reset helps.
+TEMPORARY_PASSWORD_LIFE = timedelta(days=7)
 
 HASH_WORKERS = 2
 HASH_QUEUE = 16
@@ -59,7 +64,11 @@ TEAM_MODES = {"operator": "OPERATOR", "open": "OPEN"}
 
 USERNAME = re.compile(r"[a-z][a-z0-9._]{2,29}")
 DISPLAY_NAME_MARKS = frozenset(" .'-")
-COMMON_PASSWORDS = Path(__file__).parent / "wordlists" / "common_passwords.txt"
+# Common passwords of 10 to 128 characters from SecLists (MIT): the 10 000 most common passwords and
+# the xato.net list of one million. Shorter ones need no list: the length rule refuses them.
+COMMON_PASSWORDS = Path(__file__).parent / "wordlists" / "common_passwords.txt.gz"
+# A password made of fewer different characters than this is refused (aaaaaaaaaa, 1212121212).
+MIN_DISTINCT_CHARACTERS = 4
 
 
 def now() -> datetime:
@@ -115,22 +124,35 @@ def clean_display_name(text: str) -> str | None:
     return text
 
 
+def comparable(text: str) -> str:
+    """Text as the password checks compare it: NFKC, casefolded, without marks, the dotless ı as i.
+
+    Casefolding the Turkish İ leaves an i with a combining dot, and the list and usernames are
+    plain ASCII, so without this step "İLKER" would not contain "ilker".
+    """
+    folded = unicodedata.normalize("NFKC", text).casefold()
+    plain = "".join(char for char in unicodedata.normalize("NFKD", folded) if unicodedata.category(char) != "Mn")
+    return plain.replace("ı", "i")
+
+
 @lru_cache(maxsize=1)
 def common_passwords() -> frozenset[str]:
-    with COMMON_PASSWORDS.open(encoding="utf-8") as lines:
-        return frozenset(line.strip().casefold() for line in lines if line.strip())
+    with gzip.open(COMMON_PASSWORDS, "rt", encoding="utf-8") as lines:
+        return frozenset(comparable(line.rstrip("\n")) for line in lines if line.strip())
 
 
 def password_problem(password: str, username: str) -> str | None:
-    """Why a password is refused, or None. Counted and compared after NFKC."""
+    """Why a password is refused, or None. Counted after NFKC and compared as comparable() writes it."""
     text = unicodedata.normalize("NFKC", password)
     if len(text) < 10:
         return "TOO_SHORT"
     if len(text) > 128:
         return "TOO_LONG"
-    folded = text.casefold()
+    folded = comparable(text)
     if username and username in folded:
         return "CONTAINS_USERNAME"
+    if len(set(folded)) < MIN_DISTINCT_CHARACTERS:
+        return "REPETITIVE"
     if folded in common_passwords():
         return "COMMON"
     return None
@@ -147,7 +169,9 @@ def _unb64(text: str) -> bytes:
 
 
 def _scrypt(password: bytes, salt: bytes, n: int) -> bytes:
-    return hashlib.scrypt(password, salt=salt, n=n, r=SCRYPT_R, p=SCRYPT_P, dklen=32, maxmem=SCRYPT_MAXMEM)
+    # scrypt needs 128 * r * n bytes for its main table; twice that leaves room for the rest.
+    return hashlib.scrypt(password, salt=salt, n=n, r=SCRYPT_R, p=SCRYPT_P, dklen=32,
+                          maxmem=max(64 * 1024 * 1024, 2 * 128 * SCRYPT_R * n))
 
 
 def _password_bytes(password: str) -> bytes:
@@ -166,6 +190,11 @@ def verify_password(password: str, stored: str) -> bool:
     return hmac.compare_digest(_scrypt(_password_bytes(password), _unb64(salt), int(n)), _unb64(key))
 
 
+def outdated_cost(stored: str) -> bool:
+    """True when a digest was made with another cost than the current one."""
+    return stored.split("$")[1:4] != [str(SCRYPT_N), str(SCRYPT_R), str(SCRYPT_P)]
+
+
 def dummy_hash() -> str:
     """A digest no password matches. Checking against it costs what a real check costs."""
     return f"scrypt${SCRYPT_N}${SCRYPT_R}${SCRYPT_P}${_b64(os.urandom(16))}${_b64(os.urandom(32))}"
@@ -178,13 +207,23 @@ class HashPool:
         self._executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="password-hash")
         self._slots = threading.BoundedSemaphore(workers + queue)
 
-    async def run(self, function: Callable[..., Any], *arguments: Any) -> Any:
+    @contextlib.asynccontextmanager
+    async def slot(self):
+        """Hold one of the slots, or answer 503 at once when every slot is taken."""
         if not self._slots.acquire(blocking=False):
             fail_with_headers("SERVER_BUSY", "Too many password checks are waiting", 503, {"Retry-After": "1"})
         try:
-            return await asyncio.get_running_loop().run_in_executor(self._executor, function, *arguments)
+            yield
         finally:
             self._slots.release()
+
+    async def compute(self, function: Callable[..., Any], *arguments: Any) -> Any:
+        """Run a hash on the pool's own threads. The caller holds a slot."""
+        return await asyncio.get_running_loop().run_in_executor(self._executor, function, *arguments)
+
+    async def run(self, function: Callable[..., Any], *arguments: Any) -> Any:
+        async with self.slot():
+            return await self.compute(function, *arguments)
 
     def close(self) -> None:
         self._executor.shutdown(wait=False, cancel_futures=True)
@@ -201,8 +240,17 @@ WINDOW_FAILURES = 50
 
 
 def login_keys(username: str, source: str) -> list[tuple[str, str, str]]:
-    """Keys of a login (or a password check) without a known phone: per username and source, and per username."""
+    """Keys of a login without a known phone: per username and source, and per username."""
     return [(f"login:user:{username}:{source}", BACKOFF, "USER"), (f"login:user:{username}", WINDOW, "USER")]
+
+
+def account_keys(user_id: str) -> list[tuple[str, str, str]]:
+    """The key of a password check inside a session (password change, account deletion).
+
+    Only a person who holds a session of the account reaches it, so a stranger who locks the
+    username at the login can not block the owner's own password change or deletion.
+    """
+    return [(f"password:user:{user_id}", BACKOFF, "ACCOUNT")]
 
 
 def device_keys(device_hash: str) -> list[tuple[str, str, str]]:
@@ -215,7 +263,9 @@ class Limiter:
     BACKOFF: five failures are free, then each failure locks the key for 30 s, doubling up to
     15 min; the count is forgotten an hour after the last failure or on a success.
     WINDOW: 50 failures within an hour lock the key for 15 min.
-    The limiter holds at most `max_keys` keys. It never forgets a locked key to make room.
+    The limiter holds at most `max_keys` keys. It never forgets a locked key to make room, and it
+    forgets the key with the fewest recent failures first, so a flood of new keys can not wash out
+    the count of a key under attack.
     """
 
     def __init__(self, max_keys: int = 10_000):
@@ -229,51 +279,82 @@ class Limiter:
 
     def wait(self, keys: list[tuple[str, str, str]], at: float) -> tuple[int, str] | None:
         """The longest lock among `keys` as (seconds, scope), or None."""
-        longest = None
         with self._lock:
-            for name, _rule, scope in keys:
-                entry = self._entries.get(name)
-                if entry is not None and entry["until"] > at:
-                    seconds = math.ceil(entry["until"] - at)
-                    if longest is None or seconds > longest[0]:
-                        longest = (seconds, scope)
-        return longest
+            return self._wait(keys, at)
+
+    def begin(self, keys: list[tuple[str, str, str]], at: float) -> tuple[int, str] | None:
+        """Check the keys and count this attempt as a failure in one step.
+
+        Returns the longest lock, or None after the attempt was counted. A right password then
+        clears the count with succeed(). Attempts that arrive together each see the ones before
+        them, so a burst of guesses can not all pass the check before the first one is counted.
+        """
+        with self._lock:
+            wait = self._wait(keys, at)
+            if wait is None:
+                self._fail(keys, at)
+            return wait
 
     def fail(self, keys: list[tuple[str, str, str]], at: float) -> None:
         with self._lock:
-            for name, rule, _scope in keys:
-                entry = self._entries.pop(name, None) or {"count": 0, "last": 0.0, "times": [], "until": 0.0}
-                if rule == BACKOFF:
-                    if at - entry["last"] >= FORGET_AFTER:
-                        entry["count"] = 0
-                    entry["count"] += 1
-                    entry["last"] = at
-                    if entry["count"] >= FREE_FAILURES:
-                        entry["until"] = at + min(FIRST_WAIT * 2 ** (entry["count"] - FREE_FAILURES), LONGEST_WAIT)
-                else:
-                    entry["times"] = [moment for moment in entry["times"] if at - moment < FORGET_AFTER] + [at]
-                    if len(entry["times"]) >= WINDOW_FAILURES:
-                        entry["until"], entry["times"] = at + LONGEST_WAIT, []
-                # Re-inserting moves the key to the end: the oldest keys stand first.
-                self._entries[name] = entry
-            self._make_room(at)
+            self._fail(keys, at)
 
     def succeed(self, keys: list[tuple[str, str, str]]) -> None:
         with self._lock:
             for name, _rule, _scope in keys:
                 self._entries.pop(name, None)
 
-    def _make_room(self, at: float) -> None:
+    def _wait(self, keys: list[tuple[str, str, str]], at: float) -> tuple[int, str] | None:
+        longest = None
+        for name, _rule, scope in keys:
+            entry = self._entries.get(name)
+            if entry is not None and entry["until"] > at:
+                seconds = math.ceil(entry["until"] - at)
+                if longest is None or seconds > longest[0]:
+                    longest = (seconds, scope)
+        return longest
+
+    def _fail(self, keys: list[tuple[str, str, str]], at: float) -> None:
+        written = set()
+        for name, rule, _scope in keys:
+            entry = self._entries.pop(name, None) or {"count": 0, "last": 0.0, "times": [], "until": 0.0}
+            if rule == BACKOFF:
+                if at - entry["last"] >= FORGET_AFTER:
+                    entry["count"] = 0
+                entry["count"] += 1
+                entry["last"] = at
+                if entry["count"] >= FREE_FAILURES:
+                    entry["until"] = at + min(FIRST_WAIT * 2 ** (entry["count"] - FREE_FAILURES), LONGEST_WAIT)
+            else:
+                entry["times"] = [moment for moment in entry["times"] if at - moment < FORGET_AFTER] + [at]
+                if len(entry["times"]) >= WINDOW_FAILURES:
+                    entry["until"], entry["times"] = at + LONGEST_WAIT, []
+            # Re-inserting moves the key to the end: among equal counts the oldest key stands first.
+            self._entries[name] = entry
+            written.add(name)
+        self._make_room(at, written)
+
+    @staticmethod
+    def _recent_failures(entry: dict[str, Any], at: float) -> int:
+        count = entry["count"] if at - entry["last"] < FORGET_AFTER else 0
+        return count + sum(1 for moment in entry["times"] if at - moment < FORGET_AFTER)
+
+    def _make_room(self, at: float, written: set[str]) -> None:
         while len(self._entries) > self.max_keys:
-            oldest_unlocked = next((name for name, entry in self._entries.items() if entry["until"] <= at), None)
-            if oldest_unlocked is None:
-                if time.monotonic() - self._full_logged_at > 60:
-                    self._full_logged_at = time.monotonic()
-                    log.warning("Every slot of the login limiter holds a locked key; a new key is not tracked")
-                # The newest key leaves: the limiter tracks no new key while every slot is locked.
-                self._entries.pop(next(reversed(self._entries)))
-                continue
-            del self._entries[oldest_unlocked]
+            victim, fewest = None, None
+            for name, entry in self._entries.items():
+                if entry["until"] > at:
+                    continue
+                failures = self._recent_failures(entry, at)
+                if fewest is None or failures < fewest:
+                    victim, fewest = name, failures
+            if victim is None:
+                # Every key is locked: the key just written leaves.
+                victim = next(reversed(self._entries))
+            if victim in written and time.monotonic() - self._full_logged_at > 60:
+                self._full_logged_at = time.monotonic()
+                log.warning("The login limiter is full; a new key is not tracked")
+            del self._entries[victim]
 
 
 def source_of(request: Request) -> str:
@@ -289,11 +370,14 @@ def source_of(request: Request) -> str:
         address = ipaddress.ip_address(host)
     except ValueError:
         return "local"
+    if address.version == 6 and address.ipv4_mapped is not None:
+        # An IPv4 client on a dual-stack socket: count it by its IPv4 address, not by ::/64.
+        address = address.ipv4_mapped
     if address.is_loopback:
         return "local"
     if address.version == 6:
-        return str(ipaddress.ip_network(f"{host}/64", strict=False))
-    return host
+        return str(ipaddress.ip_network(f"{address}/64", strict=False))
+    return str(address)
 
 
 def too_many(wait: tuple[int, str]) -> None:
@@ -324,22 +408,24 @@ def issue_operator_code(db_path: Path, kind: str) -> str:
 
 
 def reset_password(db_path: Path, username: str) -> str | None:
-    """Give `username` a one-time temporary password, close every session and forget every phone.
+    """Give `username` a temporary password for 7 days and close every session of the account.
 
     Returns the temporary password, or None for an unknown username. The operator hands it over in
-    person (until recovery codes exist). The app suggests a new password after such a login.
+    person (until recovery codes exist). The app suggests a new password after such a login. The
+    phones of the account stay known: a device token opens nothing by itself, and it lets the
+    owner's phone log in while a stranger who knows the username keeps the username locked.
     """
     migrate(db_path)
     temporary = "-".join("".join(secrets.choice(CODE_ALPHABET) for _ in range(4)) for _ in range(4))
     stored = hash_password(temporary)
+    moment = now()
     with connector(db_path)(write=True) as db:
         user = db.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone()
         if user is None:
             return None
-        db.execute("UPDATE users SET password_hash=?, password_temporary=1, password_changed_at=? WHERE id=?",
-                   (stored, iso(now()), user["id"]))
+        db.execute("UPDATE users SET password_hash=?, password_temporary_until=?, password_changed_at=? WHERE id=?",
+                   (stored, iso(moment + TEMPORARY_PASSWORD_LIFE), iso(moment), user["id"]))
         db.execute("DELETE FROM sessions WHERE user_id=?", (user["id"],))
-        db.execute("DELETE FROM login_devices WHERE user_id=?", (user["id"],))
     return temporary
 
 
@@ -402,7 +488,7 @@ class PasswordInput(BaseModel):
 
 def user_payload(user) -> dict[str, Any]:
     return {"id": user["id"], "username": user["username"], "displayName": user["display_name"],
-            "createdAt": user["created_at"], "passwordTemporary": bool(user["password_temporary"])}
+            "createdAt": user["created_at"], "passwordTemporary": user["password_temporary_until"] is not None}
 
 
 def bearer_token(request: Request) -> str | None:
@@ -418,8 +504,17 @@ def not_signed_in() -> None:
     fail_with_headers("AUTH_REQUIRED", "A valid session is required", 401, {"WWW-Authenticate": "Bearer"})
 
 
+def login_failed() -> None:
+    fail_with_headers("LOGIN_FAILED", "The username or the password is wrong", 401, {"WWW-Authenticate": "Bearer"})
+
+
 def password_rejected(reason: str) -> None:
     fail("PASSWORD_REJECTED", "The password does not meet the rule", 422, reason=reason)
+
+
+# Names the session in the OpenAPI document. The routes read the header themselves, so a missing or
+# wrong token gets the API's own AUTH_REQUIRED answer instead of FastAPI's.
+SESSION = [Security(HTTPBearer(auto_error=False, description="The session token from register or login"))]
 
 
 def router(connect, db_path: Path, signup_mode: str, limiter: Limiter, pool: HashPool) -> APIRouter:
@@ -452,35 +547,57 @@ def router(connect, db_path: Path, signup_mode: str, limiter: Limiter, pool: Has
             return None
         return hashed
 
-    def signed_in(request: Request, moment: datetime):
-        """The user of the request's session, or 401. Reading a session writes at most once an hour."""
+    def live_session(db, hashed: str, moment: datetime):
+        """The session row joined with its user, or None when the session is gone or ended."""
+        row = db.execute("SELECT s.last_used_at, s.expires_at, u.* FROM sessions s JOIN users u ON u.id = s.user_id"
+                         " WHERE s.token_hash=?", (hashed,)).fetchone()
+        if row is None or moment >= parse_time(row["expires_at"]) or moment >= parse_time(row["last_used_at"]) + SESSION_IDLE:
+            return None
+        return row
+
+    def own_token_hash(request: Request) -> str:
         token = bearer_token(request)
         if token is None:
             not_signed_in()
-        hashed = digest(token)
+        return digest(token)
+
+    def signed_in(request: Request, moment: datetime):
+        """The user of the request's session, or 401. Reading a session writes at most once an hour.
+
+        A route that writes reads the session once more inside its own write transaction, so a
+        session that ended while the route waited (for a hash, say) can not write anything.
+        """
+        hashed = own_token_hash(request)
         with connect() as db:
-            row = db.execute("SELECT s.last_used_at, s.expires_at, u.* FROM sessions s JOIN users u ON u.id = s.user_id"
-                             " WHERE s.token_hash=?", (hashed,)).fetchone()
+            row = live_session(db, hashed, moment)
         if row is None:
-            not_signed_in()
-        last_used = parse_time(row["last_used_at"])
-        if moment >= parse_time(row["expires_at"]) or moment >= last_used + SESSION_IDLE:
             with connect(write=True) as db:
-                db.execute("DELETE FROM sessions WHERE token_hash=?", (hashed,))
+                db.execute("DELETE FROM sessions WHERE token_hash=? AND (expires_at <= ? OR last_used_at <= ?)",
+                           (hashed, iso(moment), iso(moment - SESSION_IDLE)))
             not_signed_in()
-        if moment - last_used >= SESSION_TOUCH:
+        if moment - parse_time(row["last_used_at"]) >= SESSION_TOUCH:
             with connect(write=True) as db:
                 db.execute("UPDATE sessions SET last_used_at=? WHERE token_hash=?", (iso(moment), hashed))
         return row
 
-    async def check_own_password(request: Request, user, password: str, moment: datetime) -> None:
-        """403 PASSWORD_WRONG on a wrong password, counted like a failed login of the account."""
-        keys = login_keys(user["username"], source_of(request))
-        wait = limiter.wait(keys, moment.timestamp())
-        if wait is not None:
-            too_many(wait)
-        if not await pool.run(verify_password, password, user["password_hash"]):
-            limiter.fail(keys, moment.timestamp())
+    def still_signed_in(db, request: Request, moment: datetime):
+        row = live_session(db, own_token_hash(request), moment)
+        if row is None:
+            not_signed_in()
+        return row
+
+    async def check_own_password(user, password: str, moment: datetime) -> None:
+        """403 PASSWORD_WRONG on a wrong password, counted under the account's own key.
+
+        The attempt is counted before the hash runs and cleared when the password is right.
+        """
+        keys = account_keys(user["id"])
+        async with pool.slot():
+            wait = limiter.begin(keys, moment.timestamp())
+            if wait is not None:
+                too_many(wait)
+            right = await pool.compute(verify_password, password, user["password_hash"])
+        if not right:
             fail("PASSWORD_WRONG", "The password is wrong", 403)
         limiter.succeed(keys)
 
@@ -558,21 +675,28 @@ def router(connect, db_path: Path, signup_mode: str, limiter: Limiter, pool: Has
 
         user, device_hash = await run_in_threadpool(look_up)
         keys = device_keys(device_hash) if device_hash is not None else login_keys(payload.username, source_of(request))
-        wait = limiter.wait(keys, moment.timestamp())
-        if wait is not None:
-            too_many(wait)
-        matches = await pool.run(verify_password, payload.password, user["password_hash"] if user is not None else dummy_hash())
-        if user is None or not matches:
-            limiter.fail(keys, moment.timestamp())
-            fail_with_headers("LOGIN_FAILED", "The username or the password is wrong", 401, {"WWW-Authenticate": "Bearer"})
+        async with pool.slot():
+            # Counted before the hash, so guesses sent together can not all pass the check.
+            wait = limiter.begin(keys, moment.timestamp())
+            if wait is not None:
+                too_many(wait)
+            matches = await pool.compute(verify_password, payload.password,
+                                         user["password_hash"] if user is not None else dummy_hash())
+        temporary_until = user["password_temporary_until"] if user is not None else None
+        if user is None or not matches or (temporary_until is not None and moment >= parse_time(temporary_until)):
+            login_failed()
         limiter.succeed(keys)
+        # A digest of an older cost is replaced by one of the current cost while the password is at hand.
+        renewed = await pool.run(hash_password, payload.password) if outdated_cost(user["password_hash"]) else None
 
         def open_() -> dict[str, Any]:
             with connect(write=True) as db:
                 current = db.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone()
                 if current is None or current["password_hash"] != user["password_hash"]:
                     # The account was deleted or its password changed while the hash ran.
-                    fail_with_headers("LOGIN_FAILED", "The username or the password is wrong", 401, {"WWW-Authenticate": "Bearer"})
+                    login_failed()
+                if renewed is not None:
+                    db.execute("UPDATE users SET password_hash=? WHERE id=?", (renewed, user["id"]))
                 # Sessions that ended stay until their owner logs in again; then they go.
                 db.execute("DELETE FROM sessions WHERE user_id=? AND (expires_at <= ? OR last_used_at <= ?)",
                            (user["id"], iso(moment), iso(moment - SESSION_IDLE)))
@@ -584,61 +708,72 @@ def router(connect, db_path: Path, signup_mode: str, limiter: Limiter, pool: Has
 
         return await run_in_threadpool(open_)
 
-    @routes.post("/v1/auth/logout", status_code=204)
+    @routes.post("/v1/auth/logout", status_code=204, dependencies=SESSION)
     def logout(request: Request):
-        signed_in(request, now())
+        moment = now()
         with connect(write=True) as db:
-            db.execute("DELETE FROM sessions WHERE token_hash=?", (digest(bearer_token(request)),))
+            still_signed_in(db, request, moment)
+            db.execute("DELETE FROM sessions WHERE token_hash=?", (own_token_hash(request),))
         return Response(status_code=204)
 
-    @routes.get("/v1/me")
+    @routes.get("/v1/me", dependencies=SESSION)
     def me(request: Request):
         user = signed_in(request, now())
         # Teams come with their own slice; until then a person belongs to none.
         return {"user": user_payload(user), "teams": []}
 
-    @routes.put("/v1/me/display-name")
+    @routes.put("/v1/me/display-name", dependencies=SESSION)
     def change_display_name(payload: DisplayNameInput, request: Request):
-        user = signed_in(request, now())
+        moment = now()
+        signed_in(request, moment)
         display_name = clean_display_name(payload.displayName)
         if display_name is None:
             fail("DISPLAY_NAME_INVALID", "The display name does not meet the rule", 422)
         with connect(write=True) as db:
+            user = still_signed_in(db, request, moment)
             db.execute("UPDATE users SET display_name=? WHERE id=?", (display_name, user["id"]))
             return {"user": user_payload(db.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone())}
 
-    @routes.put("/v1/me/password")
+    @routes.put("/v1/me/password", dependencies=SESSION)
     async def change_password(payload: PasswordChangeInput, request: Request):
         """Set a new password. Every other session of the account ends and every phone is forgotten."""
         moment = now()
         user = await run_in_threadpool(signed_in, request, moment)
-        await check_own_password(request, user, payload.currentPassword, moment)
+        await check_own_password(user, payload.currentPassword, moment)
         problem = password_problem(payload.newPassword, user["username"])
         if problem is not None:
             password_rejected(problem)
         stored = await pool.run(hash_password, payload.newPassword)
-        own = digest(bearer_token(request))
+        own = own_token_hash(request)
 
         def change() -> dict[str, Any]:
             with connect(write=True) as db:
-                db.execute("UPDATE users SET password_hash=?, password_temporary=0, password_changed_at=? WHERE id=?",
-                           (stored, iso(moment), user["id"]))
+                # The session may have ended and the password may have changed while the hashes ran.
+                still_signed_in(db, request, moment)
+                if db.execute("UPDATE users SET password_hash=?, password_temporary_until=NULL, password_changed_at=?"
+                              " WHERE id=? AND password_hash=?",
+                              (stored, iso(moment), user["id"], user["password_hash"])).rowcount != 1:
+                    fail("PASSWORD_WRONG", "The password is wrong", 403)
                 db.execute("DELETE FROM sessions WHERE user_id=? AND token_hash<>?", (user["id"], own))
                 db.execute("DELETE FROM login_devices WHERE user_id=?", (user["id"],))
                 return {"user": user_payload(db.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone())}
 
         return await run_in_threadpool(change)
 
-    @routes.post("/v1/me/delete", status_code=204)
+    @routes.post("/v1/me/delete", status_code=204, dependencies=SESSION)
     async def delete_account(payload: PasswordInput, request: Request):
         """Delete the account: the user row, its sessions and its phones. Nothing of it stays in the file."""
         moment = now()
         user = await run_in_threadpool(signed_in, request, moment)
-        await check_own_password(request, user, payload.password, moment)
+        await check_own_password(user, payload.password, moment)
 
         def delete() -> None:
             with connect(write=True) as db:
-                db.execute("DELETE FROM users WHERE id=?", (user["id"],))
+                # The session may have ended and the password may have changed while the hash ran.
+                still_signed_in(db, request, moment)
+                if db.execute("DELETE FROM users WHERE id=? AND password_hash=?",
+                              (user["id"], user["password_hash"])).rowcount != 1:
+                    fail("PASSWORD_WRONG", "The password is wrong", 403)
             empty_write_ahead_log(db_path)
 
         await run_in_threadpool(delete)

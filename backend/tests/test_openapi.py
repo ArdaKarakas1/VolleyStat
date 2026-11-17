@@ -71,3 +71,13 @@ def test_a_rule_change_names_the_rule_its_user_saw(storage):
     assert set(change["required"]) == {"setsToWin", "setTarget", "decidingSetTarget", "expectedRules"}
     assert change["properties"]["expectedRules"] == {"$ref": "#/components/schemas/MatchRulesInput"}
     assert change["additionalProperties"] is False
+
+
+def test_the_routes_that_need_a_session_say_so_and_the_others_do_not(storage):
+    spec = create_app(storage, analyzer="none").openapi()
+    session = {("/v1/auth/logout", "post"), ("/v1/me", "get"), ("/v1/me/display-name", "put"),
+               ("/v1/me/password", "put"), ("/v1/me/delete", "post")}
+    marked = {(path, method) for path, operations in spec["paths"].items() for method, operation in operations.items()
+              if operation.get("security")}
+    assert marked == session
+    assert spec["components"]["securitySchemes"]["HTTPBearer"]["scheme"] == "bearer"

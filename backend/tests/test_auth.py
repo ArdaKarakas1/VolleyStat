@@ -7,8 +7,10 @@ import hashlib
 import json
 import sqlite3
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -16,6 +18,8 @@ from app import accounts
 from app.main import create_app
 
 PASSWORD = "uzun-ve-tuhaf-bir-sifre"
+# Read when the module loads, before the fixture below lowers the cost for speed.
+PRODUCTION_N = accounts.SCRYPT_N
 OTHER_PASSWORD = "baska-uzun-bir-sifre-42"
 
 
@@ -106,8 +110,12 @@ def test_a_registration_answers_the_user_a_session_and_a_device_token(api, stora
     assert rows(storage, "SELECT signup_via FROM users") == [("OPEN",)]
 
 
+def test_the_production_cost_is_two_to_the_fifteenth():
+    assert PRODUCTION_N == 2 ** 15
+
+
 def test_the_stored_hash_names_the_production_cost(storage, open_signup, monkeypatch):
-    monkeypatch.setattr(accounts, "SCRYPT_N", 2 ** 15)
+    monkeypatch.setattr(accounts, "SCRYPT_N", PRODUCTION_N)
     with TestClient(create_app(storage, analyzer="none")) as client:
         assert register(client).status_code == 201
         assert login(client).status_code == 200
@@ -157,6 +165,18 @@ def test_a_display_name_is_trimmed_and_its_inner_spaces_are_collapsed(api):
     ("BENIM-ADIM-AYSE.K-OYUN", "CONTAINS_USERNAME"),
     ("1234567890", "COMMON"),
     ("Qwertyuiop", "COMMON"),
+    # Long common passwords: the list holds those of 10 characters and more.
+    ("password123", "COMMON"),
+    ("galatasaray", "COMMON"),
+    ("Fenerbahce", "COMMON"),
+    ("0000000000", "REPETITIVE"),
+    ("ababababab", "REPETITIVE"),
+    ("1212121212", "REPETITIVE"),
+    ("abcabcabcab", "REPETITIVE"),
+    ("abcdabcdab", None),
+    # Turkish letters lose their marks when the password is compared: ş counts as s.
+    ("ayşe.k-nin-şifresi", "CONTAINS_USERNAME"),
+    ("x" * 120 + "-sifre-7", None),
 ])
 def test_the_password_rule(api, password, reason):
     response = register(api, password=password)
@@ -165,6 +185,13 @@ def test_the_password_rule(api, password, reason):
     else:
         assert response.status_code == 422
         assert (error(response)["code"], error(response)["details"]["reason"]) == ("PASSWORD_REJECTED", reason)
+
+
+@pytest.mark.parametrize("password", ["İLKER.K-2026-sifre", "ılker.k-2026-sifre", "Ilker.K-2026-sifre"])
+def test_the_turkish_i_letters_count_as_i_when_a_password_is_compared(api, password):
+    # Casefolding İ leaves an i with a combining dot, and ı is a letter of its own: both count as i.
+    response = register(api, username="ilker.k", password=password)
+    assert (error(response)["code"], error(response)["details"]["reason"]) == ("PASSWORD_REJECTED", "CONTAINS_USERNAME")
 
 
 def test_a_password_is_counted_and_compared_after_nfkc(api):
@@ -564,8 +591,10 @@ def test_reset_password_prints_a_temporary_password_and_closes_every_session(api
     temporary = capsys.readouterr().out.strip().splitlines()[-1]
     assert api.get("/v1/me", headers=bearer(first["session"]["token"])).status_code == 401
     assert login(api).status_code == 401
-    after = login(api, password=temporary)
+    # The owner's phone stays known, so the owner logs in with it whatever strangers try.
+    after = login(api, password=temporary, deviceToken=first["deviceToken"])
     assert after.status_code == 200
+    assert after.json()["deviceToken"] == first["deviceToken"]
     assert after.json()["user"]["passwordTemporary"] is True
     assert rows(storage, "SELECT COUNT(*) FROM login_devices") == [(1,)]
     token = after.json()["session"]["token"]
@@ -594,3 +623,366 @@ def test_the_server_runs_without_an_access_log_and_ignores_forwarded_addresses(m
     monkeypatch.setenv("VOLLEYSTAT_STORAGE", str(__import__("tempfile").mkdtemp()))
     entry.main()
     assert (seen["host"], seen["access_log"], seen["forwarded_allow_ips"]) == ("127.0.0.1", False, "")
+
+
+# --- review of the slice: races, limits and edges --------------------------------------------------
+
+def concurrently(*calls):
+    """Run each call in its own thread and return their results in order."""
+    results = [None] * len(calls)
+
+    def run(index, call):
+        results[index] = call()
+
+    threads = [threading.Thread(target=run, args=(index, call)) for index, call in enumerate(calls)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(20)
+    return results
+
+
+def test_guesses_sent_together_get_five_hashes_and_then_the_lock(storage, open_signup, monkeypatch):
+    hashed = []
+    release = threading.Event()
+    original = accounts._scrypt
+
+    def slow(password, salt, n):
+        hashed.append(1)
+        release.wait(5)
+        return original(password, salt, n)
+
+    with TestClient(create_app(storage, analyzer="none")) as client:
+        register(client)
+        monkeypatch.setattr(accounts, "_scrypt", slow)
+
+        async def burst():
+            transport = httpx.ASGITransport(app=client.app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as other:
+                guesses = [asyncio.create_task(other.post("/v1/auth/login", json={"username": "ayse.k", "password": OTHER_PASSWORD}))
+                           for _ in range(18)]
+                await asyncio.sleep(0.3)
+                release.set()
+                return [response.status_code for response in await asyncio.gather(*guesses)]
+
+        codes = asyncio.run(burst())
+    assert sorted(codes) == [401] * 5 + [429] * 13
+    assert len(hashed) == 5
+
+
+def test_a_stranger_who_locks_the_username_can_not_block_the_owners_own_password_checks(api):
+    token = token_of(register(api))
+    for _ in range(6):
+        login(api, password=OTHER_PASSWORD)
+    assert login(api).status_code == 429
+    changed = api.put("/v1/me/password", headers=bearer(token), json={"currentPassword": PASSWORD, "newPassword": "yepyeni-bir-sifre-7"})
+    assert changed.status_code == 200
+    assert api.post("/v1/me/delete", headers=bearer(token), json={"password": "yepyeni-bir-sifre-7"}).status_code == 204
+
+
+def test_wrong_passwords_inside_a_session_lock_the_account_check_and_not_the_login(api):
+    token = token_of(register(api))
+    for _ in range(5):
+        wrong = api.post("/v1/me/delete", headers=bearer(token), json={"password": OTHER_PASSWORD})
+        assert wrong.status_code == 403
+    locked = api.post("/v1/me/delete", headers=bearer(token), json={"password": PASSWORD})
+    assert (locked.status_code, error(locked)["details"]["scope"]) == (429, "ACCOUNT")
+    assert login(api).status_code == 200
+
+
+def hold_hash(monkeypatch, name, then):
+    """Run `then` once inside the first call of accounts.<name>, after the real hash."""
+    original = getattr(accounts, name)
+    done = []
+
+    def held(*arguments):
+        result = original(*arguments)
+        if not done:
+            done.append(True)
+            then()
+        return result
+
+    monkeypatch.setattr(accounts, name, held)
+
+
+def test_a_password_change_whose_session_ended_while_it_hashed_writes_nothing(storage, open_signup, monkeypatch):
+    with TestClient(create_app(storage, analyzer="none")) as client:
+        first = register(client).json()
+        thief = token_of(login(client))
+        db = storage / "volleystat.sqlite3"
+        # The owner changes the password (which ends the thief's session) while the thief's change hashes.
+        hold_hash(monkeypatch, "hash_password", lambda: accounts.reset_password(db, "ayse.k"))
+        late = client.put("/v1/me/password", headers=bearer(thief), json={"currentPassword": PASSWORD, "newPassword": "hirsizin-sifresi-7"})
+        assert late.status_code == 401
+        assert login(client, password="hirsizin-sifresi-7").status_code == 401
+        assert rows(storage, "SELECT password_temporary_until IS NOT NULL FROM users") == [(1,)]
+        assert api_me(client, first["session"]["token"]) == 401
+
+
+def api_me(client, token):
+    return client.get("/v1/me", headers=bearer(token)).status_code
+
+
+def test_two_password_changes_of_one_session_change_it_once(storage, open_signup, monkeypatch):
+    with TestClient(create_app(storage, analyzer="none")) as client:
+        token = token_of(register(client))
+        barrier = threading.Barrier(2)
+        original = accounts.hash_password
+
+        def together(password):
+            barrier.wait(5)
+            return original(password)
+
+        monkeypatch.setattr(accounts, "hash_password", together)
+        codes = concurrently(
+            lambda: client.put("/v1/me/password", headers=bearer(token), json={"currentPassword": PASSWORD, "newPassword": "birinci-yeni-sifre"}).status_code,
+            lambda: client.put("/v1/me/password", headers=bearer(token), json={"currentPassword": PASSWORD, "newPassword": "ikinci-yeni-sifre"}).status_code)
+        assert sorted(codes) == [200, 403]
+        assert sorted(login(client, password=word).status_code for word in ("birinci-yeni-sifre", "ikinci-yeni-sifre")) == [200, 401]
+
+
+def test_a_deletion_whose_password_changed_while_it_hashed_deletes_nothing(storage, open_signup, monkeypatch):
+    with TestClient(create_app(storage, analyzer="none")) as client:
+        token = token_of(register(client))
+        db = storage / "volleystat.sqlite3"
+
+        def change_password_in_between():
+            conn = sqlite3.connect(db)
+            conn.execute("UPDATE users SET password_hash=?", (accounts.hash_password("baska-bir-sifre-9"),))
+            conn.commit()
+            conn.close()
+
+        hold_hash(monkeypatch, "verify_password", change_password_in_between)
+        late = client.post("/v1/me/delete", headers=bearer(token), json={"password": PASSWORD})
+        assert late.status_code == 403
+        assert rows(storage, "SELECT COUNT(*) FROM users") == [(1,)]
+
+
+def test_a_display_name_change_of_a_deleted_account_answers_401(storage, open_signup, monkeypatch):
+    with TestClient(create_app(storage, analyzer="none")) as client:
+        token = token_of(register(client))
+        original = accounts.clean_display_name
+
+        def delete_first(text):
+            conn = sqlite3.connect(storage / "volleystat.sqlite3")
+            conn.execute("PRAGMA foreign_keys=ON")
+            conn.execute("DELETE FROM users")
+            conn.commit()
+            conn.close()
+            return original(text)
+
+        monkeypatch.setattr(accounts, "clean_display_name", delete_first)
+        response = client.put("/v1/me/display-name", headers=bearer(token), json={"displayName": "Yeni Ad"})
+        assert (response.status_code, response.headers["www-authenticate"]) == (401, "Bearer")
+
+
+def test_a_login_racing_a_password_change_opens_no_session(storage, open_signup, monkeypatch):
+    with TestClient(create_app(storage, analyzer="none")) as client:
+        register(client)
+
+        def change():
+            conn = sqlite3.connect(storage / "volleystat.sqlite3")
+            conn.execute("UPDATE users SET password_hash=?", (accounts.hash_password("yepyeni-bir-sifre-7"),))
+            conn.commit()
+            conn.close()
+
+        hold_hash(monkeypatch, "verify_password", change)
+        response = login(client)
+        assert (response.status_code, response.headers["www-authenticate"]) == (401, "Bearer")
+
+
+def test_two_registrations_of_one_username_at_once_give_201_and_409(storage, open_signup, monkeypatch):
+    with TestClient(create_app(storage, analyzer="none"), raise_server_exceptions=False) as client:
+        barrier = threading.Barrier(2)
+        original = accounts.hash_password
+        monkeypatch.setattr(accounts, "hash_password", lambda password: barrier.wait(5) is None or original(password))
+        codes = concurrently(lambda: register(client).status_code, lambda: register(client).status_code)
+        assert sorted(codes) == [201, 409]
+
+
+def test_two_registrations_with_one_code_at_once_open_one_account(gated, storage, monkeypatch):
+    code = accounts.issue_operator_code(storage / "volleystat.sqlite3", "SIGNUP")
+    barrier = threading.Barrier(2)
+    original = accounts.hash_password
+    monkeypatch.setattr(accounts, "hash_password", lambda password: barrier.wait(5) is None or original(password))
+    codes = concurrently(lambda: register(gated, operatorCode=code).status_code,
+                         lambda: register(gated, username="mert.b", operatorCode=code).status_code)
+    assert sorted(codes) == [201, 403]
+    assert rows(storage, "SELECT COUNT(*) FROM users") == [(1,)]
+
+
+def test_a_wrong_or_expired_code_answers_the_gate_even_for_a_taken_username(gated, storage, clock):
+    first = accounts.issue_operator_code(storage / "volleystat.sqlite3", "SIGNUP")
+    assert register(gated, operatorCode=first).status_code == 201
+    stale = accounts.issue_operator_code(storage / "volleystat.sqlite3", "SIGNUP")
+    clock.advance(days=7, seconds=1)
+    accounts.issue_operator_code(storage / "volleystat.sqlite3", "SIGNUP")  # a live code exists too
+    for code in (stale, "ABCD-EFGH-JKMN-PQRS"):
+        response = register(gated, operatorCode=code)
+        assert (response.status_code, error(response)["code"]) == (403, "SIGNUP_CODE_INVALID")
+
+
+def test_an_operator_code_still_opens_a_registration_on_its_seventh_day(gated, storage, clock):
+    code = accounts.issue_operator_code(storage / "volleystat.sqlite3", "SIGNUP")
+    clock.advance(days=6, hours=23)
+    assert register(gated, operatorCode=code).status_code == 201
+
+
+def test_the_temporary_password_ends_after_seven_days(api, storage, clock):
+    register(api)
+    temporary = accounts.reset_password(storage / "volleystat.sqlite3", "ayse.k")
+    clock.advance(days=6, hours=23)
+    assert login(api, password=temporary).status_code == 200
+    clock.advance(hours=1, seconds=1)
+    response = login(api, password=temporary)
+    assert (response.status_code, error(response)["code"]) == (401, "LOGIN_FAILED")
+
+
+def test_a_digest_of_an_older_cost_is_renewed_at_the_next_login(api, storage, monkeypatch):
+    register(api)
+    monkeypatch.setattr(accounts, "SCRYPT_N", 2 ** 11)
+    assert login(api).status_code == 200
+    assert rows(storage, "SELECT password_hash FROM users")[0][0].startswith("scrypt$2048$8$3$")
+    assert login(api).status_code == 200
+
+
+def test_a_higher_cost_still_hashes(api, monkeypatch):
+    # scrypt needs 128 * r * n bytes; the memory limit grows with the cost.
+    monkeypatch.setattr(accounts, "SCRYPT_N", 2 ** 16)
+    assert accounts.hash_password(PASSWORD).startswith("scrypt$65536$8$3$")
+
+
+def test_an_unknown_username_is_checked_at_the_current_cost(api, monkeypatch):
+    register(api)
+    seen = []
+    original = accounts.verify_password
+    monkeypatch.setattr(accounts, "verify_password", lambda password, stored: seen.append(stored) or original(password, stored))
+    login(api, username="hic.yok")
+    assert seen[0].split("$")[1:4] == [str(accounts.SCRYPT_N), "8", "3"]
+
+
+def test_every_digest_has_its_own_salt(api, storage):
+    register(api)
+    register(api, username="mert.b")
+    first, second = [row[0] for row in rows(storage, "SELECT password_hash FROM users")]
+    assert first.split("$")[4] != second.split("$")[4]
+
+
+def test_the_pool_runs_two_hashes_at_once_and_gives_every_slot_back(storage, open_signup, monkeypatch):
+    running, most = [], [0]
+    lock = threading.Lock()
+    original = accounts._scrypt
+
+    def counted(password, salt, n):
+        with lock:
+            running.append(1)
+            most[0] = max(most[0], len(running))
+        try:
+            time.sleep(0.05)
+            return original(password, salt, n)
+        finally:
+            with lock:
+                running.pop()
+
+    monkeypatch.setattr(accounts, "_scrypt", counted)
+    with TestClient(create_app(storage, analyzer="none")) as client:
+        names = [f"oyuncu.{index}" for index in range(6)]
+        for name in names:
+            register(client, username=name)
+        most[0] = 0
+        codes = concurrently(*[lambda name=name: login(client, username=name).status_code for name in names])
+        assert codes == [200] * 6
+        assert most[0] == 2
+        # Far more hashes than there are slots, one after the other: no slot is ever lost.
+        for _ in range(25):
+            assert login(client, username=names[0]).status_code == 200
+
+
+def test_a_device_token_ends_180_days_after_its_last_use(api, clock):
+    device = register(api).json()["deviceToken"]
+    clock.advance(days=179)
+    assert login(api, deviceToken=device).json()["deviceToken"] == device
+    clock.advance(days=179)
+    assert login(api, deviceToken=device).json()["deviceToken"] == device
+    clock.advance(days=180)
+    assert login(api, deviceToken=device).json()["deviceToken"] != device
+
+
+def test_a_session_works_until_its_180th_day(api, clock):
+    token = token_of(register(api))
+    for _ in range(17):
+        clock.advance(days=10)
+        assert api.get("/v1/me", headers=bearer(token)).status_code == 200
+    clock.advance(days=9, hours=23)
+    assert api.get("/v1/me", headers=bearer(token)).status_code == 200
+
+
+def test_a_new_password_may_not_contain_the_username(api):
+    token = token_of(register(api))
+    response = api.put("/v1/me/password", headers=bearer(token), json={"currentPassword": PASSWORD, "newPassword": "ayse.k-yeni-sifre"})
+    assert error(response)["details"]["reason"] == "CONTAINS_USERNAME"
+
+
+@pytest.mark.parametrize("display_name", ["Ali'nin Oğlu", "Ay", "Oyuncu 7", "Ece-Su Öz"])
+def test_a_display_name_inside_the_rule_is_kept(display_name):
+    assert accounts.clean_display_name(display_name) == display_name
+
+
+@pytest.mark.parametrize("display_name", [". -", "''", "--"])
+def test_a_display_name_without_a_letter_or_digit_is_refused(display_name):
+    assert accounts.clean_display_name(display_name) is None
+
+
+def test_the_longest_lock_among_the_keys_wins():
+    limiter = accounts.Limiter()
+    for index in range(45):
+        limiter.fail(accounts.login_keys("ayse.k", f"10.0.{index}.1"), 1000.0 + index)
+    keys = accounts.login_keys("ayse.k", "10.9.9.9")
+    for index in range(5):
+        limiter.fail(keys, 1045.0 + index)
+    seconds, _scope = limiter.wait(keys, 1050.0)
+    assert seconds >= 895
+
+
+def test_a_flood_of_new_keys_does_not_wash_out_a_count_under_attack():
+    limiter = accounts.Limiter(max_keys=10)
+    victim = accounts.login_keys("ayse.k", "local")
+    for second in range(4):
+        limiter.fail(victim, 100.0 + second)
+    for index in range(50):
+        limiter.fail([(f"login:user:junk.{index}:local", accounts.BACKOFF, "USER")], 110.0 + index)
+    # The fifth failure of the victim still locks it: its count of four was kept.
+    limiter.fail(victim, 200.0)
+    assert limiter.wait(victim, 201.0) is not None
+
+
+class FakeRequest:
+    def __init__(self, host):
+        self.client = type("Client", (), {"host": host})() if host is not None else None
+
+
+@pytest.mark.parametrize("host, source", [
+    (None, "local"), ("testclient", "local"), ("127.0.0.1", "local"), ("::1", "local"),
+    ("203.0.113.5", "203.0.113.5"), ("::ffff:203.0.113.5", "203.0.113.5"), ("::ffff:127.0.0.1", "local"),
+    ("2001:db8:1:2:3:4:5:6", "2001:db8:1:2::/64"), ("2001:db8:1:2:aaaa::1", "2001:db8:1:2::/64"),
+])
+def test_the_source_of_a_request(host, source):
+    assert accounts.source_of(FakeRequest(host)) == source
+
+
+def test_a_deleted_account_leaves_no_trace_while_another_connection_is_open(api, storage):
+    body = register(api, username="silinecek.kisi", display_name="Silinecek Kişi").json()
+    other = sqlite3.connect(storage / "volleystat.sqlite3")
+    try:
+        other.execute("SELECT 1").fetchall()
+        assert api.post("/v1/me/delete", headers=bearer(body["session"]["token"]), json={"password": PASSWORD}).status_code == 204
+        files = b"".join(path.read_bytes() for path in storage.glob("volleystat.sqlite3*"))
+        for trace in ("silinecek.kisi", "Silinecek Kişi", body["user"]["id"]):
+            assert trace.encode() not in files, trace
+    finally:
+        other.close()
+
+
+def test_a_lowercase_bearer_scheme_is_read(api):
+    token = token_of(register(api))
+    assert api.get("/v1/me", headers={"Authorization": f"bearer {token}"}).status_code == 200

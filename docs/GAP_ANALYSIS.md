@@ -73,12 +73,13 @@ V4 raporundaki şu ekranlar yok: hesap ve gizlilik onayı (S01), saha bölgesi s
 | `POST /review-cards/{id}/decisions`, `POST /review-cards/{id}/reopen` | TEST EDİLDİ |
 | `POST /analyses/{id}/rallies`, `POST /rallies/{id}/move`, `POST /rallies/{id}/split`, `POST /rallies/{id}/merge-previous`, `POST /analyses/{id}/rally-list/confirm` | TEST EDİLDİ |
 | `GET /matches/{id}/report` | TEST EDİLDİ |
+| `POST /auth/register`, `POST /auth/login`, `POST /auth/logout`, `GET /me`, `PUT /me/display-name`, `PUT /me/password`, `POST /me/delete` | TEST EDİLDİ (sürüm 0.8, ADR-0119) |
 | `PATCH /videos/{id}/court-roi` | YOK |
 | `PATCH /videos/{id}/training-permission` | YOK |
 
 Sözleşme `docs/API_V1.md` dosyasındadır ve `docs/openapi-local-dev.json` anlık görüntüsü bir testle korunur.
 
-Altyapı: Kimlik doğrulama, kiracı sınırı, HTTPS, PostgreSQL, nesne depolama, dağıtık iş kuyruğu ve GPU işçisi **YOK**. Ekip bu kodu yazabilir. Çalıştırmak bulut hesabı ve bütçe ister (DIŞ BAĞIMLILIK).
+Altyapı: Sunucuda hesaplar ve oturumlar var (sürüm 0.8). Maç, yükleme, analiz ve rapor uçları henüz oturum istemez. Erişim denetimi B3 diliminde gelir. Kiracı sınırı, HTTPS, PostgreSQL, nesne depolama, dağıtık iş kuyruğu ve GPU işçisi **YOK**. Ekip bu kodu yazabilir. Çalıştırmak bulut hesabı ve bütçe ister (DIŞ BAĞIMLILIK).
 
 ## 4. Yapay zekâ bileşenleri
 
