@@ -1,7 +1,7 @@
-# Yerel geliştirme API'si (v0.7)
+# Yerel geliştirme API'si (v0.8)
 
 **Kök:** `http://127.0.0.1:8000/v1`. Android emülatöründen `http://10.0.2.2:8000/v1`.
-**Kapsam:** Yalnızca yerel geliştirme. Hesap sistemi ve TLS yoktur.
+**Kapsam:** Yalnızca yerel geliştirme. TLS yoktur. Hesaplar vardır, ama maç, yükleme ve analiz uçları bu sürümde oturum istemez.
 
 Makinece okunur sözleşme: [openapi-local-dev.json](openapi-local-dev.json). Dosya `create_app().openapi()` çıktısıdır.
 
@@ -14,6 +14,8 @@ Sürüm 0.5.0 ralli düzeltme uçlarını ve liste onayını ekler ([API_V1.md](
 Sürüm 0.6.0 maç kuralını ekler (`rules` alanı ve `PUT /matches/{id}/rules`, [API_V1.md](API_V1.md) bölüm 1). Android uygulamasının 0.6.0 sürümü sunucunun 0.6.0 sürümünü ister. Daha eski bir sunucu `rules` alanını yok sayar ve maçı FIVB kuralıyla sayar. Uygulama o sunucunun ralli listesini okuyamaz ve bunu ralli listesi ekranında söyler.
 
 Sürüm 0.7.0 bir videoyu maçlara böler ([API_V1.md](API_V1.md) bölüm 7, ADR-0118). Rapor `score.sets` ve `score.setsWon` yerine `score.matches` ve `score.unplacedRallies` taşır. Ralli listesi `sets` yerine `matches` taşır ve her `scoreAfter` rallinin maç numarasını da taşır. Android uygulamasının 0.7.0 sürümü sunucunun 0.7.0 sürümünü ister. Uygulama daha eski bir sunucunun ralli listesini ve raporunu okuyamaz, çünkü o sunucu bu alanları göndermez. Uygulama bu durumda ralli listesi ve rapor ekranında sunucunun güncel sürümle çalışıp çalışmadığını denetlemeyi söyler.
+
+Sürüm 0.8.0 hesapları ekler ([API_V1.md](API_V1.md) bölüm 10, ADR-0119): kayıt, giriş, çıkış, görünen ad, şifre değişikliği ve hesap silme. Oturum isteyen uçlar `Authorization: Bearer <oturum anahtarı>` başlığını ister. Başlık yoksa ya da oturum bittiyse sunucu `401 AUTH_REQUIRED` ve `WWW-Authenticate: Bearer` döner. Bu sürümde yalnız `/auth/logout` ve `/me` uçları oturum ister. Maç, yükleme, analiz ve rapor uçları oturumsuz çalışmayı sürdürür, bu yüzden uygulamanın 0.7.0 sürümü 0.8.0 sunucusuyla çalışır. `GET /health` yanıtı `accounts` alanını da taşır: `{"signup": "LINK" | "OPEN", "teams": "OPERATOR" | "OPEN"}`.
 
 | Uç | Görev | Başarı | Hatalar |
 |---|---|---|---|

@@ -53,8 +53,11 @@ Uygulama kamera kaydı için CameraX, klip oynatma için Media3 kullanır. Uygul
 | `corrections.py` | Ralli listesinin düzeltmeleri (ekleme, taşıma, bölme, birleştirme) ve liste onayı |
 | `report.py` | Kararlardan rapor üreten saf fonksiyon |
 | `content.py` | Videoyu `Range` isteğiyle sunma |
+| `accounts.py` | Hesaplar: kayıt, giriş, oturum, şifre özeti havuzu, deneme sınırı, `/v1/me` uçları |
+| `admin.py` | Operatör komutları: kayıt kodu ve geçici şifre (`python -m app.admin`) |
+| `wordlists/` | Yaygın şifre listesi ve lisansı |
 
-Sunucu yalnız geliştirme bilgisayarında çalışır. Hesap sistemi ve TLS yoktur. Sunucu `127.0.0.1` adresini dinler.
+Sunucu yalnız geliştirme bilgisayarında çalışır. Sunucuda hesaplar var, ama maç uçları henüz oturum istemez ve TLS yoktur. Sunucu `127.0.0.1` adresini dinler.
 
 Yüklenen her dosya `storage/media/<uploadId>.bin` adında tek bir dosyadır. Tamamlama adımı dosyayı taşımaz, video kaydı aynı dosyayı gösterir.
 
@@ -86,5 +89,5 @@ Analizör seçilmeyen sunucu analiz isteğine `503 MODEL_NOT_CONFIGURED` döner.
 
 - Kimse yapay zekâ doğruluğunu ölçmedi. Eğitilmiş model yok.
 - Video yükleme hakkı beyanı eğitim izninden ayrıdır. Eğitim izni varsayılan olarak kapalıdır ve sunucu bugün `allowTraining: true` isteğini reddeder.
-- Sunucu üretim hizmeti değildir: kimlik doğrulama, TLS, nesne depolama, iş kuyruğu ve GPU işçisi yok.
+- Sunucu üretim hizmeti değildir: maç uçlarında erişim denetimi, TLS, nesne depolama, iş kuyruğu ve GPU işçisi yok.
 - Ekip videoları maç bazında ayırır. Aynı maçın kareleri eğitim ve test kümelerine birlikte girmez.

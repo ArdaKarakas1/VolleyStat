@@ -290,3 +290,32 @@ Sınırlar:
 - Sunucu bir videonun bütün maçlarını aynı kuralla sayar.
 - Kaçan bir ralli bir set sınırını ve bir maç sınırını kaydırabilir. Kullanıcı listeyi onaylayana kadar sunucu hiçbir bölümü `MEASURED` yazmaz.
 
+## ADR-0119: Hesaplar: kullanıcı adı, şifre ve görünen ad
+
+**Tarih:** 17 Kasım 2026 · **Durum:** Kabul edildi
+
+**Bağlam:** Ürün sahibi 16 Kasım 2026'da giriş, takım kurma ve takıma katılma, kaptanlar arası maç isteği, kişi ve takım istatistiği istedi. Ürün sahibi 17 Kasım 2026'da girişi onayladı: kullanıcı adı, şifre ve görünen ad. Ekip bu katmanı dilimlerle kurar. Bu ADR ilk dilimi (B1, sunucuda hesaplar) kaydeder. Ekip takımı, davet bağlantısını, açık maçı ve maç isteğini kendi dilimleriyle bu ADR'ye ekler. Tasarımın tamamı `claude/volleystat-accounts-design` dalındadır.
+
+Kararlar:
+
+- Kişi kullanıcı adı, şifre ve görünen ad verir. Sunucu e-posta ve telefon numarası istemez. Google ile giriş, ürün sahibi ücretsiz bir OAuth istemcisi açınca gelir.
+- Başka hiçbir kullanıcı bir kişinin kullanıcı adını görmez. Takım arkadaşları ve rakipler yalnız görünen adı görür.
+- Şifre en az 10, en çok 128 karakterdir. Şifre kullanıcı adını içeremez, dörtten az farklı karakter taşıyamaz ve yaygın şifrelerden biri olamaz. Sunucu büyük harf ya da sembol istemez, çünkü bu kurallar şifreyi güçlendirmeden hatırlamayı zorlaştırır. Yaygın şifre listesi SecLists projesinden gelir ve MIT lisanslıdır (`THIRD_PARTY_NOTICES.md`). Liste en yaygın 10 000 şifrenin ve xato.net'in bir milyonluk listesinin 10 karakter ve üstü 118 545 girdisini tutar. Sunucu karşılaştırmadan önce büyük harfi küçültür, harf işaretlerini atar ve `ı` harfini `i` sayar.
+- Sunucu şifreyi scrypt ile özetler (N=2^15, r=8, p=3). Bir özet geliştirme makinesinde yaklaşık 170 ms sürer. Sunucu özetleri iki iş parçacıklı ayrı bir havuzda hesaplar ve en çok 16 özeti bekletir. Sunucu fazlasına `503 SERVER_BUSY` döner. Kalabalık bir giriş dalgası API'nin geri kalanını böylece bekletmez. Sunucu maliyeti değiştirirse eski özetleri girişte yeni maliyetle yeniden yazar.
+- Sunucu oturumu 30 gün kullanılmayınca, her durumda da 180 gün sonra kapatır. Sunucu oturum anahtarının, telefon anahtarının ve operatör kodunun yalnız SHA-256 özetini tutar.
+- Kayıt kapısı: Sunucu kaydı ancak bir davet bağlantısıyla ya da operatörün verdiği tek kullanımlık kodla açar. Kapı kapalıyken sunucu kullanıcı adını sorgulamaz, bu yüzden alınmış ve boş kullanıcı adına aynı yanıtı döner. Davet bağlantısı takım diliminde gelir. O zamana kadar operatör kodu `python -m app.admin signup-code` komutuyla çıkarır. Kod 7 gün geçerlidir. Sunucu testleri kapıyı kendileri açar (`VOLLEYSTAT_SIGNUP=open`). CI'daki uçtan uca sunucu kapalı kapıyla çalışır.
+- Deneme sınırı: Sunucu bir kullanıcı adının beşinci hatalı denemesinden sonra o adı 30 saniye bekletir. Sonraki her hata bu süreyi 15 dakikaya kadar ikiye katlar. Bir saatte 50 hata o kullanıcı adını 15 dakika kilitler. Sunucu bu hesaba daha önce giriş yapmış bir telefonun hatalarını o telefonun anahtarıyla sayar, bu yüzden kullanıcı adını bilen bir yabancı sahibin telefonunu kilitleyemez. Sunucu bir denemeyi özeti hesaplamadan önce sayar, bu yüzden aynı anda gönderilen tahminler sınırı aşamaz. Sunucu sayaçları yalnız belleğinde tutar ve diske yazmaz.
+- Şifre değişikliği ve hesap silme yanlış şifreyi hesabın kendi sayacında sayar. O sayaca yalnız hesabın bir oturumunu tutan kişi ulaşır, bu yüzden giriş ekranındaki bir yabancı sahibin bu işlemlerini engelleyemez.
+- Yazan her uç oturumu kendi yazma işleminin içinde yeniden okur. Özet hesaplanırken kapanan bir oturum ya da değişen bir şifre böylece hiçbir şey yazamaz.
+- Şifresini unutan kişiye operatör `python -m app.admin reset-password <kullanıcı adı>` komutuyla 7 gün geçerli bir geçici şifre verir. Sunucu o hesabın bütün oturumlarını kapatır. Sunucu telefon anahtarlarını silmez, çünkü bir telefon anahtarı tek başına hiçbir şey açmaz ve sahibin telefonunu yabancıların kilidinden korur. Uygulama girişten sonra yeni bir şifre önerir. Kurtarma kodları sunucu internete açılınca gelir.
+- Kişi şifresini girerek hesabını siler. Sunucu kullanıcıyı, oturumlarını ve telefon anahtarlarını siler, sonra günlük dosyasını boşaltır. Takım ve maç kayıtlarının silinmesi kendi dilimleriyle gelir.
+- Sunucu erişim günlüğü yazmaz ve `X-Forwarded-For` başlığını yok sayar. Hiçbir istek adresi ya da yolu diske ulaşmaz.
+- Bu dilimde maç, yükleme, analiz ve rapor uçları oturum istemez. Uygulamanın 0.7.0 sürümü böylece 0.8.0 sunucusuyla çalışmayı sürdürür. Erişim denetimi ayrı bir dilimde gelir (B3).
+
+Sınırlar:
+
+- Sunucu artık kişisel veri tutar: kullanıcı adı, görünen ad ve şifre özeti. Ürün sahibi KVKK incelemesini sonraya bıraktı. Ekip uygulamayı başka takımlara bu incelemeden önce açmaz (ADR-0117).
+- Sunucuya yalnız bu bilgisayar erişir (127.0.0.1). Bugün her istek aynı kaynaktan gelir. İnternet adresine göre sayaç, sunucu internete açılınca gelir.
+- Sunucu yeniden başlayınca sayaçları sıfırlar. Bir yabancı sunucuyu yeniden başlatamaz, bu yüzden ekip bu sınırı kabul eder.
+- Liste Türkçe şifrelerin hepsini tanımaz. Örneğin `sifre12345` listede değildir.
+- Aynı hesaba aynı anda beşten fazla giriş gelirse doğru şifre de `429` alabilir. Tek bir kişi bu durumu pratikte yaşamaz.

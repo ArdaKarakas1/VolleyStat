@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -11,6 +12,12 @@ from pathlib import Path
 from .errors import fail
 
 log = logging.getLogger(__name__)
+
+# How long a deletion waits for a reader before it gives up emptying the write-ahead log: each
+# attempt waits CHECKPOINT_WAIT in SQLite's busy handler, CHECKPOINT_ATTEMPTS times, about 3 s in all.
+CHECKPOINT_ATTEMPTS = 20
+CHECKPOINT_WAIT = 0.1
+CHECKPOINT_PAUSE = 0.05
 
 # No comment inside a CREATE TABLE below may hold a comma. An older SQLite that drops a column
 # walks back from that column to the previous comma, and a comma inside a comment cuts the table
@@ -156,6 +163,57 @@ BEGIN SELECT RAISE(ABORT, 'rally_corrections is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS rally_corrections_keep_rows BEFORE DELETE ON rally_corrections
 WHEN EXISTS (SELECT 1 FROM analysis_jobs WHERE id = OLD.job_id)
 BEGIN SELECT RAISE(ABORT, 'rally_corrections is append-only'); END;
+
+-- Accounts (ADR-0119). The server keeps no e-mail and no phone number.
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  -- Lowercase ASCII exactly as stored. Login compares it exactly.
+  username TEXT NOT NULL UNIQUE,
+  display_name TEXT NOT NULL,
+  -- scrypt$N$r$p$salt$key with salt and key in base64url
+  password_hash TEXT NOT NULL,
+  -- Set when the operator reset the password: the temporary password logs in until then and the app suggests a new one.
+  password_temporary_until TEXT,
+  created_at TEXT NOT NULL,
+  password_changed_at TEXT NOT NULL,
+  -- How the account opened: SIGNUP_CODE or OPEN (and INVITE or CAPTAIN_CODE from later slices).
+  signup_via TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sessions (
+  -- SHA-256 hex of the bearer token. The token itself is never stored.
+  token_hash TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  -- Written at most once an hour. A session ends 30 days after its last use.
+  last_used_at TEXT NOT NULL,
+  -- 180 days after created_at however often the session is used.
+  expires_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
+-- Phones that logged in. A login with a valid device token counts its failures apart from strangers.
+CREATE TABLE IF NOT EXISTS login_devices (
+  -- SHA-256 hex of the device token. The token itself is never stored.
+  token_hash TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  last_used_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS login_devices_user ON login_devices(user_id);
+-- One-time codes the operator prints. A registration removes the SIGNUP code it used.
+CREATE TABLE IF NOT EXISTS operator_codes (
+  -- SHA-256 hex of the code without dashes
+  code_hash TEXT PRIMARY KEY,
+  -- SIGNUP opens one registration. CAPTAIN (the teams slice) also allows one team.
+  kind TEXT NOT NULL,
+  -- The teams slice: 1 once a registration used a CAPTAIN code
+  signup_used INTEGER NOT NULL DEFAULT 0,
+  -- The teams slice: the account that registered with a CAPTAIN code
+  used_by_user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+  -- The teams slice: the team name a CAPTAIN code allows
+  team_name TEXT,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
 """
 
 # Storage folders created by earlier previews lack the newer columns.
@@ -259,9 +317,16 @@ def empty_write_ahead_log(db_path: Path) -> None:
     connection closes.
     """
     # A short wait: the deletion is already committed, and a reader must not hold its answer back.
-    conn = sqlite3.connect(db_path, timeout=1)
+    # A reader in the middle of a transaction makes the checkpoint answer busy, so it is tried a
+    # few more times while such a reader finishes.
+    conn = sqlite3.connect(db_path, timeout=CHECKPOINT_WAIT)
     try:
-        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        for attempt in range(CHECKPOINT_ATTEMPTS):
+            busy, _log_pages, _moved = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            if not busy:
+                return
+            time.sleep(CHECKPOINT_PAUSE)
+        log.warning("The write-ahead log stays until a reader finishes; the next deletion or the last connection empties it")
     except sqlite3.Error:
         log.exception("The write-ahead log could not be emptied")
     finally:

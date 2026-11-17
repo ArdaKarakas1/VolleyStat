@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import content, corrections, jobs, media, report, review
+from . import accounts, content, corrections, jobs, media, report, review
 from .analyzers import load_analyzer, require_known_kind
 from .analyzers.base import MODEL, Analyzer
 from .bodylimit import BodyLimit
@@ -157,6 +157,8 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
         analyzer = load_analyzer(analyzer if analyzer is not None else os.environ.get("VOLLEYSTAT_ANALYZER"))
     if analyzer is not None:
         require_known_kind(analyzer)
+    # An unknown gate setting must stop the start-up too, before storage is touched.
+    signup_mode, team_mode = accounts.settings()
     storage = Path(storage_root or os.environ.get("VOLLEYSTAT_STORAGE") or (Path(__file__).parent.parent / "storage")).resolve()
     storage.mkdir(parents=True, exist_ok=True, mode=0o700)
     (storage / "media").mkdir(exist_ok=True, mode=0o700)
@@ -206,6 +208,7 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
         return record
 
     worker = jobs.JobWorker(connect, analyzer, video_path)
+    hash_pool = accounts.HashPool()
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -214,13 +217,16 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
         try:
             yield
         finally:
+            hash_pool.close()
             if start_worker:
                 # Joining the thread can wait for a running analyzer to notice the stop signal.
                 await run_in_threadpool(worker.stop)
 
-    app = FastAPI(title="VolleyStat Local Development API", version="0.7.0", lifespan=lifespan,
-                  description="LOCAL TEST DATA ONLY. No authentication, no trained AI. Never expose to the internet.")
+    app = FastAPI(title="VolleyStat Local Development API", version="0.8.0", lifespan=lifespan,
+                  description="LOCAL TEST DATA ONLY. Accounts exist, but the routes of matches do not ask for a session yet."
+                              " No trained AI. Never expose to the internet.")
     app.state.worker = worker
+    app.state.hash_pool = hash_pool
     app.add_middleware(BodyLimit, exempt=is_chunk_upload)
 
     @app.exception_handler(StarletteHTTPException)
@@ -244,7 +250,8 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
                 "ai": "configured" if info is not None and info.kind == MODEL else "not-configured",
                 "analyzer": {"id": info.id, "version": info.version, "kind": info.kind} if info is not None else None,
                 "mediaProbe": "available" if media.probe_available() else "unavailable",
-                "maxVideoBytes": MAX_VIDEO_BYTES, "chunkSizeBytes": CHUNK_SIZE}
+                "maxVideoBytes": MAX_VIDEO_BYTES, "chunkSizeBytes": CHUNK_SIZE,
+                "accounts": {"signup": signup_mode, "teams": team_mode}}
 
     def insert_match(db, match_id: str, payload: MatchInput):
         rules = payload.rules.rules() if payload.rules is not None else report.FIVB
@@ -568,4 +575,5 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
     app.include_router(jobs.router(connect, analyzer, worker))
     app.include_router(review.router(connect))
     app.include_router(corrections.router(connect))
+    app.include_router(accounts.router(connect, db_path, signup_mode, accounts.Limiter(), hash_pool))
     return app

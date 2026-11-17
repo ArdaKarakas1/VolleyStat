@@ -1,4 +1,4 @@
-# Analiz, inceleme ve rapor sözleşmesi (API 0.7)
+# Analiz, inceleme, rapor ve hesap sözleşmesi (API 0.8)
 
 Bu belge arka uç, Android istemcisi ve analiz modülleri arasındaki tek sözleşmedir. Bir taraf bu belgeyi değiştirmeden davranışını değiştirmez. Kök: `/v1`. Yükleme uçları [API.md](API.md) içindedir ve aynen geçerlidir.
 
@@ -12,7 +12,7 @@ Değişmez kurallar:
 - Sunucu analizörün önerisini bir kez yazar ve bir daha değiştirmez (`rally_proposals` tablosu). Kullanıcının düzeltmesi çalışma listesini değiştirir ve öneri kaydına dokunmaz.
 - Kullanıcının düzeltmeleri ve düzelttiği liste denetim kaydıdır. Bu kayıtlar altın etiket değildir ve eğitim verisi değildir. Ekip bu kayıtları ayrı izin ve ikinci etiketçi kontrolü olmadan hiçbir model ölçümüne sokmaz. Sunucu bu kayıtları dışa aktaran bir uç sunmaz.
 - `mock: true` taşıyan iş gerçek analiz değildir. İstemci bu işi her ekranda DEMO olarak işaretler.
-- Sunucu oyuncu adı tutmaz. Oyuncu, taraf ve forma numarasıyla anılır; adları telefon kendi kadrosundan eşler.
+- Sunucu kişinin kendisi için seçtiği kullanıcı adını ve görünen adı tutar (bölüm 10). Rapor oyuncuyu taraf ve forma numarasıyla anar. Telefon kadrosundaki adlar telefonda kalır.
 
 ## 1. Maç
 
@@ -240,7 +240,7 @@ Bir videonun aynı anda tek süren işi olur. `Idempotency-Key` başlığı iste
 
 ## 8. Hata kodları
 
-`VIDEO_NOT_READY`, `VIDEO_FILE_MISSING`, `MODEL_NOT_CONFIGURED`, `ANALYSIS_NOT_FOUND`, `JOB_FINISHED`, `CARD_NOT_FOUND`, `REVIEW_STALE_VERSION`, `IDEMPOTENCY_KEY_REUSED`, `INVALID_SELECTION`, `REPORT_NOT_AVAILABLE`, `RANGE_NOT_SATISFIABLE`, `PAYLOAD_TOO_LARGE`. Ralli düzeltme uçları şu kodları da kullanır: `RALLY_NOT_FOUND`, `JOB_NOT_REVIEWABLE`, `RALLY_LIST_STALE`, `INVALID_INTERVAL`, `RALLY_OVERLAP`, `SPLIT_POINT_OUTSIDE`, `NO_PREVIOUS_RALLY`, `LIST_NOT_READY`, `MOCK_LIST_NOT_CONFIRMABLE`. Maç kuralı ucu (`PUT /v1/matches/{id}/rules`, bölüm 1) `MATCH_RULES_STALE` kodunu da kullanır. Hepsi [API.md](API.md) içindeki hata zarfıyla döner.
+`VIDEO_NOT_READY`, `VIDEO_FILE_MISSING`, `MODEL_NOT_CONFIGURED`, `ANALYSIS_NOT_FOUND`, `JOB_FINISHED`, `CARD_NOT_FOUND`, `REVIEW_STALE_VERSION`, `IDEMPOTENCY_KEY_REUSED`, `INVALID_SELECTION`, `REPORT_NOT_AVAILABLE`, `RANGE_NOT_SATISFIABLE`, `PAYLOAD_TOO_LARGE`. Ralli düzeltme uçları şu kodları da kullanır: `RALLY_NOT_FOUND`, `JOB_NOT_REVIEWABLE`, `RALLY_LIST_STALE`, `INVALID_INTERVAL`, `RALLY_OVERLAP`, `SPLIT_POINT_OUTSIDE`, `NO_PREVIOUS_RALLY`, `LIST_NOT_READY`, `MOCK_LIST_NOT_CONFIRMABLE`. Maç kuralı ucu (`PUT /v1/matches/{id}/rules`, bölüm 1) `MATCH_RULES_STALE` kodunu da kullanır. Hesap uçları (bölüm 10) şu kodları kullanır: `AUTH_REQUIRED`, `SIGNUP_CLOSED`, `SIGNUP_CODE_INVALID`, `LINK_NOT_FOUND`, `USERNAME_INVALID`, `DISPLAY_NAME_INVALID`, `PASSWORD_REJECTED`, `USERNAME_TAKEN`, `LOGIN_FAILED`, `PASSWORD_WRONG`, `TOO_MANY_ATTEMPTS`, `SERVER_BUSY`. Hepsi [API.md](API.md) içindeki hata zarfıyla döner.
 
 JSON gövdesi alan uçlar en çok 64 KiB gövde kabul eder. Daha büyük gövdeye sunucu gövdeyi ayrıştırmadan `413 PAYLOAD_TOO_LARGE` döner. Parça yükleme ucu (`PUT /v1/uploads/{id}/chunks`) kendi sınırını uygular.
 
@@ -293,3 +293,37 @@ Liste onayı:
 
 Kullanıcı maçın kuralını seçer (bölüm 1). Sunucu süreyle biten seti tanımaz ve set sonunu kullanıcıdan almaz.
 
+## 10. Hesap
+
+Bir kişi kullanıcı adı, şifre ve görünen adla hesap açar (ADR-0119). Sunucu e-posta ve telefon numarası istemez. Oturum isteyen her uç `Authorization: Bearer <token>` başlığını okur. Başlık yoksa ya da oturum bittiyse sunucu `401 AUTH_REQUIRED` ve `WWW-Authenticate: Bearer` döner. Sürüm 0.8'de yalnız bu bölümün `/auth/logout` ve `/me` uçları oturum ister. OpenAPI belgesi bu uçları `HTTPBearer` güvenlik şemasıyla işaretler.
+
+| Uç | Gövde | Başarı | Hatalar |
+|---|---|---|---|
+| `POST /v1/auth/register` | `{username, displayName, password, link?: {token} \| {code}, operatorCode?}` | `201 {user, session, deviceToken}` | `422 VALIDATION_ERROR`, `403 SIGNUP_CLOSED`, `403 SIGNUP_CODE_INVALID`, `404 LINK_NOT_FOUND`, `422 USERNAME_INVALID`, `422 DISPLAY_NAME_INVALID`, `422 PASSWORD_REJECTED`, `409 USERNAME_TAKEN`, `503 SERVER_BUSY` |
+| `POST /v1/auth/login` | `{username, password, deviceToken?}` | `200 {user, session, deviceToken}` | `401 LOGIN_FAILED`, `429 TOO_MANY_ATTEMPTS`, `503 SERVER_BUSY` |
+| `POST /v1/auth/logout` | `{}` | `204` | `401 AUTH_REQUIRED` |
+| `GET /v1/me` | | `200 {user, teams}` | `401 AUTH_REQUIRED` |
+| `PUT /v1/me/display-name` | `{displayName}` | `200 {user}` | `401`, `422 DISPLAY_NAME_INVALID` |
+| `PUT /v1/me/password` | `{currentPassword, newPassword}` | `200 {user}` | `401`, `403 PASSWORD_WRONG`, `422 PASSWORD_REJECTED`, `429`, `503` |
+| `POST /v1/me/delete` | `{password}` | `204` | `401`, `403 PASSWORD_WRONG`, `429`, `503` |
+
+- `user`: `{id, username, displayName, createdAt, passwordTemporary}`. Operatör şifreyi sıfırlayınca sunucu `passwordTemporary` alanını `true` yapar. Kişi yeni şifre seçince sunucu alanı `false` yapar. `teams` takım dilimi gelene kadar boş bir listedir.
+- `session`: `{token, expiresAt}`. `expiresAt` oturumun kullanılmazsa biteceği andır. Sunucu oturumu 30 gün kullanılmayınca, her durumda da açıldıktan 180 gün sonra kapatır. Sunucu kullanımı en çok saatte bir yazar.
+- `deviceToken`: Telefonun bu hesap için sakladığı anahtar. Telefon sonraki girişte bu anahtarı gönderir. Sunucu o telefonun hatalı denemelerini telefonun kendi anahtarıyla sayar, bu yüzden kullanıcı adını bilen bir yabancı sahibin telefonunu kilitleyemez. Anahtar başka bir hesaba aitse ya da 180 gündür kullanılmadıysa sunucu yeni bir anahtar verir. Şifre değişikliği hesabın bütün telefon anahtarlarını siler. Operatörün sıfırlaması telefon anahtarlarını silmez, çünkü bir telefon anahtarı tek başına hiçbir şey açmaz.
+- Kullanıcı adı 3 ile 30 karakter arasıdır, küçük harfle başlar ve yalnız `a-z`, `0-9`, `.` ve `_` taşır. Sunucu kullanıcı adını değiştirmez ve girişte birebir karşılaştırır. Uygulama yazılanı küçük harfe çevirir.
+- Sunucu görünen adı NFC biçimine çevirir, baştaki ve sondaki boşluğu atar ve art arda boşlukları teke indirir. Sonuç 2 ile 40 karakter arasıdır, en az bir harf ya da rakam taşır ve yalnız harf (Türkçe harfler dahil), rakam, boşluk ve `.'-` taşır. Sunucu kontrol ve biçim karakterlerini (yön ve sıfır genişlikli işaretler dahil) reddeder. Görünen adın eşsiz olması gerekmez.
+- Sunucu şifreyi NFKC biçiminde sayar. `PASSWORD_REJECTED` yanıtı `details.reason` taşır: `TOO_SHORT` (10 karakterden az), `TOO_LONG` (129 ile 1024 karakter arası), `CONTAINS_USERNAME`, `REPETITIVE` (dörtten az farklı karakter, örneğin `aaaaaaaaaa` ya da `1212121212`), `COMMON`. Sunucu karşılaştırmadan önce büyük harfi küçültür, harf işaretlerini atar ve `ı` harfini `i` sayar. Bu yüzden `İLKER` ve `ılker` de `ilker` kullanıcı adını içerir. Sunucu büyük harf ya da sembol istemez.
+- `COMMON` listesi SecLists projesinden gelir (MIT). Liste en yaygın 10 000 şifrenin ve xato.net'in bir milyonluk listesinin 10 ile 128 karakter arasındaki 118 545 girdisini tutar. Daha kısa şifreleri uzunluk kuralı zaten reddeder. Liste Türkçe şifrelerin hepsini tanımaz: `galatasaray` ve `fenerbahce` listededir, `sifre12345` listede değildir.
+- Sunucu gövdenin biçimini kapıdan önce denetler. Bilinmeyen ya da eksik alan, 200 karakteri aşan kullanıcı adı ya da görünen ad ve 1024 karakteri aşan şifre `422 VALIDATION_ERROR` alır. Bu denetim kullanıcı adını sorgulamaz.
+- Kayıt sırası: Sunucu önce kayıt kapısına bakar, sonra alanları denetler, en son kullanıcı adının boş olup olmadığına bakar. Kapı kapalıyken sunucu kullanıcı adını sorgulamaz, bu yüzden alınmış ve boş kullanıcı adına aynı yanıtı döner.
+- Kayıt kapısı: `GET /v1/health` yanıtındaki `accounts.signup` değeri `LINK` ise sunucu kaydı ancak bir davet bağlantısıyla ya da operatörün kodu (`operatorCode`) ile açar. Davet bağlantısı takım diliminde gelir. O zamana kadar sunucu her bağlantıya `404 LINK_NOT_FOUND` döner. Operatörün kodu 16 karakterdir ve 7 gün geçerlidir. Komut kodu dört dörtlü grupla yazar. Sunucu kodu büyük küçük harf, boşluk ve tire farkı gözetmeden okur. Kayıt kodu harcar. `409 USERNAME_TAKEN` ve `422` yanıtları kodu harcamaz. `OPEN` değeri yalnız testler içindir.
+- Giriş: Yanlış şifre ve bilinmeyen kullanıcı adı aynı yanıtı alır (`401 LOGIN_FAILED`) ve aynı süreyi harcar. Süresi geçen geçici şifre de `401 LOGIN_FAILED` alır.
+- Deneme sınırı: Sunucu bir kullanıcı adının beşinci hatalı denemesinden sonra o adı 30 saniye bekletir. Sonraki her hata bu süreyi 15 dakikaya kadar ikiye katlar. Sunucu sayacı son hatadan bir saat sonra ya da başarılı girişte sıfırlar. Bir saatte 50 hata o kullanıcı adını 15 dakika kilitler. `429 TOO_MANY_ATTEMPTS` yanıtı `Retry-After` başlığını ve `details: {retryAfterSeconds, scope}` taşır. `scope` değeri `USER` (bu kullanıcı adı), `DEVICE` (bu telefon) ya da `ACCOUNT` (oturumun içindeki şifre denetimi) olur. Kilitli bir deneme şifre özeti hesaplamaz.
+- Sunucu bir denemeyi şifre özetini hesaplamadan önce sayar ve şifre doğru çıkınca sayacı sıfırlar. Aynı anda gelen denemeler bu yüzden birbirini görür ve bir tahmin dalgası sınırı aşamaz. Aynı hesaba aynı anda beşten fazla deneme gelirse doğru şifre de `429` alabilir.
+- Şifre değişikliği ve hesap silme yanlış şifreyi hesabın kendi sayacında sayar (`ACCOUNT`). O sayaca yalnız hesabın bir oturumunu tutan kişi ulaşır, bu yüzden giriş ekranındaki bir yabancı sahibin şifre değişikliğini ve hesap silmesini engelleyemez.
+- Sunucu şifre özetlerini ayrı bir havuzda hesaplar. Havuzda iki özet çalışır ve en çok 16 özet bekler. Sunucu fazlasına `503 SERVER_BUSY` ve `Retry-After: 1` döner.
+- Çıkış yalnız o oturumu kapatır. Şifre değişikliği o andaki oturum dışındaki bütün oturumları kapatır. Yazan her uç oturumu kendi yazma işleminin içinde yeniden okur. Bir oturum özet hesaplanırken kapandıysa uç `401 AUTH_REQUIRED` döner ve hiçbir şey yazmaz. Şifre aynı sırada değiştiyse şifre değişikliği ve hesap silme `403 PASSWORD_WRONG` döner ve hiçbir şey yazmaz.
+- Hesap silme kullanıcıyı, oturumlarını ve telefon anahtarlarını siler. Sunucu silmeden sonra günlük dosyasını boşaltır. Bir okuyucu o sırada işlem içindeyse sunucu bir saniyeye kadar yeniden dener. Okuyucu daha uzun sürerse günlük bir sonraki silmede ya da son bağlantı kapanınca boşalır.
+- Operatör `python -m app.admin reset-password <kullanıcı adı>` ile 7 gün geçerli bir geçici şifre verir. Sunucu o hesabın bütün oturumlarını kapatır.
+- Sunucu şifre özetinin maliyetini özetin içine yazar. Sunucu maliyeti değiştirirse eski bir özet girişte yine doğrulanır ve sunucu o girişte özeti yeni maliyetle yeniden yazar.
+- Sunucu oturum anahtarının, telefon anahtarının ve operatör kodunun yalnız SHA-256 özetini, şifrenin de yalnız scrypt özetini tutar.

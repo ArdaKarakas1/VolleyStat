@@ -1,7 +1,8 @@
 """Run the local development API: python -m app [--port 8000] [--analyzer demo].
 
-The server binds to the loopback interface only. It has no accounts and no TLS,
-so it must not be reachable from another machine.
+The server binds to the loopback interface only. It has no TLS and most routes do not ask for a
+session yet, so it must not be reachable from another machine. It writes no access log, so no
+address or path of a request reaches the disk, and it ignores X-Forwarded-For.
 """
 import argparse
 
@@ -24,7 +25,7 @@ def main() -> None:
         app = create_app(analyzer=args.analyzer)
     except AnalyzerNotAvailable as error:
         parser.error(str(error))
-    uvicorn.run(app, host="127.0.0.1", port=args.port)
+    uvicorn.run(app, host="127.0.0.1", port=args.port, access_log=False, forwarded_allow_ips="")
 
 
 if __name__ == "__main__":

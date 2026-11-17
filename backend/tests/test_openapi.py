@@ -32,6 +32,13 @@ CONTRACT_ROUTES = [
     ("/v1/rallies/{rally_id}/split", "post"),
     ("/v1/rallies/{rally_id}/merge-previous", "post"),
     ("/v1/analyses/{job_id}/rally-list/confirm", "post"),
+    ("/v1/auth/register", "post"),
+    ("/v1/auth/login", "post"),
+    ("/v1/auth/logout", "post"),
+    ("/v1/me", "get"),
+    ("/v1/me/display-name", "put"),
+    ("/v1/me/password", "put"),
+    ("/v1/me/delete", "post"),
 ]
 
 
@@ -44,9 +51,9 @@ def test_the_openapi_document_does_not_depend_on_the_analyzer(storage):
     assert create_app(storage, analyzer="demo").openapi() == create_app(storage, analyzer="none").openapi()
 
 
-def test_the_app_is_version_0_6_0_and_serves_every_route_of_the_contract(storage):
+def test_the_app_is_version_0_8_0_and_serves_every_route_of_the_contract(storage):
     spec = create_app(storage, analyzer="none").openapi()
-    assert spec["info"]["version"] == "0.7.0"
+    assert spec["info"]["version"] == "0.8.0"
     missing = [(path, method) for path, method in CONTRACT_ROUTES if method not in spec["paths"].get(path, {})]
     assert missing == []
 
@@ -64,3 +71,13 @@ def test_a_rule_change_names_the_rule_its_user_saw(storage):
     assert set(change["required"]) == {"setsToWin", "setTarget", "decidingSetTarget", "expectedRules"}
     assert change["properties"]["expectedRules"] == {"$ref": "#/components/schemas/MatchRulesInput"}
     assert change["additionalProperties"] is False
+
+
+def test_the_routes_that_need_a_session_say_so_and_the_others_do_not(storage):
+    spec = create_app(storage, analyzer="none").openapi()
+    session = {("/v1/auth/logout", "post"), ("/v1/me", "get"), ("/v1/me/display-name", "put"),
+               ("/v1/me/password", "put"), ("/v1/me/delete", "post")}
+    marked = {(path, method) for path, operations in spec["paths"].items() for method, operation in operations.items()
+              if operation.get("security")}
+    assert marked == session
+    assert spec["components"]["securitySchemes"]["HTTPBearer"]["scheme"] == "bearer"
