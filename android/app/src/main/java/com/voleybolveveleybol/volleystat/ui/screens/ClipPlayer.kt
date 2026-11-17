@@ -1,5 +1,6 @@
 package com.voleybolveveleybol.volleystat.ui.screens
 
+import android.content.Context
 import androidx.annotation.OptIn
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -31,24 +32,44 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DataSource
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import com.voleybolveveleybol.volleystat.R
 import kotlinx.coroutines.delay
 
 /**
+ * Where the players read the video from. [headers] go with every request, the session's
+ * `Authorization: Bearer` among them (design 10.5); the address stays the video's own, so no token
+ * ever stands in a URL. Other schemes than http(s) are read as before.
+ */
+@OptIn(UnstableApi::class)
+internal fun playbackDataSource(context: Context, headers: Map<String, String>): DataSource.Factory =
+    DefaultDataSource.Factory(context, DefaultHttpDataSource.Factory().setDefaultRequestProperties(headers))
+
+/** A silent player that reads through [playbackDataSource]. */
+@OptIn(UnstableApi::class)
+private fun playbackPlayer(context: Context, headers: Map<String, String>): ExoPlayer =
+    ExoPlayer.Builder(context).setMediaSourceFactory(DefaultMediaSourceFactory(playbackDataSource(context, headers))).build()
+
+/**
  * Plays one part of the uploaded video in a loop, without sound. The whole video stays on the
- * server; the player asks it for the byte ranges it needs. A tap restarts the clip.
+ * server; the player asks it for the byte ranges it needs, with [headers] on every request. A tap
+ * restarts the clip.
  */
 @Composable
-fun ClipPlayer(url: String, startMs: Long, endMs: Long, modifier: Modifier = Modifier) {
+fun ClipPlayer(url: String, startMs: Long, endMs: Long, headers: Map<String, String>, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     var failed by remember { mutableStateOf(false) }
     val description = stringResource(R.string.review_clip_description)
     val replay = stringResource(R.string.review_replay)
-    val player = remember {
-        ExoPlayer.Builder(context).build().apply {
+    // A new session (another token) needs a new player: the headers are fixed when the player is built.
+    val player = remember(headers) {
+        playbackPlayer(context, headers).apply {
             repeatMode = Player.REPEAT_MODE_ONE
             volume = 0f
             playWhenReady = true
@@ -66,7 +87,7 @@ fun ClipPlayer(url: String, startMs: Long, endMs: Long, modifier: Modifier = Mod
             player.release()
         }
     }
-    LaunchedEffect(url, startMs, endMs) {
+    LaunchedEffect(player, url, startMs, endMs) {
         failed = false
         player.setMediaItem(
             MediaItem.Builder().setUri(url)
@@ -164,12 +185,13 @@ internal class PlayerControl(val player: Player) : VideoControl {
 /**
  * The video of the range editor, without sound, playing from [startMs]. It is prepared once for
  * the whole file, so moving through it asks the server only for the bytes of the new position.
+ * [headers] go with every request, as for [ClipPlayer].
  */
 @Composable
-fun rememberEditorVideo(url: String, startMs: Long): EditorVideo {
+fun rememberEditorVideo(url: String, startMs: Long, headers: Map<String, String>): EditorVideo {
     val context = LocalContext.current
-    val control = remember(url) {
-        PlayerControl(ExoPlayer.Builder(context).build().apply { volume = 0f }).apply {
+    val control = remember(url, headers) {
+        PlayerControl(playbackPlayer(context, headers).apply { volume = 0f }).apply {
             player.setMediaItem(MediaItem.fromUri(url))
             player.prepare()
             seekTo(startMs, exact = true)

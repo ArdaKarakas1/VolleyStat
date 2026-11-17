@@ -164,11 +164,17 @@ data class Draft(
 
 enum class ServerTarget { EMULATOR, USB_DEVICE }
 
+/**
+ * What the phone itself remembers, whoever is signed in (device.json, design 10.3). It holds no
+ * personal data and no secret.
+ */
 data class Settings(
     val serverTarget: ServerTarget = ServerTarget.EMULATOR,
-    /** Shown in the greeting when set. The app has no account system. */
-    val displayName: String = "",
     val welcomeSeen: Boolean = false,
+    /** Some account has logged in on this phone. Without one the app opens the start screen, with one the login screen. */
+    val accountSeen: Boolean = false,
+    /** The question about the single-account data of app 0.7 was answered, or there was nothing to ask about. */
+    val legacyHandled: Boolean = false,
 )
 
 const val MAX_VIDEO_BYTES: Long = 4L * 1024 * 1024 * 1024

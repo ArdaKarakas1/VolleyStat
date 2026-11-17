@@ -1,6 +1,5 @@
 package com.voleybolveveleybol.volleystat.ui
 
-import android.content.Context
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.remember
 import androidx.compose.ui.test.assertIsDisplayed
@@ -15,9 +14,10 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.test.core.app.ApplicationProvider
 import com.voleybolveveleybol.volleystat.BuildConfig
 import com.voleybolveveleybol.volleystat.R
+import com.voleybolveveleybol.volleystat.TestAccounts
 import com.voleybolveveleybol.volleystat.VolleyStatApp
 import com.voleybolveveleybol.volleystat.data.ApiClient
-import com.voleybolveveleybol.volleystat.data.LocalStore
+import com.voleybolveveleybol.volleystat.data.SignedIn
 import com.voleybolveveleybol.volleystat.data.MatchInfo
 import com.voleybolveveleybol.volleystat.data.StoredState
 import com.voleybolveveleybol.volleystat.data.UploadEngine
@@ -27,7 +27,6 @@ import com.voleybolveveleybol.volleystat.model.MatchRecord
 import com.voleybolveveleybol.volleystat.model.MatchRules
 import com.voleybolveveleybol.volleystat.model.Rally
 import com.voleybolveveleybol.volleystat.model.ServerTarget
-import com.voleybolveveleybol.volleystat.model.Settings
 import com.voleybolveveleybol.volleystat.model.UploadSession
 import com.voleybolveveleybol.volleystat.model.VideoSource
 import com.voleybolveveleybol.volleystat.model.gaps
@@ -70,6 +69,9 @@ class RallyFixE2eTest {
     private val clip = System.getenv("VOLLEYSTAT_E2E_VIDEO")?.let(::File)
     private var videoId: String? = null
     private var matchId: String? = null
+    /** The account the test opens on the backend (VOLLEYSTAT_SIGNUP=open) and deletes afterwards. */
+    private var account: SignedIn? = null
+    private var password: String? = null
     private val control = FakeControl()
 
     /** Uploads the clip and stores the match the way the app itself would have left it. */
@@ -80,15 +82,18 @@ class RallyFixE2eTest {
             val factory = ViewModelProvider.AndroidViewModelFactory::class.java
             factory.declaredFields.single { it.type == factory }.apply { isAccessible = true }.set(null, null)
 
+            val (opened, secret) = TestAccounts.registerOnBackend(url!!)
+            account = opened
+            password = secret
             var session = UploadSession()
-            val check = UploadEngine(ApiClient(url!!)).run(
+            val check = UploadEngine(ApiClient(url, token = opened.token)).run(
                 session, MatchInfo(HOME_TEAM, AWAY_TEAM), "e2e.mp4", "video/mp4", VideoBytes(clip!!.length()) { clip.inputStream() },
                 onSession = { session = it }, onProgress = { _, _, _ -> }, cancelled = { false },
             )
             videoId = check.videoId
             matchId = session.serverMatchId
-            val files = ApplicationProvider.getApplicationContext<Context>().filesDir
-            LocalStore(File(files, "volleystat.json")).save(
+            TestAccounts.seed(
+                ApplicationProvider.getApplicationContext(),
                 StoredState(
                     matches = listOf(
                         MatchRecord(
@@ -97,13 +102,16 @@ class RallyFixE2eTest {
                             session = session, check = check, checkedAtMs = System.currentTimeMillis(),
                         )
                     ),
-                    settings = Settings(serverTarget = ServerTarget.USB_DEVICE, welcomeSeen = true),
-                )
+                ),
+                TestAccounts.sessionOf(opened),
+                TestAccounts.SIGNED_IN_PHONE.copy(serverTarget = ServerTarget.USB_DEVICE),
             )
         }
 
         override fun after() {
-            matchId?.let { runCatching { ApiClient(url!!).deleteMatch(it) } }
+            val opened = account ?: return
+            matchId?.let { runCatching { ApiClient(url!!, token = opened.token).deleteMatch(it) } }
+            TestAccounts.deleteOnBackend(url!!, opened, password!!)
         }
     }
     @get:Rule(order = 1) val app = createAndroidComposeRule<ComponentActivity>()
@@ -130,7 +138,7 @@ class RallyFixE2eTest {
             // The real player seeks to the start it is given. The stand-in does the same.
             VolleyStatTheme { VolleyStatApp(editorVideo = { _, startMs -> remember { control.positionMs = startMs; control.video } }) }
         }
-        val api = ApiClient(url!!)
+        val api = ApiClient(url!!, token = account!!.token)
         app.onAllNodesWithText(text(R.string.nav_matches)).onFirst().performClick()
         app.onNodeWithText("$HOME_TEAM - $AWAY_TEAM").performClick()
         waitFor(text(R.string.action_start_review))
@@ -222,7 +230,7 @@ class RallyFixE2eTest {
 
     @Test fun theRuleChangesFromTheListAndAChangeMadeMeanwhileIsCaught() {
         app.setContent { VolleyStatTheme { VolleyStatApp(editorVideo = { _, startMs -> remember { control.positionMs = startMs; control.video } }) } }
-        val api = ApiClient(url!!)
+        val api = ApiClient(url!!, token = account!!.token)
         app.onAllNodesWithText(text(R.string.nav_matches)).onFirst().performClick()
         app.onNodeWithText("$HOME_TEAM - $AWAY_TEAM").performClick()
         waitFor(text(R.string.action_open_report))

@@ -8,6 +8,8 @@ import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isEnabled
 import androidx.compose.ui.test.isRoot
@@ -21,11 +23,14 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.rule.GrantPermissionRule
 import com.voleybolveveleybol.volleystat.data.ApiClient
+import com.voleybolveveleybol.volleystat.data.KeystoreSessionCipher
 import com.voleybolveveleybol.volleystat.data.LocalStore
+import com.voleybolveveleybol.volleystat.data.SessionStore
 import com.voleybolveveleybol.volleystat.model.AnalysisSummary
 import com.voleybolveveleybol.volleystat.model.VideoCheck
 import com.voleybolveveleybol.volleystat.model.rallyTarget
@@ -38,15 +43,17 @@ import org.junit.Test
 import org.junit.rules.ExternalResource
 import org.junit.runner.RunWith
 import java.io.File
+import java.util.UUID
 
 private const val HOME_TEAM = "Cihaz Ev"
 private const val AWAY_TEAM = "Cihaz Misafir"
 
 /**
  * The whole journey on a device, against a backend on the development computer that runs the
- * demo analyzer: create a match, record a few seconds with the camera, upload, wait for the
- * server's file check and the demo job, watch the clip, move the end of a rally in the range
- * editor, answer every rally and read the report.
+ * demo analyzer with VOLLEYSTAT_SIGNUP=open: open an account through the screens, create a
+ * match, record a few seconds with the camera, upload, wait for the server's file check and the
+ * demo job, watch the clip, move the end of a rally in the range editor, answer every rally and
+ * read the report. The account is deleted at the end.
  *
  * Skipped when the device has no camera or the backend does not answer. The demo analyzer
  * invents its rally intervals, so this proves the plumbing and nothing about analysis quality.
@@ -55,7 +62,13 @@ private const val AWAY_TEAM = "Cihaz Misafir"
 class DeviceFlowE2eTest {
     private val target get() = InstrumentationRegistry.getInstrumentation().targetContext
     private val api = ApiClient(BuildConfig.API_URL_EMULATOR)
-    private fun storedMatch() = LocalStore(File(target.filesDir, "volleystat.json")).load().matches.singleOrNull()
+    /** The account the journey opens on the backend (VOLLEYSTAT_SIGNUP=open). The test deletes it at the end. */
+    private val username = "e2e_" + UUID.randomUUID().toString().replace("-", "").take(20)
+    private val password = "cihaz şifresi ${UUID.randomUUID().toString().take(8)}"
+
+    /** The one account folder the registration created: the app keeps an account's matches in accounts/<userId>/. */
+    private fun accountFolder(): File? = File(target.filesDir, "accounts").listFiles()?.singleOrNull { it.isDirectory }
+    private fun storedMatch() = accountFolder()?.let { LocalStore(File(it, "volleystat.json")).load().matches.singleOrNull() }
 
     @get:Rule(order = 0) val camera: GrantPermissionRule = GrantPermissionRule.grant(Manifest.permission.CAMERA)
     @get:Rule(order = 1) val firstLaunchWithServer = object : ExternalResource() {
@@ -68,6 +81,12 @@ class DeviceFlowE2eTest {
 
         override fun after() {
             runCatching { storedMatch()?.session?.serverMatchId?.let(api::deleteMatch) }
+            // The session the app sealed with the keystore's key, or a fresh one: the account goes either way.
+            runCatching {
+                val token = runCatching { SessionStore(File(target.filesDir, "session.bin"), KeystoreSessionCipher()).load()?.token }.getOrNull()
+                    ?: api.login(username, password, null).token
+                ApiClient(BuildConfig.API_URL_EMULATOR, token = token).deleteAccount(password)
+            }
         }
     }
     @get:Rule(order = 2) val app = createAndroidComposeRule<MainActivity>()
@@ -112,8 +131,15 @@ class DeviceFlowE2eTest {
     }
 
     @Test fun aMatchIsRecordedUploadedAnalysedReviewedAndReported() {
-        // 01 to 05
+        // 01, then a new account through the start screen and the register form (version 0.8).
         app.onNodeWithText(text(R.string.action_start)).performClick()
+        app.onNodeWithText(text(R.string.action_create_account)).performClick()
+        app.onNode(hasSetTextAction() and hasText(text(R.string.field_display_name))).performTextInput("Cihaz Testi")
+        app.onNode(hasSetTextAction() and hasText(text(R.string.field_username))).performTextReplacement(username)
+        app.onNode(hasSetTextAction() and hasText(text(R.string.field_password))).performTextInput(password)
+        app.onNode(hasClickAction() and hasText(text(R.string.action_create_account))).performClick()
+        waitForText(text(R.string.home_new_match_body))
+        // 02 to 05
         app.onNodeWithText(text(R.string.home_new_match_body)).performClick()
         app.onNodeWithText(text(R.string.action_continue)).performClick()
         addAndPickTeam(HOME_TEAM)

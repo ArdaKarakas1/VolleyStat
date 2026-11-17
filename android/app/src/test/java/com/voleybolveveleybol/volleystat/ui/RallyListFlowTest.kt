@@ -1,6 +1,5 @@
 package com.voleybolveveleybol.volleystat.ui
 
-import android.content.Context
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -22,14 +21,13 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.test.core.app.ApplicationProvider
 import com.voleybolveveleybol.volleystat.AppViewModel
 import com.voleybolveveleybol.volleystat.R
+import com.voleybolveveleybol.volleystat.TestAccounts
 import com.voleybolveveleybol.volleystat.VolleyStatApp
-import com.voleybolveveleybol.volleystat.data.LocalStore
 import com.voleybolveveleybol.volleystat.data.StoredState
 import com.voleybolveveleybol.volleystat.model.AnalysisSummary
 import com.voleybolveveleybol.volleystat.model.LocalVideo
 import com.voleybolveveleybol.volleystat.model.MatchRecord
 import com.voleybolveveleybol.volleystat.model.MatchRules
-import com.voleybolveveleybol.volleystat.model.Settings
 import com.voleybolveveleybol.volleystat.model.UploadSession
 import com.voleybolveveleybol.volleystat.model.VideoCheck
 import com.voleybolveveleybol.volleystat.model.VideoSource
@@ -49,7 +47,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
-import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList
 import com.voleybolveveleybol.volleystat.model.SetScore
 import com.voleybolveveleybol.volleystat.partJson
@@ -70,7 +67,6 @@ class RallyListFlowTest {
     private val requests = CopyOnWriteArrayList<String>()
     private val bodies = CopyOnWriteArrayList<JSONObject>()
     private val control = FakeControl()
-    private val storeFile get() = File(ApplicationProvider.getApplicationContext<Context>().filesDir, "volleystat.json")
 
     // What the stand-in server holds. Three rallies; the tests decide who has a winner.
     @Volatile private var version = 7
@@ -219,7 +215,8 @@ class RallyListFlowTest {
                 }
             }
             server.start()
-            LocalStore(storeFile).save(
+            TestAccounts.seed(
+                ApplicationProvider.getApplicationContext(),
                 StoredState(
                     matches = listOf(
                         MatchRecord(
@@ -229,7 +226,6 @@ class RallyListFlowTest {
                             analysis = AnalysisSummary("j1", AnalysisSummary.NEEDS_REVIEW, mock = false, reviewOpen = 1, reviewTotal = 3),
                         )
                     ),
-                    settings = Settings(welcomeSeen = true),
                 )
             )
         }

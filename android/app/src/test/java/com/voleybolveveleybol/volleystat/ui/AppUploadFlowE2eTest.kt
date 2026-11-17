@@ -1,6 +1,5 @@
 package com.voleybolveveleybol.volleystat.ui
 
-import android.content.Context
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -14,13 +13,13 @@ import androidx.test.core.app.ApplicationProvider
 import com.voleybolveveleybol.volleystat.BuildConfig
 import com.voleybolveveleybol.volleystat.MainActivity
 import com.voleybolveveleybol.volleystat.R
+import com.voleybolveveleybol.volleystat.TestAccounts
 import com.voleybolveveleybol.volleystat.data.ApiClient
-import com.voleybolveveleybol.volleystat.data.LocalStore
+import com.voleybolveveleybol.volleystat.data.SignedIn
 import com.voleybolveveleybol.volleystat.data.StoredState
 import com.voleybolveveleybol.volleystat.model.Draft
 import com.voleybolveveleybol.volleystat.model.LocalVideo
 import com.voleybolveveleybol.volleystat.model.ServerTarget
-import com.voleybolveveleybol.volleystat.model.Settings
 import com.voleybolveveleybol.volleystat.model.VideoCheck
 import com.voleybolveveleybol.volleystat.model.VideoSource
 import org.junit.Assert.assertEquals
@@ -49,7 +48,10 @@ private const val AWAY_TEAM = "E2E Yükleme Misafir"
 class AppUploadFlowE2eTest {
     private val url = System.getenv("VOLLEYSTAT_E2E_URL")
     private val clip = System.getenv("VOLLEYSTAT_E2E_VIDEO")?.let(::File)
-    private val storeFile get() = File(ApplicationProvider.getApplicationContext<Context>().filesDir, "volleystat.json")
+    /** The account the test opens on the backend (VOLLEYSTAT_SIGNUP=open) and deletes afterwards. */
+    private var account: SignedIn? = null
+    private var password: String? = null
+    private val store get() = TestAccounts.space(ApplicationProvider.getApplicationContext(), account!!.user.id).store
 
     /** A draft as the recording screen leaves it: two team names and a file in private storage. */
     @get:Rule(order = 0) val draftWithRecording = object : ExternalResource() {
@@ -58,19 +60,26 @@ class AppUploadFlowE2eTest {
             // See JourneyTest: the static factory would hand the view model another test's Application.
             val factory = ViewModelProvider.AndroidViewModelFactory::class.java
             factory.declaredFields.single { it.type == factory }.apply { isAccessible = true }.set(null, null)
-            LocalStore(storeFile).save(
+            val (opened, secret) = TestAccounts.registerOnBackend(url!!)
+            account = opened
+            password = secret
+            TestAccounts.seed(
+                ApplicationProvider.getApplicationContext(),
                 StoredState(
                     draft = Draft(
                         homeTeam = HOME_TEAM, awayTeam = AWAY_TEAM,
                         video = LocalVideo(clip!!.path, VideoSource.CAMERA, clip.name, clip.length(), "video/mp4", null, null, null, null),
                     ),
-                    settings = Settings(serverTarget = ServerTarget.USB_DEVICE, welcomeSeen = true),
-                )
+                ),
+                TestAccounts.sessionOf(opened),
+                TestAccounts.SIGNED_IN_PHONE.copy(serverTarget = ServerTarget.USB_DEVICE),
             )
         }
 
         override fun after() {
-            runCatching { LocalStore(storeFile).load().matches.singleOrNull()?.session?.serverMatchId?.let { ApiClient(url!!).deleteMatch(it) } }
+            val opened = account ?: return
+            runCatching { store.load().matches.singleOrNull()?.session?.serverMatchId?.let { ApiClient(url!!, token = opened.token).deleteMatch(it) } }
+            TestAccounts.deleteOnBackend(url!!, opened, password!!)
         }
     }
     @get:Rule(order = 1) val app = createAndroidComposeRule<MainActivity>()
@@ -95,7 +104,7 @@ class AppUploadFlowE2eTest {
         app.onNodeWithText(text(R.string.status_title)).assertIsDisplayed()
         app.onNodeWithText(text(R.string.demo_title)).assertIsDisplayed()
 
-        val match = LocalStore(storeFile).load().matches.single()
+        val match = store.load().matches.single()
         assertEquals(VideoCheck.READY, match.check!!.status)
         assertEquals(clip!!.length(), match.session.sentBytes)
         assertNotNull(match.session.serverMatchId)

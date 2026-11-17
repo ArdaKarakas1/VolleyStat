@@ -21,10 +21,23 @@ import com.voleybolveveleybol.volleystat.model.gapTarget
 import com.voleybolveveleybol.volleystat.model.rallyTarget
 import com.voleybolveveleybol.volleystat.ui.screens.RalliesScreen
 import com.voleybolveveleybol.volleystat.ui.screens.RallyEditorScreen
+import com.voleybolveveleybol.volleystat.AccountUi
+import com.voleybolveveleybol.volleystat.LegacyQuestion
+import com.voleybolveveleybol.volleystat.data.AttemptScope
+import com.voleybolveveleybol.volleystat.data.AuthProblem
+import com.voleybolveveleybol.volleystat.data.SignupClosedReason
+import com.voleybolveveleybol.volleystat.ui.screens.DeleteAccountScreen
+import com.voleybolveveleybol.volleystat.ui.screens.LegacyScreen
+import com.voleybolveveleybol.volleystat.ui.screens.PasswordChangeScreen
+import com.voleybolveveleybol.volleystat.ui.screens.LoginScreen
+import com.voleybolveveleybol.volleystat.ui.screens.RegisterScreen
+import com.voleybolveveleybol.volleystat.ui.screens.ServerSection
+import com.voleybolveveleybol.volleystat.ui.screens.StartScreen
 import com.voleybolveveleybol.volleystat.AppUiState
 import com.voleybolveveleybol.volleystat.JobLoad
 import com.voleybolveveleybol.volleystat.ReportLoad
 import com.voleybolveveleybol.volleystat.UploadProgress
+import com.voleybolveveleybol.volleystat.data.AccountUser
 import com.voleybolveveleybol.volleystat.data.UploadPhase
 import com.voleybolveveleybol.volleystat.model.AnalysisJob
 import com.voleybolveveleybol.volleystat.model.AnalysisSummary
@@ -110,7 +123,8 @@ class ScreenshotTest {
     private val reviewing = match("m2", analysis = AnalysisSummary("j1", AnalysisSummary.NEEDS_REVIEW, mock = true, reviewOpen = 11, reviewTotal = 18), name = "Hazırlık Maçı")
     private val finished = match("m3", analysis = AnalysisSummary("j2", AnalysisSummary.COMPLETE, mock = false, reviewOpen = 0, reviewTotal = 42))
     private val state = AppUiState(
-        matches = listOf(uploading, reviewing, finished), teams = teams, settings = Settings(displayName = "Deneme", welcomeSeen = true),
+        matches = listOf(uploading, reviewing, finished), teams = teams, settings = Settings(welcomeSeen = true, accountSeen = true, legacyHandled = true),
+        account = AccountUi(user = AccountUser("user-1", "deneme", "Deneme")),
         upload = UploadProgress("m1", UploadPhase.SENDING, 533_000_000, 1_240_000_000, running = true),
     )
 
@@ -165,9 +179,9 @@ class ScreenshotTest {
         shot("maclar") { MatchesScreen(state, {}, {}) }
         shot("takimlar") { TeamsScreen(teams, { true }, {}) }
         shot("takim_kadro") { TeamRosterScreen(teams[0], { _, _ -> true }, {}, {}, {}) }
-        shot("profil") { ProfileScreen(state, "0.4.2", {}, {}, {}, {}, { true }) }
+        shot("profil") { ProfileScreen(state, "0.8.0", {}, {}, {}, { true }) }
         // The privacy lines sit below the first screen; a tall window keeps all of them in one picture.
-        shotOn("profil_gizlilik", "+w411dp-h1700dp-port") { ProfileScreen(state, "0.4.2", {}, {}, {}, {}, { true }) }
+        shotOn("profil_gizlilik", "+w411dp-h2600dp-port") { ProfileScreen(state, "0.8.0", {}, {}, {}, { true }) }
     }
 
     @Test fun s03_s04_s05_newMatch() {
@@ -358,5 +372,43 @@ class ScreenshotTest {
         shotOn("kucuk_buyuk_yazi_13_mac_kurali_eski_kural", "+w320dp-h568dp-port", fontScale = 1.5f) {
             MatchRulesScreen(MatchRules(2, 25, 15), {}, {}, onList = true, problem = CorrectionProblem.STALE, initial = chosen)
         }
+    }
+
+    // ----- accounts (slice B2). The fields hold invented values; a password shows as dots. -----
+
+    @Test fun s14_s15_accounts() {
+        val signedOut = state.copy(account = AccountUi())
+        val server: @Composable () -> Unit = { ServerSection(signedOut, {}, {}) }
+        fun login(account: AccountUi = AccountUi()): @Composable () -> Unit = {
+            LoginScreen(account, { _, _ -> }, {}, server = server, initialUsername = "deneme", initialPassword = "uzun bir şifre 42")
+        }
+        fun register(account: AccountUi = AccountUi(), username: String? = null): @Composable () -> Unit = {
+            RegisterScreen(account, { _, _, _, _ -> }, {}, {}, server = server, initialDisplayName = "Çağrı Öztürk", initialUsername = username, initialPassword = "uzun bir şifre 42", initialCode = "ABCD-EFGH-JKMN-PQRS")
+        }
+        shot("14a_baslangic") { StartScreen({}, {}) }
+        shot("14a_baslangic_koyu", dark = true) { StartScreen({}, {}) }
+        shot("14_giris", content = login())
+        shot("14_giris_koyu", dark = true, content = login())
+        shot("14_giris_hata", content = login(AccountUi(problem = AuthProblem.LoginFailed)))
+        shot("14_giris_oturum_kapandi", content = login(AccountUi(sessionEnded = true)))
+        shot("14_giris_bekliyor", content = login(AccountUi(busy = true)))
+        shotOn("kucuk_buyuk_yazi_14_giris", "+w320dp-h568dp-port", fontScale = 1.5f, content = login(AccountUi(problem = AuthProblem.TooManyAttempts(AttemptScope.DEVICE, 120))))
+        shot("15_hesap_olustur", content = register())
+        shot("15_hesap_olustur_koyu", dark = true, content = register())
+        // The whole form in one picture: the code field and the server choice sit below the first screen.
+        shotOn("15_hesap_olustur_tamami", "+w411dp-h1500dp-port", content = register())
+        shot("15_hesap_olustur_kapali", content = register(AccountUi(problem = AuthProblem.SignupClosed(SignupClosedReason.NO_LINK))))
+        shot("15_hesap_olustur_alinmis_ad", content = register(AccountUi(problem = AuthProblem.UsernameTaken), username = "cagri.ozturk42"))
+        shotOn("kucuk_buyuk_yazi_15_hesap_olustur", "+w320dp-h568dp-port", fontScale = 1.5f, content = register())
+        val old = LegacyQuestion(listOf("Hazırlık Maçı", "A Takımı - B Takımı", "Lig Maçı"), teams = 2, recordings = 3, draft = true)
+        shot("15b_eski_veriler") { LegacyScreen(old, saveFailed = false) {} }
+        shot("15b_eski_veriler_koyu", dark = true) { LegacyScreen(old, saveFailed = false) {} }
+        val signedIn = AccountUi(user = AccountUser("user-1", "deneme", "Deneme"))
+        shot("15c_sifre_degistir") { PasswordChangeScreen(signedIn.copy(problem = AuthProblem.PasswordWrong), { _, _ -> }, {}) }
+        shot("15d_hesabi_sil") { DeleteAccountScreen(signedIn, serverMatches = 3, onDelete = {}, onBack = {}) }
+        shot("15d_hesabi_sil_koyu", dark = true) { DeleteAccountScreen(signedIn, serverMatches = 3, onDelete = {}, onBack = {}) }
+        // The account card at the top of the profile.
+        shotOn("profil_hesap", "+w411dp-h1100dp-port") { ProfileScreen(state, "0.8.0", {}, {}, {}, { true }) }
+        shotOn("profil_hesap_koyu", "+w411dp-h1100dp-port", dark = true) { ProfileScreen(state, "0.8.0", {}, {}, {}, { true }) }
     }
 }

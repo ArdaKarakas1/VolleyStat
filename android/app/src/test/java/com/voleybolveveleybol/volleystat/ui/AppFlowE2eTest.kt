@@ -1,6 +1,5 @@
 package com.voleybolveveleybol.volleystat.ui
 
-import android.content.Context
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -12,8 +11,9 @@ import androidx.test.core.app.ApplicationProvider
 import com.voleybolveveleybol.volleystat.BuildConfig
 import com.voleybolveveleybol.volleystat.MainActivity
 import com.voleybolveveleybol.volleystat.R
+import com.voleybolveveleybol.volleystat.TestAccounts
 import com.voleybolveveleybol.volleystat.data.ApiClient
-import com.voleybolveveleybol.volleystat.data.LocalStore
+import com.voleybolveveleybol.volleystat.data.SignedIn
 import com.voleybolveveleybol.volleystat.data.MatchInfo
 import com.voleybolveveleybol.volleystat.data.StoredState
 import com.voleybolveveleybol.volleystat.data.UploadEngine
@@ -22,7 +22,6 @@ import com.voleybolveveleybol.volleystat.model.AnalysisSummary
 import com.voleybolveveleybol.volleystat.model.LocalVideo
 import com.voleybolveveleybol.volleystat.model.MatchRecord
 import com.voleybolveveleybol.volleystat.model.ServerTarget
-import com.voleybolveveleybol.volleystat.model.Settings
 import com.voleybolveveleybol.volleystat.model.UploadSession
 import com.voleybolveveleybol.volleystat.model.VideoSource
 import org.junit.Assert.assertEquals
@@ -57,6 +56,9 @@ class AppFlowE2eTest {
     private val clip = System.getenv("VOLLEYSTAT_E2E_VIDEO")?.let(::File)
     private var videoId: String? = null
     private var matchId: String? = null
+    /** The account the test opens on the backend (VOLLEYSTAT_SIGNUP=open) and deletes afterwards. */
+    private var account: SignedIn? = null
+    private var password: String? = null
 
     /** Uploads the clip and stores the match the way the app itself would have left it. */
     @get:Rule(order = 0) val acceptedMatch = object : ExternalResource() {
@@ -66,15 +68,18 @@ class AppFlowE2eTest {
             val factory = ViewModelProvider.AndroidViewModelFactory::class.java
             factory.declaredFields.single { it.type == factory }.apply { isAccessible = true }.set(null, null)
 
+            val (opened, secret) = TestAccounts.registerOnBackend(url!!)
+            account = opened
+            password = secret
             var session = UploadSession()
-            val check = UploadEngine(ApiClient(url!!)).run(
+            val check = UploadEngine(ApiClient(url, token = opened.token)).run(
                 session, MatchInfo(HOME_TEAM, AWAY_TEAM), "e2e.mp4", "video/mp4", VideoBytes(clip!!.length()) { clip.inputStream() },
                 onSession = { session = it }, onProgress = { _, _, _ -> }, cancelled = { false },
             )
             videoId = check.videoId
             matchId = session.serverMatchId
-            val files = ApplicationProvider.getApplicationContext<Context>().filesDir
-            LocalStore(File(files, "volleystat.json")).save(
+            TestAccounts.seed(
+                ApplicationProvider.getApplicationContext(),
                 StoredState(
                     matches = listOf(
                         MatchRecord(
@@ -83,13 +88,16 @@ class AppFlowE2eTest {
                             session = session, check = check, checkedAtMs = System.currentTimeMillis(),
                         )
                     ),
-                    settings = Settings(serverTarget = ServerTarget.USB_DEVICE, welcomeSeen = true),
-                )
+                ),
+                TestAccounts.sessionOf(opened),
+                TestAccounts.SIGNED_IN_PHONE.copy(serverTarget = ServerTarget.USB_DEVICE),
             )
         }
 
         override fun after() {
-            matchId?.let { runCatching { ApiClient(url!!).deleteMatch(it) } }
+            val opened = account ?: return
+            matchId?.let { runCatching { ApiClient(url!!, token = opened.token).deleteMatch(it) } }
+            TestAccounts.deleteOnBackend(url!!, opened, password!!)
         }
     }
     @get:Rule(order = 1) val app = createAndroidComposeRule<MainActivity>()
@@ -104,7 +112,7 @@ class AppFlowE2eTest {
         // 07: opening the match asks the server for an analysis; the demo job ends in review.
         waitFor(text(R.string.action_start_review))
         app.onNodeWithText(text(R.string.demo_title)).assertIsDisplayed()
-        val job = ApiClient(url!!).latestAnalysis(videoId!!)!!
+        val job = ApiClient(url!!, token = account!!.token).latestAnalysis(videoId!!)!!
         assertEquals(AnalysisSummary.NEEDS_REVIEW, job.state)
         val rallies = job.rallies
         app.onNodeWithText(text(R.string.action_start_review)).performClick()
@@ -121,7 +129,7 @@ class AppFlowE2eTest {
         waitFor(text(R.string.report_verification_done))
         app.onNodeWithText(text(R.string.demo_title)).assertIsDisplayed()
         app.onNodeWithText("$rallies-0").assertIsDisplayed()
-        val report = ApiClient(url).report(requireNotNull(serverMatchId()))!!
+        val report = ApiClient(url, token = account!!.token).report(requireNotNull(serverMatchId()))!!
         assertEquals(rallies, report.home.points.value)
         assertEquals(0, report.away.points.value)
 
@@ -132,7 +140,6 @@ class AppFlowE2eTest {
     }
 
     private fun serverMatchId(): String? {
-        val files = ApplicationProvider.getApplicationContext<Context>().filesDir
-        return LocalStore(File(files, "volleystat.json")).load().matches.single().session.serverMatchId
+        return TestAccounts.space(ApplicationProvider.getApplicationContext(), account!!.user.id).store.load().matches.single().session.serverMatchId
     }
 }

@@ -10,8 +10,11 @@ import com.voleybolveveleybol.volleystat.model.VideoSource
 import java.io.File
 import java.io.InputStream
 
-/** Reads what the phone can know about a chosen video without uploading it. */
-class VideoInspector(private val context: Context) {
+/**
+ * Reads what the phone can know about a chosen video without uploading it. Thumbnails go into the
+ * folder [thumbnails] names when they are made: the signed-in account's own.
+ */
+class VideoInspector(private val context: Context, private val thumbnails: () -> File = { File(context.filesDir, "thumbnails") }) {
 
     fun describeRecording(file: File): LocalVideo? {
         if (!file.isFile || file.length() <= 0) return null
@@ -82,7 +85,7 @@ class VideoInspector(private val context: Context) {
     private fun saveThumbnail(frame: Bitmap?): String? {
         frame ?: return null
         return runCatching {
-            val folder = File(context.filesDir, "thumbnails").apply { mkdirs() }
+            val folder = thumbnails().apply { mkdirs() }
             val target = File(folder, "thumb-${System.nanoTime()}.jpg")
             val scale = 480f / maxOf(frame.width, frame.height).coerceAtLeast(1)
             val small = if (scale < 1f) Bitmap.createScaledBitmap(frame, (frame.width * scale).toInt().coerceAtLeast(1), (frame.height * scale).toInt().coerceAtLeast(1), true) else frame

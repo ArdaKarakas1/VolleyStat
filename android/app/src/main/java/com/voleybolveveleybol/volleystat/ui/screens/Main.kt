@@ -199,7 +199,8 @@ fun HomeScreen(
     onOpenTeams: () -> Unit,
     onOpenGuide: () -> Unit,
 ) {
-    val name = state.settings.displayName.trim()
+    // The name the account gave the server. The phone keeps no name of its own.
+    val name = state.account.user?.displayName?.trim().orEmpty()
     val reports = state.matches.count { it.status == MatchStatus.REPORT_READY || it.status == MatchStatus.NEEDS_REVIEW }
     val players = state.teams.sumOf { it.players.size }
     // What needs the user now: unfinished uploads, rejected files, analysis in progress, open reviews.
@@ -210,6 +211,8 @@ fun HomeScreen(
             style = MaterialTheme.typography.headlineSmall, modifier = Modifier.semantics { heading() },
         )
         if (state.saveFailed) Notice(stringResource(R.string.store_save_failed), Tone.NEGATIVE)
+        // The operator reset the password: the app suggests a new one (design 3.4).
+        if (state.account.user?.passwordTemporary == true) Notice(stringResource(R.string.password_temporary), Tone.CAUTION)
         NewMatchCard(onNewMatch)
         if (state.draft.started || attention.isNotEmpty()) {
             SectionTitle(stringResource(R.string.home_section_now))
@@ -310,16 +313,29 @@ private fun PrivacyLine(text: String, icon: Int) {
     }
 }
 
+/** What the account rows of the profile ask for. Each change goes to the server first. */
+class ProfileAccountActions(
+    val onChangeDisplayName: (String) -> Unit = {},
+    /** Opens Şifreyi Değiştir. */
+    val onOpenPasswordChange: () -> Unit = {},
+    /** True: leave on this phone although the server did not confirm the logout. */
+    val onLogout: (evenWithoutAnswer: Boolean) -> Unit = {},
+    /** Opens Hesabı Sil. */
+    val onOpenDeletion: () -> Unit = {},
+    /** A new action starts without the outcome of the last one. */
+    val onClearProblem: () -> Unit = {},
+)
+
 @Composable
 fun ProfileScreen(
     state: AppUiState,
     versionName: String,
-    onDisplayName: (String) -> Unit,
     onServerTarget: (ServerTarget) -> Unit,
     onTestServer: () -> Unit,
     onDeleteRecording: (String) -> Unit,
     // Opens the mail app; false when the phone has none.
     onSendFeedback: () -> Boolean,
+    account: ProfileAccountActions = ProfileAccountActions(),
 ) {
     var recordingToDelete by rememberSaveable { mutableStateOf<String?>(null) }
     var noMailApp by rememberSaveable { mutableStateOf(false) }
@@ -331,16 +347,7 @@ fun ProfileScreen(
                 Text(stringResource(R.string.brand_name), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        VsCard {
-            OutlinedTextField(
-                value = state.settings.displayName, onValueChange = onDisplayName,
-                label = { Text(stringResource(R.string.profile_name)) },
-                supportingText = { Text(stringResource(R.string.profile_name_hint)) },
-                singleLine = true, modifier = Modifier.fillMaxWidth(),
-                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words, imeAction = ImeAction.Done),
-            )
-        }
-
+        state.account.user?.let { user -> AccountSection(state, user, account) }
         SectionTitle(stringResource(R.string.profile_today))
         VsCard {
             FeatureRow(stringResource(R.string.feature_match), true)
@@ -358,6 +365,9 @@ fun ProfileScreen(
                 PrivacyLine(stringResource(R.string.privacy_server), R.drawable.ic_smartphone)
                 PrivacyLine(stringResource(R.string.roster_privacy), R.drawable.ic_groups)
                 PrivacyLine(stringResource(R.string.privacy_accounts), R.drawable.ic_lock)
+                PrivacyLine(stringResource(R.string.privacy_matches_open), R.drawable.ic_warning)
+                PrivacyLine(stringResource(R.string.privacy_phone_accounts), R.drawable.ic_person)
+                PrivacyLine(stringResource(R.string.privacy_session), R.drawable.ic_shield)
                 PrivacyLine(stringResource(R.string.privacy_retention), R.drawable.ic_schedule)
                 PrivacyLine(stringResource(R.string.privacy_delete), R.drawable.ic_delete)
                 PrivacyLine(stringResource(R.string.privacy_faces), R.drawable.ic_person)
@@ -366,41 +376,7 @@ fun ProfileScreen(
             }
         }
 
-        SectionTitle(stringResource(R.string.profile_server))
-        if (!state.serverConfigured) {
-            Notice(stringResource(R.string.server_none), Tone.NEUTRAL)
-        } else {
-            VsCard {
-                listOf(
-                    Triple(ServerTarget.EMULATOR, R.string.server_emulator, R.string.server_emulator_body),
-                    Triple(ServerTarget.USB_DEVICE, R.string.server_usb, R.string.server_usb_body),
-                ).forEach { (target, title, body) ->
-                    val selected = state.settings.serverTarget == target
-                    Row(
-                        Modifier.fillMaxWidth().heightIn(min = 56.dp).selectable(selected = selected, role = Role.RadioButton, onClick = { onServerTarget(target) }),
-                        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        RadioButton(selected = selected, onClick = null)
-                        Column(Modifier.weight(1f).padding(vertical = 6.dp)) {
-                            Text(stringResource(title), style = MaterialTheme.typography.titleSmall)
-                            Text(stringResource(body), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                }
-                Spacer(Modifier.height(12.dp))
-                SecondaryButton(stringResource(R.string.action_test_server), onTestServer, enabled = state.serverTest != ServerTest.TESTING)
-                when (state.serverTest) {
-                    ServerTest.IDLE -> Unit
-                    ServerTest.TESTING -> Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                        Text(stringResource(R.string.server_testing), style = MaterialTheme.typography.bodyMedium)
-                    }
-                    ServerTest.OK -> Notice(stringResource(R.string.server_ok), Tone.POSITIVE, Modifier.padding(top = 12.dp))
-                    ServerTest.OK_NO_PROBE -> Notice(stringResource(R.string.server_ok_no_probe), Tone.CAUTION, Modifier.padding(top = 12.dp))
-                    ServerTest.UNREACHABLE -> Notice(stringResource(R.string.server_unreachable), Tone.NEGATIVE, Modifier.padding(top = 12.dp))
-                }
-            }
-        }
+        ServerSection(state, onServerTarget, onTestServer)
 
         SectionTitle(stringResource(R.string.profile_recordings))
         VsCard {
@@ -448,5 +424,49 @@ fun ProfileScreen(
             confirmButton = { TextButton(onClick = { onDeleteRecording(pending.path); recordingToDelete = null }) { Text(stringResource(R.string.action_delete)) } },
             dismissButton = { TextButton(onClick = { recordingToDelete = null }) { Text(stringResource(R.string.action_give_up)) } },
         )
+    }
+}
+
+/**
+ * The server this debug build talks to, and a test of it. The login and register screens show it
+ * too, so a phone on USB can reach its server before anyone is signed in. A build without a server
+ * address says so.
+ */
+@Composable
+fun ServerSection(state: AppUiState, onServerTarget: (ServerTarget) -> Unit, onTestServer: () -> Unit) {
+    SectionTitle(stringResource(R.string.profile_server))
+    if (!state.serverConfigured) {
+        Notice(stringResource(R.string.server_none), Tone.NEUTRAL)
+    } else {
+        VsCard {
+            listOf(
+                Triple(ServerTarget.EMULATOR, R.string.server_emulator, R.string.server_emulator_body),
+                Triple(ServerTarget.USB_DEVICE, R.string.server_usb, R.string.server_usb_body),
+            ).forEach { (target, title, body) ->
+                val selected = state.settings.serverTarget == target
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = 56.dp).selectable(selected = selected, role = Role.RadioButton, onClick = { onServerTarget(target) }),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    RadioButton(selected = selected, onClick = null)
+                    Column(Modifier.weight(1f).padding(vertical = 6.dp)) {
+                        Text(stringResource(title), style = MaterialTheme.typography.titleSmall)
+                        Text(stringResource(body), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            SecondaryButton(stringResource(R.string.action_test_server), onTestServer, enabled = state.serverTest != ServerTest.TESTING)
+            when (state.serverTest) {
+                ServerTest.IDLE -> Unit
+                ServerTest.TESTING -> Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Text(stringResource(R.string.server_testing), style = MaterialTheme.typography.bodyMedium)
+                }
+                ServerTest.OK -> Notice(stringResource(R.string.server_ok), Tone.POSITIVE, Modifier.padding(top = 12.dp))
+                ServerTest.OK_NO_PROBE -> Notice(stringResource(R.string.server_ok_no_probe), Tone.CAUTION, Modifier.padding(top = 12.dp))
+                ServerTest.UNREACHABLE -> Notice(stringResource(R.string.server_unreachable), Tone.NEGATIVE, Modifier.padding(top = 12.dp))
+            }
+        }
     }
 }

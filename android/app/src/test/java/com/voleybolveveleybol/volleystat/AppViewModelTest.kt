@@ -3,7 +3,6 @@ package com.voleybolveveleybol.volleystat
 import android.app.Application
 import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
-import com.voleybolveveleybol.volleystat.data.LocalStore
 import com.voleybolveveleybol.volleystat.data.StoredState
 import com.voleybolveveleybol.volleystat.model.Draft
 import com.voleybolveveleybol.volleystat.model.LocalVideo
@@ -140,8 +139,9 @@ class AppViewModelTest {
         check = VideoCheck("video-$id", VideoCheck.READY, null, null, null, null, null, null, emptyList()),
     )
 
+    /** A view model of a phone where an account is signed in and holds [stored]. */
     private fun viewModel(stored: StoredState): AppViewModel {
-        LocalStore(File(context.filesDir, "volleystat.json")).save(stored)
+        TestAccounts.seed(context, stored)
         return AppViewModel(context).also { it.baseUrlOverride = server.url("/v1").toString() }
     }
 
@@ -266,7 +266,7 @@ class AppViewModelTest {
     }
 
     @Test fun aRecordingTheDraftOrAnUnfinishedUploadReadsFromIsNotDeleted() {
-        val folder = File(context.filesDir, "recordings").apply { mkdirs() }
+        val folder = TestAccounts.space(context).recordings.apply { mkdirs() }
         val ofDraft = File(folder, "kayit-1.mp4").apply { writeBytes(ByteArray(10)) }
         val ofUpload = File(folder, "kayit-2.mp4").apply { writeBytes(ByteArray(10)) }
         val free = File(folder, "kayit-3.mp4").apply { writeBytes(ByteArray(10)) }
@@ -362,7 +362,7 @@ class AppViewModelTest {
     }
 
     @Test fun removingAMatchWhileItsUploadRunsStopsTheUploadAndThenDeletesTheMatchThePhoneCreated() {
-        val file = File(File(context.filesDir, "recordings").apply { mkdirs() }, "kayit-9.mp4").apply { writeBytes(ByteArray(10) { it.toByte() }) }
+        val file = File(TestAccounts.space(context).recordings.apply { mkdirs() }, "kayit-9.mp4").apply { writeBytes(ByteArray(10) { it.toByte() }) }
         val chunkArrived = CountDownLatch(1)
         val answerChunk = CountDownLatch(1)
         on("GET /health") { ok(JSONObject().put("status", "ok").put("mediaProbe", "available").put("maxVideoBytes", 1_000_000)) }

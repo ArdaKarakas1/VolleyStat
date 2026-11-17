@@ -69,7 +69,7 @@ jobs:
       - name: Start the backend with the demo analyzer
         working-directory: backend
         run: |
-          VOLLEYSTAT_STORAGE="$RUNNER_TEMP/storage" nohup python -m app --port 8000 --analyzer demo > "$RUNNER_TEMP/backend.log" 2>&1 &
+          VOLLEYSTAT_SIGNUP=open VOLLEYSTAT_STORAGE="$RUNNER_TEMP/storage" nohup python -m app --port 8000 --analyzer demo > "$RUNNER_TEMP/backend.log" 2>&1 &
           for attempt in $(seq 1 30); do curl -sf http://127.0.0.1:8000/v1/health > /dev/null && break; sleep 1; done
           curl -sf http://127.0.0.1:8000/v1/health
       - name: End-to-end tests
@@ -79,7 +79,7 @@ jobs:
           VOLLEYSTAT_E2E_VIDEO: ${{ runner.temp }}/clip.mp4
         run: ./gradlew --no-daemon :app:testDebugUnitTest --tests '*E2eTest*'
       - name: The end-to-end tests must have run, not skipped
-        run: python tools/require_tests_ran.py android/app/build/test-results/testDebugUnitTest 11
+        run: python tools/require_tests_ran.py android/app/build/test-results/testDebugUnitTest 15
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -109,7 +109,7 @@ jobs:
       - name: Start the backend with the demo analyzer
         working-directory: backend
         run: |
-          VOLLEYSTAT_STORAGE="$RUNNER_TEMP/storage" nohup python -m app --port 8000 --analyzer demo > "$RUNNER_TEMP/backend.log" 2>&1 &
+          VOLLEYSTAT_SIGNUP=open VOLLEYSTAT_STORAGE="$RUNNER_TEMP/storage" nohup python -m app --port 8000 --analyzer demo > "$RUNNER_TEMP/backend.log" 2>&1 &
           for attempt in $(seq 1 30); do curl -sf http://127.0.0.1:8000/v1/health > /dev/null && break; sleep 1; done
           curl -sf http://127.0.0.1:8000/v1/health
       - name: Let the emulator use hardware acceleration
