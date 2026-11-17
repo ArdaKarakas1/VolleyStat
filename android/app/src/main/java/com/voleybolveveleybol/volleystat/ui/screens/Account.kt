@@ -40,10 +40,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -73,6 +75,7 @@ import com.voleybolveveleybol.volleystat.AppUiState
 import com.voleybolveveleybol.volleystat.AppViewModel
 import com.voleybolveveleybol.volleystat.LegacyQuestion
 import com.voleybolveveleybol.volleystat.R
+import com.voleybolveveleybol.volleystat.UnconfirmedDeletion
 import com.voleybolveveleybol.volleystat.data.AccountUser
 import com.voleybolveveleybol.volleystat.data.AttemptScope
 import com.voleybolveveleybol.volleystat.data.AuthProblem
@@ -188,6 +191,20 @@ private fun autofillCommit(): () -> Unit {
 }
 
 /**
+ * What leaving a form without the server's word does for the autofill service. Unset, it cancels
+ * the platform's autofill session, so a password the server refused is never offered for saving.
+ * A test counts the cancels through this.
+ */
+val LocalAutofillCancel = staticCompositionLocalOf<(() -> Unit)?> { null }
+
+@Composable
+private fun autofillCancel(): () -> Unit {
+    val override = LocalAutofillCancel.current
+    val manager = LocalAutofillManager.current
+    return override ?: { manager?.cancel() }
+}
+
+/**
  * The frame of the account screens: an optional back arrow, scrolling content and the actions at
  * the bottom. A refusal of the server ([problem]) stands at the top of the content, and the content
  * scrolls up to it when it appears: in the bottom bar a long text would leave a small phone with
@@ -238,12 +255,16 @@ private fun AccountScaffold(
     }
 }
 
-/** "The app waits for the server's answer", while an account call is on its way. */
+/**
+ * "The app waits for the server's answer", while an account call is on its way. While the app
+ * waits out a SERVER_BUSY answer before its next try ([retrying]), the line says that instead:
+ * the answer already came (review finding T5).
+ */
 @Composable
-fun AccountWaiting(modifier: Modifier = Modifier) {
+fun AccountWaiting(retrying: Boolean, modifier: Modifier = Modifier) {
     Row(modifier.fillMaxWidth().announced(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-        Text(stringResource(R.string.account_waiting), style = MaterialTheme.typography.bodyMedium)
+        Text(stringResource(if (retrying) R.string.server_busy else R.string.account_waiting), style = MaterialTheme.typography.bodyMedium)
     }
 }
 
@@ -251,7 +272,7 @@ fun AccountWaiting(modifier: Modifier = Modifier) {
 @Composable
 fun AccountOutcome(account: AccountUi, action: AccountAction, modifier: Modifier = Modifier) {
     when {
-        account.busy -> AccountWaiting(modifier)
+        account.busy -> AccountWaiting(account.retryingAfterBusy, modifier)
         account.problem != null -> Notice(accountProblemMessage(account.problem, action), Tone.NEGATIVE, modifier.announced())
     }
 }
@@ -353,6 +374,7 @@ fun LoginScreen(
     server: @Composable () -> Unit = {},
     initialUsername: String = "",
     initialPassword: String = "",
+    onDeletePhoneData: () -> Unit = {},
 ) {
     var username by rememberSaveable { mutableStateOf(initialUsername) }
     // Never saved into the instance state: the password lives in memory only, until the screen goes.
@@ -369,20 +391,53 @@ fun LoginScreen(
         title = stringResource(R.string.action_login), onBack = onBack,
         problem = account.problem?.let { accountProblemMessage(it, AccountAction.LOGIN) },
         actions = {
-            if (account.busy) AccountWaiting()
+            if (account.busy) AccountWaiting(account.retryingAfterBusy)
             PrimaryButton(stringResource(R.string.action_login), submit, enabled = ready)
             SecondaryButton(stringResource(R.string.action_create_account), onCreateAccount, enabled = !account.busy)
         },
     ) {
+        account.unconfirmedDeletion?.let { UnconfirmedDeletionCard(it, enabled = !account.busy, onDelete = onDeletePhoneData) }
         when {
             account.sessionEnded -> Notice(stringResource(R.string.session_ended), Tone.CAUTION, Modifier.announced())
             account.confirmed == AccountChange.DELETED -> Notice(stringResource(R.string.account_deleted), Tone.POSITIVE, Modifier.announced())
+            account.confirmed == AccountChange.PHONE_DATA_DELETED -> Notice(stringResource(R.string.phone_data_deleted), Tone.POSITIVE, Modifier.announced())
         }
         Text(stringResource(R.string.login_intro), style = MaterialTheme.typography.bodyMedium)
         if (!serverConfigured) Notice(stringResource(R.string.server_none), Tone.NEUTRAL)
         AccountField(username, { username = it }, stringResource(R.string.field_username), ContentType.Username, keyboardType = KeyboardType.Ascii)
         PasswordField(password, { password = it }, stringResource(R.string.field_password), ContentType.Password, imeAction = ImeAction.Go, onDone = submit)
         if (serverConfigured) server()
+    }
+}
+
+/**
+ * A deletion whose answer was lost, after its session left the phone (review finding S1). The text
+ * says what the app does not know. Telefondan Sil asks once more and then deletes only the phone's
+ * data of that account; the server is not asked.
+ */
+@Composable
+private fun UnconfirmedDeletionCard(doubt: UnconfirmedDeletion, enabled: Boolean, onDelete: () -> Unit) {
+    var confirming by rememberSaveable { mutableStateOf(false) }
+    val label = stringResource(R.string.action_delete_from_phone)
+    Notice(stringResource(R.string.deletion_unconfirmed, doubt.username, label), Tone.CAUTION, Modifier.announced())
+    TextButton(
+        onClick = { confirming = true }, enabled = enabled,
+        modifier = Modifier.fillMaxWidth().heightIn(min = Dimens.touchTarget),
+        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+    ) { Text(label, style = MaterialTheme.typography.labelLarge) }
+    if (confirming) {
+        AlertDialog(
+            onDismissRequest = { confirming = false },
+            title = { Text(stringResource(R.string.delete_from_phone_title)) },
+            text = { Text(stringResource(R.string.delete_from_phone_body, doubt.username), style = MaterialTheme.typography.bodyMedium) },
+            confirmButton = {
+                TextButton(
+                    onClick = { confirming = false; onDelete() }, enabled = enabled,
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                ) { Text(label) }
+            },
+            dismissButton = { TextButton(onClick = { confirming = false }) { Text(stringResource(R.string.action_give_up)) } },
+        )
     }
 }
 
@@ -436,7 +491,7 @@ fun RegisterScreen(
         title = stringResource(R.string.action_create_account), onBack = onBack,
         problem = account.problem?.let { accountProblemMessage(it, AccountAction.REGISTER) },
         actions = {
-            if (account.busy) AccountWaiting()
+            if (account.busy) AccountWaiting(account.retryingAfterBusy)
             PrimaryButton(stringResource(R.string.action_create_account), submit, enabled = ready)
             SecondaryButton(stringResource(R.string.action_have_account), onHaveAccount, enabled = !account.busy)
         },
@@ -479,19 +534,18 @@ fun RegisterScreen(
 
 /**
  * The question of the first login about the data app 0.7 kept without an account (design 10.3).
- * It lists what would move; one answer, and the buttons wait for it to land.
+ * It lists what would move; one answer, and the buttons wait for it to land. [moving] is the view
+ * model's word that an answer is on its way, so a move that did not reach the disk gives the
+ * buttons back each time it fails (review finding F4).
  */
 @Composable
-fun LegacyScreen(question: LegacyQuestion, saveFailed: Boolean, onAnswer: (move: Boolean) -> Unit) {
-    var answering by remember { mutableStateOf(false) }
-    // A move that did not reach the disk leaves the question open: the user may answer again.
-    LaunchedEffect(saveFailed) { if (saveFailed) answering = false }
+fun LegacyScreen(question: LegacyQuestion, saveFailed: Boolean, moving: Boolean, onAnswer: (move: Boolean) -> Unit) {
     AccountScaffold(
         title = stringResource(R.string.legacy_title), onBack = null,
         actions = {
             if (saveFailed) Notice(stringResource(R.string.store_save_failed), Tone.NEGATIVE, Modifier.announced())
-            PrimaryButton(stringResource(R.string.legacy_move), { answering = true; onAnswer(true) }, enabled = !answering)
-            SecondaryButton(stringResource(R.string.legacy_keep), { answering = true; onAnswer(false) }, enabled = !answering)
+            PrimaryButton(stringResource(R.string.legacy_move), { onAnswer(true) }, enabled = !moving)
+            SecondaryButton(stringResource(R.string.legacy_keep), { onAnswer(false) }, enabled = !moving)
         },
     ) {
         Text(stringResource(R.string.legacy_body), style = MaterialTheme.typography.bodyMedium)
@@ -501,7 +555,7 @@ fun LegacyScreen(question: LegacyQuestion, saveFailed: Boolean, onAnswer: (move:
                     SectionTitle(pluralStringResource(R.plurals.count_matches, question.titles.size, question.titles.size))
                     question.titles.forEach { Text(it, style = MaterialTheme.typography.bodyMedium) }
                 }
-                if (question.teams > 0) Text(stringResource(R.string.legacy_teams, question.teams), style = MaterialTheme.typography.bodyMedium)
+                if (question.teams > 0) Text(pluralStringResource(R.plurals.legacy_teams, question.teams, question.teams), style = MaterialTheme.typography.bodyMedium)
                 if (question.recordings > 0) Text(stringResource(R.string.legacy_recordings, question.recordings), style = MaterialTheme.typography.bodyMedium)
                 if (question.draft) Text(stringResource(R.string.legacy_draft), style = MaterialTheme.typography.bodyMedium)
             }
@@ -606,16 +660,33 @@ private fun DangerButton(text: String, onClick: () -> Unit, enabled: Boolean) {
     ) { Text(text, style = MaterialTheme.typography.labelLarge, textAlign = TextAlign.Center) }
 }
 
-/** Şifreyi Değiştir: the current password and a new one. The screen closes once the server confirmed the change. */
+/**
+ * Şifreyi Değiştir: the current password and a new one. The screen closes once the server confirmed
+ * the change. The password manager hears of the new password only then: the server can refuse a
+ * password the app can not check in advance (a common one, say), and a refused password must never
+ * be offered for saving (review finding S6). The username field, read-only, tells the password
+ * manager which entry the new password belongs to.
+ */
 @Composable
 fun PasswordChangeScreen(account: AccountUi, onChange: (current: String, new: String) -> Unit, onBack: () -> Unit) {
     var current by remember { mutableStateOf("") }
     var new by remember { mutableStateOf("") }
-    val commitAutofill = autofillCommit()
+    // Only a change this screen sent may commit the autofill, and only once.
+    var sent by remember { mutableStateOf(false) }
+    var committed by remember { mutableStateOf(false) }
+    val commitAutofill by rememberUpdatedState(autofillCommit())
+    val cancelAutofill by rememberUpdatedState(autofillCancel())
+    LaunchedEffect(account.confirmed) {
+        if (sent && !committed && account.confirmed == AccountChange.PASSWORD) {
+            committed = true
+            commitAutofill()
+        }
+    }
+    DisposableEffect(Unit) { onDispose { if (!committed) cancelAutofill() } }
     val ready = current.isNotEmpty() && new.isNotEmpty() && !account.busy
     val submit = {
         if (ready) {
-            commitAutofill()
+            sent = true
             onChange(current, new)
         }
     }
@@ -623,11 +694,18 @@ fun PasswordChangeScreen(account: AccountUi, onChange: (current: String, new: St
         title = stringResource(R.string.action_change_password), onBack = onBack,
         problem = account.problem?.let { accountProblemMessage(it, AccountAction.PASSWORD) },
         actions = {
-            if (account.busy) AccountWaiting()
+            if (account.busy) AccountWaiting(account.retryingAfterBusy)
             PrimaryButton(stringResource(R.string.action_change_password), submit, enabled = ready)
         },
     ) {
         Text(stringResource(R.string.password_change_body), style = MaterialTheme.typography.bodyMedium)
+        account.user?.let { user ->
+            OutlinedTextField(
+                value = user.username, onValueChange = {}, readOnly = true, singleLine = true,
+                label = { Text(stringResource(R.string.field_username)) },
+                modifier = Modifier.fillMaxWidth().semantics { contentType = ContentType.Username },
+            )
+        }
         PasswordField(current, { current = it }, stringResource(R.string.field_current_password), ContentType.Password, imeAction = ImeAction.Next)
         PasswordField(new, { new = it }, stringResource(R.string.field_new_password), ContentType.NewPassword, supporting = stringResource(R.string.register_password_hint), onDone = submit)
     }
@@ -645,7 +723,7 @@ fun DeleteAccountScreen(account: AccountUi, serverMatches: Int, onDelete: (passw
         title = stringResource(R.string.action_delete_account), onBack = onBack,
         problem = account.problem?.let { accountProblemMessage(it, AccountAction.DELETE) },
         actions = {
-            if (account.busy) AccountWaiting()
+            if (account.busy) AccountWaiting(account.retryingAfterBusy)
             DangerButton(stringResource(R.string.action_delete_account), { if (ready) onDelete(password) }, enabled = ready)
         },
     ) {

@@ -2,6 +2,7 @@ package com.voleybolveveleybol.volleystat.ui
 
 import android.app.Application
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
@@ -28,6 +29,7 @@ import com.voleybolveveleybol.volleystat.data.StoredState
 import com.voleybolveveleybol.volleystat.model.LocalVideo
 import com.voleybolveveleybol.volleystat.model.MatchRecord
 import com.voleybolveveleybol.volleystat.model.Settings
+import com.voleybolveveleybol.volleystat.model.Team
 import com.voleybolveveleybol.volleystat.model.UploadSession
 import com.voleybolveveleybol.volleystat.model.VideoSource
 import org.junit.After
@@ -263,5 +265,94 @@ class AccountFlowTest {
         waitFor(greeting(TestAccounts.SESSION.displayName))
         tap(R.string.nav_matches)
         waitFor("Birinci Hesabın Maçı")
+    }
+
+    // ----- review findings F4, F8 and F9 -----
+
+    @Test fun aMoveOfTheOldDataThatFailsTwiceCanStillBeTriedAgain() {
+        TestAccounts.device(context, Settings(welcomeSeen = true, accountSeen = true))
+        LocalStore(File(context.filesDir, "volleystat.json")).save(StoredState(teams = listOf(Team("t-old", "Eski Takım"))))
+        standIn.add("ali", "Ali Yılmaz", PASSWORD, id = "user-ali")
+        // A file stands where the account's folder would be, so nothing can be written into it.
+        val blocker = File(context.filesDir, "accounts/user-ali").apply { parentFile!!.mkdirs(); writeText("") }
+        launch()
+        logIn("ali")
+        waitFor(text(R.string.legacy_body))
+        repeat(2) { attempt ->
+            button(R.string.legacy_move).performClick()
+            waitFor(text(R.string.store_save_failed))
+            // Each failed move gives the buttons back, the second one too.
+            compose.waitUntil(5_000) { runCatching { button(R.string.legacy_move).assertIsEnabled() }.isSuccess }
+            button(R.string.legacy_keep).assertIsEnabled()
+            assertTrue("attempt $attempt left the old data where it is", File(context.filesDir, "volleystat.json").exists())
+        }
+        blocker.delete()
+        button(R.string.legacy_move).performClick()
+        waitFor(greeting("Ali Yılmaz"))
+        tap(R.string.nav_teams)
+        waitFor("Eski Takım")
+    }
+
+    @Test fun aRefusedLoginWhoseAnswerArrivesAfterTheScreenWasRecreatedIsStillShown() {
+        TestAccounts.device(context, Settings(welcomeSeen = true, accountSeen = true, legacyHandled = true))
+        standIn.add("ali", "Ali Yılmaz", PASSWORD)
+        val held = java.util.concurrent.CountDownLatch(1)
+        standIn.hold["POST /auth/login"] = held
+        val before = launch()
+        logIn("ali", "yanlış bir şifre")
+        compose.waitUntil(10_000) { standIn.requests.any { it.first == "POST /auth/login" } }
+        // A dark theme switch, a language change or a larger font recreates the screen while the answer is on its way.
+        scenario!!.recreate()
+        lateinit var after: AppViewModel
+        scenario!!.onActivity { after = ViewModelProvider(it)[AppViewModel::class.java] }
+        assertTrue("the screen came back to the same view model", before === after)
+        held.countDown()
+        waitFor(text(R.string.login_failed))
+        compose.onNodeWithText(text(R.string.login_intro)).assertIsDisplayed()
+    }
+
+    @Test fun leavingTheLoginStopsTheRepeatsOfABusyServer() {
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        standIn.add("ali", "Ali Yılmaz", PASSWORD)
+        standIn.answers["POST /auth/login"] = { standIn.busy(1) }
+        launch()
+        tap(R.string.action_login)
+        logIn("ali")
+        compose.waitUntil(10_000) { standIn.requests.count { it.first == "POST /auth/login" } == 1 }
+        scenario!!.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+        compose.onNodeWithText(text(R.string.start_body)).assertIsDisplayed()
+        // The server asked for a wait of one second. The screen that sent the login is gone, so no repeat goes out.
+        Thread.sleep(1_800)
+        compose.waitForIdle()
+        assertEquals(1, standIn.requests.count { it.first == "POST /auth/login" })
+    }
+
+    /** Review finding T5: while the app waits out the server's Retry-After, the login says the server is busy, then logs in. */
+    @Test fun aLoginThatMeetsABusyServerSaysSoWhileTheAppWaitsToSendItAgain() {
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        standIn.add("ali", "Ali Yılmaz", PASSWORD)
+        standIn.answers["POST /auth/login"] = { standIn.answers.remove("POST /auth/login"); standIn.busy(2) }
+        launch()
+        tap(R.string.action_login)
+        logIn("ali")
+        waitFor(text(R.string.server_busy))
+        assertFalse(shown(text(R.string.account_waiting)))
+        waitFor(greeting("Ali Yılmaz"))
+        assertEquals(2, standIn.requests.count { it.first == "POST /auth/login" })
+        assertFalse(shown(text(R.string.server_busy)))
+    }
+
+    @Test fun aConfirmedPasswordChangeClosesItsScreenAndTheProfileSaysSo() {
+        standIn.add(TestAccounts.SESSION.username, TestAccounts.SESSION.displayName, PASSWORD, token = TestAccounts.SESSION.token, id = TestAccounts.SESSION.userId)
+        TestAccounts.seed(context)
+        launch()
+        tap(R.string.nav_profile)
+        button(R.string.action_change_password).performScrollTo().performClick()
+        field(R.string.field_current_password).performTextInput(PASSWORD)
+        field(R.string.field_new_password).performTextInput("yeni ve uzun şifre 77")
+        button(R.string.action_change_password).performClick()
+        waitFor(text(R.string.password_changed))
+        compose.onNodeWithText(text(R.string.profile_account)).assertIsDisplayed()
+        assertFalse("the password screen closed", shown(text(R.string.field_current_password)))
     }
 }

@@ -3,7 +3,11 @@ package com.voleybolveveleybol.volleystat.data
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import java.security.GeneralSecurityException
+import java.security.InvalidKeyException
 import java.security.KeyStore
+import java.security.KeyStoreException
+import java.security.ProviderException
+import java.security.UnrecoverableKeyException
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -60,11 +64,42 @@ open class AesGcmCipher(private val key: () -> SecretKey) : SessionCipher {
 /**
  * The app's cipher: an AES-256 key that AndroidKeyStore creates on first use and never lets out of
  * the keystore. Uninstalling the app deletes the key; files sealed with it then read as nothing.
+ *
+ * A key the keystore can no longer use (a corrupted key blob after a system update, say) is deleted
+ * and made again once, and the call is tried again with the new key (review finding S3). Files
+ * sealed with the old key then read as nothing: the user logs in again and gets a new device token.
+ * A keystore that is only busy keeps its key; the call is tried once more and otherwise fails alone.
  */
-class KeystoreSessionCipher(alias: String = KEY_ALIAS) : AesGcmCipher({ keystoreKey(alias) }) {
+class KeystoreSessionCipher(private val alias: String = KEY_ALIAS) : SessionCipher {
+    private val aes = AesGcmCipher { keystoreKey(alias) }
+
+    override fun seal(plain: ByteArray): ByteArray = withUsableKey { aes.seal(plain) }
+
+    override fun open(sealed: ByteArray): ByteArray = withUsableKey { aes.open(sealed) }
+
+    private fun <T> withUsableKey(operation: () -> T): T = synchronized(Companion) {
+        try {
+            operation()
+        } catch (error: Exception) {
+            when (error) {
+                // getKey can no longer read the key, or the cipher refuses it (KeyPermanentlyInvalidatedException is one of these).
+                is UnrecoverableKeyException, is InvalidKeyException -> {
+                    discard(alias)
+                    operation()
+                }
+                is KeyStoreException, is ProviderException -> operation()
+                else -> throw error
+            }
+        }
+    }
+
     companion object {
         const val KEY_ALIAS = "volleystat-session-key"
         private const val PROVIDER = "AndroidKeyStore"
+
+        private fun discard(alias: String) {
+            KeyStore.getInstance(PROVIDER).apply { load(null) }.deleteEntry(alias)
+        }
 
         @Synchronized
         private fun keystoreKey(alias: String): SecretKey {

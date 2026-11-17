@@ -136,7 +136,7 @@ class RallyFixE2eTest {
     @Test fun ralliesAreMovedSplitMergedAndAddedThroughTheScreens() {
         app.setContent {
             // The real player seeks to the start it is given. The stand-in does the same.
-            VolleyStatTheme { VolleyStatApp(editorVideo = { _, startMs -> remember { control.positionMs = startMs; control.video } }) }
+            VolleyStatTheme { VolleyStatApp(editorVideo = { _, startMs, _ -> remember { control.positionMs = startMs; control.video } }) }
         }
         val api = ApiClient(url!!, token = account!!.token)
         app.onAllNodesWithText(text(R.string.nav_matches)).onFirst().performClick()
@@ -229,7 +229,7 @@ class RallyFixE2eTest {
     }
 
     @Test fun theRuleChangesFromTheListAndAChangeMadeMeanwhileIsCaught() {
-        app.setContent { VolleyStatTheme { VolleyStatApp(editorVideo = { _, startMs -> remember { control.positionMs = startMs; control.video } }) } }
+        app.setContent { VolleyStatTheme { VolleyStatApp(editorVideo = { _, startMs, _ -> remember { control.positionMs = startMs; control.video } }) } }
         val api = ApiClient(url!!, token = account!!.token)
         app.onAllNodesWithText(text(R.string.nav_matches)).onFirst().performClick()
         app.onNodeWithText("$HOME_TEAM - $AWAY_TEAM").performClick()

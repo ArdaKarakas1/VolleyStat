@@ -29,7 +29,7 @@ class DeviceStore(private val file: File, private val legacy: File) {
     @Synchronized
     fun save(settings: Settings) {
         val json = JSONObject().put("version", 1).put("serverTarget", settings.serverTarget.name).put("welcomeSeen", settings.welcomeSeen)
-            .put("accountSeen", settings.accountSeen).put("legacyHandled", settings.legacyHandled)
+            .put("accountSeen", settings.accountSeen).put("legacyHandled", settings.legacyHandled).putOpt("legacyAskedUser", settings.legacyAskedUser)
         replaceAtomically(file, json.toString().toByteArray(Charsets.UTF_8))
     }
 
@@ -38,6 +38,7 @@ class DeviceStore(private val file: File, private val legacy: File) {
         welcomeSeen = json.optBoolean("welcomeSeen", false),
         accountSeen = json.optBoolean("accountSeen", false),
         legacyHandled = json.optBoolean("legacyHandled", false),
+        legacyAskedUser = json.optString("legacyAskedUser").ifEmpty { null },
     )
 
     private fun target(name: String) = runCatching { ServerTarget.valueOf(name) }.getOrDefault(ServerTarget.EMULATOR)

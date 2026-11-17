@@ -3,6 +3,7 @@ package com.voleybolveveleybol.volleystat
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.os.Build
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -158,8 +159,13 @@ private val tabs = listOf(
 @Composable
 fun VolleyStatApp(
     viewModel: AppViewModel = viewModel(),
-    /** The video of the range editor. A test puts a stand-in here, because no player runs in a test. */
-    editorVideo: @Composable (url: String, startMs: Long) -> EditorVideo = { url, startMs -> rememberEditorVideo(url, startMs, viewModel.playbackHeaders()) },
+    /**
+     * The video of the range editor, read with [headers] on every request. A test puts a stand-in
+     * here, because no player runs in a test, and sees what the player would be given.
+     */
+    editorVideo: @Composable (url: String, startMs: Long, headers: Map<String, String>) -> EditorVideo = { url, startMs, headers -> rememberEditorVideo(url, startMs, headers) },
+    /** The clip of a review card, read with [headers] on every request. A test puts a stand-in here, as for [editorVideo]. */
+    clipPlayer: @Composable (url: String, startMs: Long, endMs: Long, headers: Map<String, String>) -> Unit = { url, startMs, endMs, headers -> ClipPlayer(url, startMs, endMs, headers) },
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val analysis by viewModel.analysis.collectAsStateWithLifecycle()
@@ -273,7 +279,8 @@ fun VolleyStatApp(
                 }
             },
             onBack = { nav.popBackStack() },
-            clip = { card -> ClipPlayer(url, card.clipStartMs, card.clipEndMs, viewModel.playbackHeaders()) },
+            // The session goes with every request of the player, in a header (design 10.5).
+            clip = { card -> clipPlayer(url, card.clipStartMs, card.clipEndMs, viewModel.playbackHeaders()) },
             onRetry = { viewModel.retryReview(match.localId, atRally.takeIf { !opened }) },
             onFixRally = { card -> go(Routes.rally(match.localId, card.rallyId)) },
             // The list may already be below, when this review was opened from it. Going back to it keeps the
@@ -312,7 +319,7 @@ fun VolleyStatApp(
                 val below = remember { nav.previousBackStackEntry?.destination?.route }
                 val fromReview = below == Routes.REVIEW || below == Routes.REVIEW_AT
                 RallyEditorScreen(
-                    target, shown, editorVideo(url, startMs),
+                    target, shown, editorVideo(url, startMs, viewModel.playbackHeaders()),
                     onMove = { start, end -> if (rally != null) viewModel.moveRally(rally.id, start, end) { done() } },
                     onSplit = { at -> if (rally != null) viewModel.splitRally(rally.id, at) { done() } },
                     onMerge = { if (rally != null) viewModel.mergeWithPrevious(rally.id) { done() } },
@@ -391,7 +398,7 @@ fun VolleyStatApp(
             }
             composable(Routes.LOGIN) {
                 // A screen the user left stops the repeats of a busy server, and its outcome stays behind.
-                DisposableEffect(Unit) { onDispose { viewModel.cancelAccountCall() } }
+                StopAccountCallOnLeave(viewModel)
                 LoginScreen(
                     state.account, onLogin = viewModel::login,
                     onCreateAccount = {
@@ -402,10 +409,11 @@ fun VolleyStatApp(
                     onBack = if (nav.previousBackStackEntry != null) ({ viewModel.clearAccountProblem(); nav.popBackStack() }) else null,
                     serverConfigured = state.serverConfigured,
                     server = { ServerSection(state, viewModel::setServerTarget, viewModel::testServer) },
+                    onDeletePhoneData = viewModel::deleteUnconfirmedAccountData,
                 )
             }
             composable(Routes.REGISTER) {
-                DisposableEffect(Unit) { onDispose { viewModel.cancelAccountCall() } }
+                StopAccountCallOnLeave(viewModel)
                 RegisterScreen(
                     state.account, onRegister = { name, username, password, code -> viewModel.register(name, username, password, code) },
                     onHaveAccount = {
@@ -419,7 +427,7 @@ fun VolleyStatApp(
             }
             composable(Routes.LEGACY) {
                 val question = state.account.legacy
-                if (question != null) LegacyScreen(question, state.saveFailed, viewModel::answerLegacy)
+                if (question != null) LegacyScreen(question, state.saveFailed, state.account.legacyMoving, viewModel::answerLegacy)
             }
             composable(Routes.HOME) {
                 HomeScreen(
@@ -436,7 +444,7 @@ fun VolleyStatApp(
                 // The profile shows the account as the server holds it now: a name changed on another phone, or a
                 // session that ended there. A busy server's repeats stop when the tab is left.
                 LaunchedEffect(Unit) { viewModel.refreshAccount() }
-                DisposableEffect(Unit) { onDispose { viewModel.cancelAccountCall() } }
+                StopAccountCallOnLeave(viewModel)
                 ProfileScreen(
                     state, BuildConfig.VERSION_NAME, viewModel::setServerTarget, viewModel::testServer,
                     viewModel::deleteRecording,
@@ -458,14 +466,14 @@ fun VolleyStatApp(
                 )
             }
             composable(Routes.PASSWORD) {
-                DisposableEffect(Unit) { onDispose { viewModel.cancelAccountCall() } }
+                StopAccountCallOnLeave(viewModel)
                 // A confirmed change closes the screen, and the profile says what the server did.
                 LaunchedEffect(state.account.confirmed) { if (state.account.confirmed == AccountChange.PASSWORD) leave(Routes.PASSWORD) }
                 PasswordChangeScreen(state.account, viewModel::changePassword, onBack = { viewModel.clearAccountProblem(); nav.popBackStack() })
             }
             composable(Routes.DELETE_ACCOUNT) {
                 // After the deletion the app opens the login, which says what the server deleted.
-                DisposableEffect(Unit) { onDispose { viewModel.cancelAccountCall() } }
+                StopAccountCallOnLeave(viewModel)
                 DeleteAccountScreen(
                     state.account, serverMatches = state.matches.count { it.session.serverMatchId != null },
                     onDelete = viewModel::deleteAccount, onBack = { viewModel.clearAccountProblem(); nav.popBackStack() },
@@ -623,6 +631,17 @@ fun VolleyStatApp(
             }
         }
     }
+}
+
+/**
+ * Stops the account call of a screen the user leaves: a busy server's repeats end there (design
+ * 10.7, R10). A screen the system recreates for a dark theme, a language or a font size is not
+ * left. Its call goes on, and the answer reaches the screen that comes back (review finding F8).
+ */
+@Composable
+private fun StopAccountCallOnLeave(viewModel: AppViewModel) {
+    val activity = LocalActivity.current
+    DisposableEffect(Unit) { onDispose { if (activity?.isChangingConfigurations != true) viewModel.cancelAccountCall() } }
 }
 
 /** 05 with its system launcher. The picker hands over exactly one video and needs no storage permission. */

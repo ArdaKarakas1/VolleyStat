@@ -175,6 +175,11 @@ data class Settings(
     val accountSeen: Boolean = false,
     /** The question about the single-account data of app 0.7 was answered, or there was nothing to ask about. */
     val legacyHandled: Boolean = false,
+    /**
+     * The SHA-256 of the user id of the account that question was put to, or null before it was put.
+     * Only that account sees the question and the titles of the old data (review finding S2).
+     */
+    val legacyAskedUser: String? = null,
 )
 
 const val MAX_VIDEO_BYTES: Long = 4L * 1024 * 1024 * 1024

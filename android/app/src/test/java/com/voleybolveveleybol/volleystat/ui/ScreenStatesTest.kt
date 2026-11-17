@@ -101,6 +101,8 @@ import com.voleybolveveleybol.volleystat.data.SignupClosedReason
 import com.voleybolveveleybol.volleystat.model.Settings
 import com.voleybolveveleybol.volleystat.ui.screens.DeleteAccountScreen
 import com.voleybolveveleybol.volleystat.ui.screens.LegacyScreen
+import com.voleybolveveleybol.volleystat.ui.screens.AccountAction
+import com.voleybolveveleybol.volleystat.ui.screens.AccountOutcome
 import com.voleybolveveleybol.volleystat.ui.screens.PasswordChangeScreen
 import com.voleybolveveleybol.volleystat.ui.screens.LoginScreen
 import com.voleybolveveleybol.volleystat.ui.screens.ProfileAccountActions
@@ -543,6 +545,25 @@ class ScreenStatesTest {
         }
     }
 
+    /**
+     * Review finding T1. Besides the name and the password digest, the server keeps when and how the
+     * account opened, when the password last changed, and a digest per session and per phone that
+     * logged in, each with its times (backend db.py). The card names them all and claims no "only".
+     * A deletion removes the user row, and its sessions and phones go with it (backend test_auth).
+     */
+    @Test fun thePrivacyCardNamesWhatTheServerKeepsForAnAccountAndThatADeletionRemovesAllOfIt() {
+        show { ProfileScreen(AppUiState(), "0.4.2", {}, {}, {}, { true }) }
+        listOf(
+            "Sunucu hesabın için kullanıcı adını, görünen adını ve şifrenin özetini saklar. " +
+                "Sunucu hesabın ne zaman ve nasıl açıldığını ve şifrenin son değiştiği zamanı da kaydeder. " +
+                "Her oturum ve giriş yaptığın her telefon için sunucu bir anahtar özetini ve kullanım zamanlarını saklar. " +
+                "Uygulama e-posta adresini ve telefon numaranı sormaz.",
+            "Sen maçı silince sunucu o maçın videosunu, analiz sonuçlarını, verdiğin kararları, yaptığın düzeltmeleri ve maç bilgilerini siler. " +
+                "Telefonundaki video dosyası kalır. Sen hesabını silince sunucu hesabın için sakladığı bütün bilgileri siler.",
+        ).forEach { compose.onNodeWithText(it).performScrollTo().assertIsDisplayed() }
+        assertFalse(shown("yalnızca kullanıcı adını"))
+    }
+
     @Test fun theProfileOpensTheMailAppForFeedbackAndNamesTheAddressWhenThereIsNone() {
         var opened = 0
         var mailApp = true
@@ -730,6 +751,38 @@ class ScreenStatesTest {
         compose.onNode(hasClickAction() and hasText(text(R.string.action_login))).assertIsNotEnabled()
     }
 
+    /**
+     * Review finding T5. After SERVER_BUSY the app already has the server's answer and waits out its
+     * Retry-After before it sends again. Every account form says so (design 2.12 `server_busy`) and
+     * keeps its buttons off; the ordinary wait for an answer keeps its own text.
+     */
+    @Test fun whileTheAppWaitsToSendAgainAfterABusyServerEveryAccountFormSaysSo() {
+        var which by mutableStateOf(0)
+        var account by mutableStateOf(AccountUi(busy = true, retryingAfterBusy = true))
+        show {
+            when (which) {
+                0 -> LoginScreen(account, onLogin = { _, _ -> }, onCreateAccount = {}, initialUsername = "ali", initialPassword = "uzun bir şifre 42")
+                1 -> RegisterScreen(account, onRegister = { _, _, _, _ -> }, onHaveAccount = {}, onBack = {})
+                2 -> PasswordChangeScreen(account.copy(user = ali), { _, _ -> }, onBack = {})
+                3 -> DeleteAccountScreen(account.copy(user = ali), serverMatches = 0, onDelete = {}, onBack = {})
+                // The row under Adı Kaydet and the logout dialog show the outcome of their call.
+                else -> AccountOutcome(account.copy(user = ali), AccountAction.LOGOUT)
+            }
+        }
+        val first = listOf(R.string.action_login, R.string.action_create_account, R.string.action_change_password, R.string.action_delete_account)
+        for (screen in 0..4) {
+            which = screen
+            account = AccountUi(busy = true, retryingAfterBusy = true)
+            compose.onNodeWithText(text(R.string.server_busy)).assertIsDisplayed()
+            assertFalse("screen $screen", shown(text(R.string.account_waiting)))
+            first.getOrNull(screen)?.let { compose.onNode(hasClickAction() and hasText(text(it))).assertIsNotEnabled() }
+            // The next try is on its way: the form waits for its answer again.
+            account = AccountUi(busy = true)
+            compose.onNodeWithText(text(R.string.account_waiting)).assertIsDisplayed()
+            assertFalse("screen $screen", shown(text(R.string.server_busy)))
+        }
+    }
+
     @Test fun theLoginNamesAnEndedSessionADeletedAccountAndEveryRefusal() {
         var account by mutableStateOf(AccountUi(sessionEnded = true))
         var created = 0
@@ -848,9 +901,17 @@ class ScreenStatesTest {
 
     @Test fun theOldDataQuestionListsWhatWouldMoveAndMovesIt() {
         val answers = mutableListOf<Boolean>()
-        show { LegacyScreen(LegacyQuestion(listOf("Hazırlık Maçı", "A Takımı - B Takımı"), teams = 2, recordings = 1, draft = true), saveFailed = false, onAnswer = { answers += it }) }
+        var moving by mutableStateOf(false)
+        // The view model marks the answer as on its way the moment it takes it (answerLegacy).
+        show {
+            LegacyScreen(
+                LegacyQuestion(listOf("Hazırlık Maçı", "A Takımı - B Takımı"), teams = 2, recordings = 1, draft = true),
+                saveFailed = false, moving = moving, onAnswer = { answers += it; moving = true },
+            )
+        }
         compose.onNodeWithText(text(R.string.legacy_body)).assertIsDisplayed()
-        listOf("Hazırlık Maçı", "A Takımı - B Takımı", text(R.string.legacy_teams, 2), text(R.string.legacy_recordings, 1), text(R.string.legacy_draft), text(R.string.legacy_keep_note))
+        // Review finding T8: two teams have their rosters, "kadroları".
+        listOf("Hazırlık Maçı", "A Takımı - B Takımı", "2 takım ve kadroları", text(R.string.legacy_recordings, 1), text(R.string.legacy_draft), text(R.string.legacy_keep_note))
             .forEach { compose.onNodeWithText(it).performScrollTo().assertIsDisplayed() }
         compose.onNodeWithText(text(R.string.legacy_move)).performClick()
         // One answer: the buttons wait for it to land.
@@ -862,14 +923,24 @@ class ScreenStatesTest {
     @Test fun theOldDataCanStayWhereItIsAndAFailedMoveCanBeTriedAgain() {
         val answers = mutableListOf<Boolean>()
         var failed by mutableStateOf(false)
-        show { LegacyScreen(LegacyQuestion(emptyList(), teams = 1, recordings = 0, draft = false), saveFailed = failed, onAnswer = { answers += it }) }
+        var moving by mutableStateOf(false)
+        show { LegacyScreen(LegacyQuestion(emptyList(), teams = 1, recordings = 0, draft = false), saveFailed = failed, moving = moving, onAnswer = { answers += it; moving = true }) }
+        // Review finding T8: one team has one roster, "kadrosu".
+        compose.onNodeWithText("1 takım ve kadrosu").assertIsDisplayed()
+        assertFalse(shown("kadroları"))
         assertFalse(shown(text(R.string.legacy_recordings, 0)))
         assertFalse(shown(text(R.string.legacy_draft)))
-        compose.onNodeWithText(text(R.string.legacy_move)).performClick()
-        failed = true
-        compose.onNodeWithText(text(R.string.store_save_failed)).assertIsDisplayed()
+        // The first failure turns saveFailed on; the second one leaves it on. Each gives the buttons back (F4).
+        repeat(2) {
+            compose.onNodeWithText(text(R.string.legacy_move)).performClick()
+            compose.onNodeWithText(text(R.string.legacy_keep)).assertIsNotEnabled()
+            moving = false
+            failed = true
+            compose.onNodeWithText(text(R.string.store_save_failed)).assertIsDisplayed()
+            compose.onNodeWithText(text(R.string.legacy_move)).assertIsEnabled()
+        }
         compose.onNodeWithText(text(R.string.legacy_keep)).assertIsEnabled().performClick()
-        assertEquals(listOf(true, false), answers)
+        assertEquals(listOf(true, true, false), answers)
     }
 
     @Test fun theProfileShowsTheAccountAndHasNoLocalNameField() {
@@ -925,7 +996,8 @@ class ScreenStatesTest {
         field(R.string.field_new_password).assert(SemanticsMatcher.expectValue(SemanticsProperties.ContentType, ContentType.NewPassword))
         confirm.assertIsEnabled().performClick()
         assertEquals(listOf("eski bir şifre 1" to "yeni bir şifre 2"), sent)
-        assertEquals(1, autofill.commits)
+        // The save sheet waits for the server's word: it may refuse the new password (review finding S6).
+        assertEquals(0, autofill.commits)
         account = account.copy(busy = true)
         compose.onNodeWithText(text(R.string.account_waiting)).assertIsDisplayed()
         confirm.assertIsNotEnabled()

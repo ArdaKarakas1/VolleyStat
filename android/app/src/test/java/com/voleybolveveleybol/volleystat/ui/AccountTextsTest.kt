@@ -66,6 +66,27 @@ class AccountTextsTest {
         assertEquals("six rules, six texts", 6, expected.values.map { string(it) }.toSet().size)
     }
 
+    /**
+     * Review finding T2. The server folds case and drops marks before it counts (API_V1 section 10), so
+     * "AaBbAaBbAaBb" holds four typed characters and is still refused. The text says what the server
+     * counted and how, never that the typed password holds fewer than four.
+     */
+    @Test fun aRepetitivePasswordIsNamedAsTheServerCountedIt() {
+        assertEquals(
+            "Sunucu bu şifrede dörtten az farklı karakter saydı ve şifreyi kabul etmedi. " +
+                "Sunucu A ile a, ş ile s ve ı ile i gibi harf çiftlerini aynı karakter sayar. Başka bir şifre seçebilirsin.",
+            text(AuthProblem.PasswordRejected(PasswordRule.REPETITIVE), AccountAction.REGISTER),
+        )
+    }
+
+    /** Review finding T3. ".." meets the length and the characters, and the server refuses it: it holds no letter or digit. */
+    @Test fun aRefusedDisplayNameNamesEveryRuleOfTheServer() {
+        val expected = "Görünen ad 2 ile 40 karakter arasında olmalı ve en az bir harf ya da rakam içermeli. " +
+            "Görünen ad harf ve rakamın yanında yalnız boşluk, nokta, kesme işareti ve kısa çizgi taşıyabilir."
+        assertEquals(expected, text(AuthProblem.DisplayNameInvalid, AccountAction.REGISTER))
+        assertEquals(expected, text(AuthProblem.DisplayNameInvalid, AccountAction.DISPLAY_NAME))
+    }
+
     @Test fun everyScopeOfTooManyAttemptsNamesItsOwnSubjectAndTheServersWait() {
         val expected = mapOf(
             AttemptScope.USER to R.string.login_wait,

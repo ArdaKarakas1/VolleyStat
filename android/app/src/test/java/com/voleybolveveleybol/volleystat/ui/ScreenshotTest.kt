@@ -25,6 +25,7 @@ import com.voleybolveveleybol.volleystat.AccountUi
 import com.voleybolveveleybol.volleystat.LegacyQuestion
 import com.voleybolveveleybol.volleystat.data.AttemptScope
 import com.voleybolveveleybol.volleystat.data.AuthProblem
+import com.voleybolveveleybol.volleystat.data.PasswordRule
 import com.voleybolveveleybol.volleystat.data.SignupClosedReason
 import com.voleybolveveleybol.volleystat.ui.screens.DeleteAccountScreen
 import com.voleybolveveleybol.volleystat.ui.screens.LegacyScreen
@@ -171,6 +172,8 @@ class ScreenshotTest {
         shot("02_ana_ekran") { HomeScreen(state, {}, {}, {}, {}, {}) }
         shot("02_ana_ekran_bos") { HomeScreen(AppUiState(), {}, {}, {}, {}, {}) }
         shot("02_ana_ekran_koyu", dark = true) { HomeScreen(state, {}, {}, {}, {}, {}) }
+        // The keystore could not seal the session (review finding S3).
+        shot("02_ana_ekran_oturum_saklanamadi") { HomeScreen(state.copy(account = state.account.copy(sessionNotKept = true)), {}, {}, {}, {}, {}) }
         // A setup the user left with nothing but a rule: its card names the rule.
         shot("02_ana_ekran_yarim_kurulum_kural") { HomeScreen(AppUiState(draft = Draft(rules = MatchRules(2, 21, 15))), {}, {}, {}, {}, {}) }
     }
@@ -392,6 +395,16 @@ class ScreenshotTest {
         shot("14_giris_hata", content = login(AccountUi(problem = AuthProblem.LoginFailed)))
         shot("14_giris_oturum_kapandi", content = login(AccountUi(sessionEnded = true)))
         shot("14_giris_bekliyor", content = login(AccountUi(busy = true)))
+        // The app waits out a SERVER_BUSY answer before its next try (review finding T5).
+        val retrying = AccountUi(busy = true, retryingAfterBusy = true)
+        shot("14_giris_sunucu_mesgul", content = login(retrying))
+        shotOn("kucuk_buyuk_yazi_14_giris_sunucu_mesgul", "+w320dp-h568dp-port", fontScale = 1.5f, content = login(retrying))
+        // A deletion whose answer was lost (review finding S1): the offer, its question and its outcome.
+        val doubt = AccountUi(unconfirmedDeletion = com.voleybolveveleybol.volleystat.UnconfirmedDeletion("user-1", "deneme"))
+        shot("14_giris_silme_belirsiz", content = login(doubt))
+        shot("14_giris_silme_belirsiz_koyu", dark = true, content = login(doubt))
+        shotOn("kucuk_buyuk_yazi_14_giris_silme_belirsiz", "+w320dp-h568dp-port", fontScale = 1.5f, content = login(doubt))
+        shot("14_giris_telefondan_silindi", content = login(AccountUi(confirmed = com.voleybolveveleybol.volleystat.AccountChange.PHONE_DATA_DELETED)))
         shotOn("kucuk_buyuk_yazi_14_giris", "+w320dp-h568dp-port", fontScale = 1.5f, content = login(AccountUi(problem = AuthProblem.TooManyAttempts(AttemptScope.DEVICE, 120))))
         shot("15_hesap_olustur", content = register())
         shot("15_hesap_olustur_koyu", dark = true, content = register())
@@ -400,15 +413,25 @@ class ScreenshotTest {
         shot("15_hesap_olustur_kapali", content = register(AccountUi(problem = AuthProblem.SignupClosed(SignupClosedReason.NO_LINK))))
         shot("15_hesap_olustur_alinmis_ad", content = register(AccountUi(problem = AuthProblem.UsernameTaken), username = "cagri.ozturk42"))
         shotOn("kucuk_buyuk_yazi_15_hesap_olustur", "+w320dp-h568dp-port", fontScale = 1.5f, content = register())
+        // The refusals whose texts name the server's whole rule (review findings T2 and T3).
+        shot("15_hesap_olustur_tekrarli_sifre", content = register(AccountUi(problem = AuthProblem.PasswordRejected(PasswordRule.REPETITIVE))))
+        shot("15_hesap_olustur_gecersiz_ad", content = register(AccountUi(problem = AuthProblem.DisplayNameInvalid)))
+        shotOn("kucuk_buyuk_yazi_15_hesap_olustur_gecersiz_ad", "+w320dp-h568dp-port", fontScale = 1.5f, content = register(AccountUi(problem = AuthProblem.DisplayNameInvalid)))
         val old = LegacyQuestion(listOf("Hazırlık Maçı", "A Takımı - B Takımı", "Lig Maçı"), teams = 2, recordings = 3, draft = true)
-        shot("15b_eski_veriler") { LegacyScreen(old, saveFailed = false) {} }
-        shot("15b_eski_veriler_koyu", dark = true) { LegacyScreen(old, saveFailed = false) {} }
+        shot("15b_eski_veriler") { LegacyScreen(old, saveFailed = false, moving = false) {} }
+        shot("15b_eski_veriler_koyu", dark = true) { LegacyScreen(old, saveFailed = false, moving = false) {} }
+        // One team has one roster (review finding T8).
+        shot("15b_eski_veriler_tek_takim") { LegacyScreen(LegacyQuestion(listOf("Hazırlık Maçı"), teams = 1, recordings = 0, draft = false), saveFailed = false, moving = false) {} }
         val signedIn = AccountUi(user = AccountUser("user-1", "deneme", "Deneme"))
         shot("15c_sifre_degistir") { PasswordChangeScreen(signedIn.copy(problem = AuthProblem.PasswordWrong), { _, _ -> }, {}) }
         shot("15d_hesabi_sil") { DeleteAccountScreen(signedIn, serverMatches = 3, onDelete = {}, onBack = {}) }
         shot("15d_hesabi_sil_koyu", dark = true) { DeleteAccountScreen(signedIn, serverMatches = 3, onDelete = {}, onBack = {}) }
         // The account card at the top of the profile.
         shotOn("profil_hesap", "+w411dp-h1100dp-port") { ProfileScreen(state, "0.8.0", {}, {}, {}, { true }) }
+        // While someone is signed in, the server choice is read-only (review finding S5).
+        shotOn("profil_sunucu_oturum_acik", "+w411dp-h500dp-port") {
+            androidx.compose.foundation.layout.Column(Modifier.fillMaxSize().background(androidx.compose.material3.MaterialTheme.colorScheme.background)) { ServerSection(state, {}, {}) }
+        }
         shotOn("profil_hesap_koyu", "+w411dp-h1100dp-port", dark = true) { ProfileScreen(state, "0.8.0", {}, {}, {}, { true }) }
     }
 }

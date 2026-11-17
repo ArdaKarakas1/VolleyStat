@@ -244,6 +244,52 @@ class AppViewModelAccountTest {
         assertNull(vm.state.value.account.problem)
     }
 
+    /**
+     * Review finding T5. Between a SERVER_BUSY answer and the next try the app has the server's answer
+     * and waits out its Retry-After, so the state says so; the next try waits for an answer again.
+     */
+    @Test fun whileTheAppWaitsOutABusyServerTheStateSaysSoUntilTheNextTryGoesOut() {
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        var calls = 0
+        val second = CountDownLatch(1)
+        on("POST /auth/login") { request ->
+            if (++calls == 1) refuse(503, "SERVER_BUSY").setHeader("Retry-After", "2")
+            else { second.await(10, TimeUnit.SECONDS); signedIn("ali", request) }
+        }
+        val vm = viewModel()
+        assertFalse(vm.state.value.account.retryingAfterBusy)
+        vm.login("ali", "uzun bir şifre 42")
+        await("the wait after the busy answer") { vm.state.value.account.retryingAfterBusy }
+        assertEquals(1, calls)
+        assertTrue(vm.state.value.account.busy)
+        assertNull(vm.state.value.account.problem)
+        await("the second try") { calls == 2 }
+        settle()
+        assertFalse("the second try waits for its answer", vm.state.value.account.retryingAfterBusy)
+        assertTrue(vm.state.value.account.busy)
+        second.countDown()
+        await("the login") { vm.state.value.account.user != null }
+        assertFalse(vm.state.value.account.retryingAfterBusy)
+    }
+
+    /** T5: a session that ends while an account call waits out SERVER_BUSY does not change what the waiting form says. */
+    @Test fun aSessionThatEndsWhileACallWaitsOutABusyServerLeavesTheWaitAsItIs() {
+        TestAccounts.seed(context, StoredState(matches = listOf(accepted("A"))))
+        var names = 0
+        on("PUT /me/display-name") { if (++names == 1) refuse(503, "SERVER_BUSY").setHeader("Retry-After", "2") else refuse(401, "AUTH_REQUIRED") }
+        on("GET /videos/video-A/analyses/latest") { refuse(401, "AUTH_REQUIRED") }
+        val vm = viewModel()
+        vm.changeDisplayName("Yeni Ad")
+        await("the wait after the busy answer") { vm.state.value.account.retryingAfterBusy }
+        // Another call meets the end of the session during the wait.
+        vm.watchAnalysis("A", startIfMissing = false)
+        await("the end of the session") { vm.state.value.account.user == null }
+        assertTrue(vm.state.value.account.busy)
+        assertTrue("the call still waits out the busy answer", vm.state.value.account.retryingAfterBusy)
+        await("the end of the call") { !vm.state.value.account.busy }
+        assertFalse(vm.state.value.account.retryingAfterBusy)
+    }
+
     @Test fun aBusyServerThatStaysBusyIsReportedAfterAFewTries() {
         TestAccounts.device(context, Settings(welcomeSeen = true))
         var calls = 0
@@ -253,6 +299,8 @@ class AppViewModelAccountTest {
         await("the answer") { !vm.state.value.account.busy }
         assertEquals(AuthProblem.ServerBusy(0), vm.state.value.account.problem)
         assertEquals(AppViewModel.BUSY_TRIES, calls)
+        // The last answer ended the call: no next try is coming (T5).
+        assertFalse(vm.state.value.account.retryingAfterBusy)
     }
 
     @Test fun leavingTheScreenStopsTheRetriesOfABusyServer() {
@@ -262,8 +310,11 @@ class AppViewModelAccountTest {
         val vm = viewModel()
         vm.login("ali", "uzun bir şifre 42")
         await("the first try") { calls == 1 }
+        await("the wait after the busy answer") { vm.state.value.account.retryingAfterBusy }
         vm.cancelAccountCall()
         await("the end of the call") { !vm.state.value.account.busy }
+        // The wait ended with the call, and the form says nothing more about a next try (T5).
+        assertFalse(vm.state.value.account.retryingAfterBusy)
         Thread.sleep(1_300)
         settle()
         assertEquals(1, calls)
@@ -315,6 +366,9 @@ class AppViewModelAccountTest {
         val vm = viewModel()
         vm.resumeUpload("U")
         await("the end of the session") { vm.state.value.account.user == null }
+        // The upload's own coroutine settles first: what it does on its way out must not bring the upload back.
+        Thread.sleep(300)
+        settle()
         assertTrue(vm.state.value.account.sessionEnded)
         assertNull("no upload of the account that left stays on screen", vm.state.value.upload)
         // The record keeps the server's upload and what it holds, so nothing starts again from byte 0.
@@ -725,6 +779,232 @@ class AppViewModelAccountTest {
         assertNotNull(vm.state.value.account.user)
         assertNull("nothing says the account is gone", vm.state.value.account.confirmed)
         assertEquals(listOf("A Takımı"), TestAccounts.space(context).store.load().teams.map { it.name })
+    }
+
+    // ----- review findings F2, F3, F6 and F7: what one account leaves behind never reaches the next -----
+
+    private fun processing(video: String) = JSONObject().put("id", "job-$video").put("videoId", video).put("state", "PROCESSING")
+        .put("analyzer", JSONObject().put("id", "demo").put("kind", "MOCK")).put("mock", true)
+        .put("counts", JSONObject().put("rallies", 0).put("reviewOpen", 0).put("reviewTotal", 0))
+
+    private fun meOf(displayName: String) = ok(
+        JSONObject().put("user", JSONObject().put("id", TestAccounts.SESSION.userId).put("username", TestAccounts.SESSION.username)
+            .put("displayName", displayName).put("createdAt", "2026-11-17T10:00:00Z").put("passwordTemporary", false)).put("teams", org.json.JSONArray())
+    )
+
+    /** The requests that went out after the one at [index]. */
+    private fun after(index: Int) = seen.drop(index + 1)
+
+    @Test fun anUploadOfTheAccountThatLeftSendsNothingMoreAndTheNextAccountUploadsWithItsOwnSession() {
+        val recording = File(TestAccounts.space(context).recordings.apply { mkdirs() }, "kayit-1.mp4").apply { writeBytes(ByteArray(10) { 1 }) }
+        val unfinished = MatchRecord("U", "Ev", "Konuk", 1L, video(recording.path), session = com.voleybolveveleybol.volleystat.model.UploadSession("sha", "server-U", "upload-U", 4))
+        TestAccounts.seed(context, StoredState(matches = listOf(unfinished)))
+        // Veli has an unfinished upload of his own in his folder.
+        val veliRecording = File(TestAccounts.space(context, "user-veli").recordings.apply { mkdirs() }, "kayit-2.mp4").apply { writeBytes(ByteArray(10) { 2 }) }
+        TestAccounts.space(context, "user-veli").store.save(
+            StoredState(matches = listOf(MatchRecord("V", "Ev", "Konuk", 1L, video(veliRecording.path), session = com.voleybolveveleybol.volleystat.model.UploadSession("sha", "server-V", "upload-V", 4))))
+        )
+        val held = CountDownLatch(1)
+        on("GET /uploads/upload-U") { held.await(8, TimeUnit.SECONDS); ok(JSONObject().put("uploadId", "upload-U").put("nextOffset", 4).put("status", "UPLOADING").put("videoId", JSONObject.NULL)) }
+        on("GET /uploads/upload-V") { ok(JSONObject().put("uploadId", "upload-V").put("nextOffset", 4).put("status", "UPLOADING").put("videoId", JSONObject.NULL)) }
+        listOf("U", "V").forEach { id ->
+            on("PUT /uploads/upload-$id/chunks") { ok(JSONObject().put("nextOffset", 10)) }
+            on("POST /uploads/upload-$id/complete") {
+                ok(JSONObject().put("id", "video-$id").put("status", "READY").put("quality", JSONObject().put("rejectCode", JSONObject.NULL).put("warnings", org.json.JSONArray())))
+            }
+        }
+        val vm = viewModel()
+        vm.resumeUpload("U")
+        await("the upload's first request") { seen.any { it.key == "GET /uploads/upload-U" } }
+        vm.logoutAndWait()
+        val logout = seen.indexOfFirst { it.key == "POST /auth/logout" }
+        // The server answers the upload's question only now, after the logout.
+        held.countDown()
+        Thread.sleep(500)
+        settle()
+        assertEquals("nothing of the upload went out after the logout", emptyList<String>(), after(logout).map { it.key })
+        assertNull(vm.state.value.upload)
+        assertEquals("the record keeps what the server holds", 4, TestAccounts.space(context).store.load().matches.single().session.sentBytes)
+
+        vm.loginAndWait("veli")
+        vm.resumeUpload("V")
+        await("Veli's finished upload") { vm.state.value.matches.single().check != null }
+        assertEquals("Bearer ${storedSession()!!.token}", seen.single { it.key == "PUT /uploads/upload-V/chunks" }.authorization)
+        assertTrue(seen.none { it.key.startsWith("PUT /uploads/upload-U") || it.key == "POST /uploads/upload-U/complete" })
+    }
+
+    @Test fun aFollowedAnalysisOfTheAccountThatLeftIsNotAskedForAgainWithTheNextAccountsSession() {
+        TestAccounts.seed(context, StoredState(matches = listOf(accepted("A"))))
+        on("GET /videos/video-A/analyses/latest") { ok(processing("video-A")) }
+        val vm = viewModel()
+        vm.watchAnalysis("A", startIfMissing = false)
+        await("the first poll") { seen.any { it.key == "GET /videos/video-A/analyses/latest" } }
+        vm.logoutAndWait()
+        val logout = seen.indexOfFirst { it.key == "POST /auth/logout" }
+        vm.loginAndWait("veli")
+        // The watch asks again after two seconds while the server works. Its wait runs on the main looper, whose clock
+        // moves only when the test moves it. None of what follows may come after the logout.
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(5))
+        Thread.sleep(500)
+        settle()
+        assertEquals(emptyList<String>(), after(logout).filter { it.key.contains("video-A") }.map { "${it.key} ${it.authorization}" })
+        assertEquals("veli", vm.state.value.account.user?.username)
+    }
+
+    @Test fun anAccountReadThatAnswersAfterAnotherCallEndedTheSessionDoesNotBringTheSessionBack() {
+        TestAccounts.seed(context, StoredState(matches = listOf(accepted("A"))))
+        val held = CountDownLatch(1)
+        on("GET /me") { held.await(8, TimeUnit.SECONDS); meOf("Yeni Ad") }
+        on("GET /videos/video-A/analyses/latest") { refuse(401, "AUTH_REQUIRED") }
+        val vm = viewModel()
+        vm.refreshAccount()
+        await("the account read") { seen.any { it.key == "GET /me" } }
+        // Another call meets the end of the session while the read is on its way.
+        vm.watchAnalysis("A", startIfMissing = false)
+        await("the end of the session") { vm.state.value.account.user == null }
+        held.countDown()
+        Thread.sleep(300)
+        settle()
+        assertNull(vm.state.value.account.user)
+        assertTrue(vm.state.value.account.sessionEnded)
+        assertEquals(Entry.LOGIN, vm.state.value.entry)
+        assertFalse("the ended session is not written back", sessionFile().exists())
+        assertTrue(vm.playbackHeaders().isEmpty())
+    }
+
+    @Test fun anAccountReadOfTheAccountThatLeftChangesNothingOfTheNextAccount() {
+        TestAccounts.device(context, Settings(welcomeSeen = true, accountSeen = true, legacyHandled = true))
+        val held = CountDownLatch(1)
+        on("GET /me") { held.await(8, TimeUnit.SECONDS); ok(JSONObject().put("user", userJson("ali")).put("teams", org.json.JSONArray())) }
+        val vm = viewModel()
+        vm.loginAndWait("ali")
+        vm.refreshAccount()
+        await("Ali's account read") { seen.any { it.key == "GET /me" } }
+        vm.logoutAndWait()
+        vm.loginAndWait("veli")
+        val veli = storedSession()!!
+        held.countDown()
+        Thread.sleep(300)
+        settle()
+        assertEquals("veli", vm.state.value.account.user?.username)
+        assertEquals(veli.token, storedSession()!!.token)
+        assertEquals("user-veli", storedSession()!!.userId)
+        assertEquals(mapOf("Authorization" to "Bearer ${veli.token}"), vm.playbackHeaders())
+    }
+
+    @Test fun anAccountCallThatMeetsAnEndedSessionLeavesTheReasonToTheLoginScreenAlone() {
+        on("PUT /me/display-name") { refuse(401, "AUTH_REQUIRED") }
+        on("PUT /me/password") { refuse(401, "AUTH_REQUIRED") }
+        on("POST /me/delete") { refuse(401, "AUTH_REQUIRED") }
+        val calls = listOf<(AppViewModel) -> Unit>(
+            { it.changeDisplayName("Yeni Ad") },
+            { it.changePassword("eski şifre 12345", "yeni şifre 67890") },
+            { it.deleteAccount("uzun bir şifre 42") },
+        )
+        calls.forEachIndexed { index, call ->
+            TestAccounts.seed(context)
+            val vm = viewModel()
+            call(vm)
+            await("the end of session $index") { vm.state.value.account.user == null && !vm.state.value.account.busy }
+            assertTrue(vm.state.value.account.sessionEnded)
+            // The login screen says it once, in its own notice: no failure text stands above it with the same words.
+            assertNull("call $index", vm.state.value.account.problem)
+            assertEquals(Entry.LOGIN, vm.state.value.entry)
+        }
+    }
+
+    @Test fun aRestartAfterTheOldDataWasKeptOpensHomeAndAsksNothing() {
+        writeLegacy()
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        val vm = viewModel()
+        vm.loginAndWait("ali")
+        vm.answerLegacy(move = false)
+        await("the answer") { vm.state.value.account.legacy == null }
+        // The old files are still there. The phone asked once, and a restart asks no more.
+        val restarted = viewModel()
+        assertNull(restarted.state.value.account.legacy)
+        assertEquals(Entry.HOME, restarted.state.value.entry)
+    }
+
+    @Test fun aMoveOfTheOldDataThatFailsGivesItsButtonsBackEachTimeAndASecondTapIsNoSecondAnswer() {
+        writeLegacy()
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        // A file stands where the account's folder would be, so nothing can be written into it.
+        val blocker = File(files, "accounts/user-ali").apply { parentFile!!.mkdirs(); writeText("") }
+        val vm = viewModel()
+        vm.loginAndWait("ali")
+        repeat(2) { attempt ->
+            vm.answerLegacy(move = true)
+            assertTrue("attempt $attempt is on its way", vm.state.value.account.legacyMoving)
+            vm.answerLegacy(move = false)
+            await("attempt $attempt") { !vm.state.value.account.legacyMoving }
+            assertTrue(vm.state.value.saveFailed)
+            assertNotNull("the question stays", vm.state.value.account.legacy)
+            assertFalse("the tap that came while the move was on its way answered nothing", vm.state.value.settings.legacyHandled)
+        }
+        blocker.delete()
+        vm.answerLegacy(move = true)
+        await("the move") { vm.state.value.account.legacy == null }
+        assertFalse(vm.state.value.account.legacyMoving)
+        assertEquals(listOf("old"), vm.state.value.matches.map { it.localId })
+    }
+
+    @Test fun aSessionFileWhoseAccountIdNamesNoFolderStartsOnTheLoginAndTouchesNothing() {
+        TestAccounts.device(context, Settings(welcomeSeen = true, accountSeen = true, legacyHandled = true))
+        SessionStore(sessionFile(), PlainSessionCipher).save(com.voleybolveveleybol.volleystat.data.Session("token-x", "../x", "x", "X", "2099-01-01T00:00:00Z"))
+        val vm = viewModel()
+        assertEquals(Entry.LOGIN, vm.state.value.entry)
+        assertNull(vm.state.value.account.user)
+        assertTrue(vm.playbackHeaders().isEmpty())
+        assertFalse(File(files, "x").exists())
+        assertFalse(File(files, "accounts").exists())
+    }
+
+    @Test fun anAccountReadThatWasOnItsWayBeforeANameChangeDoesNotPutTheOldNameBack() {
+        TestAccounts.seed(context)
+        val held = CountDownLatch(1)
+        // The read left before the change and the server answers it with the name it held then.
+        on("GET /me") { held.await(8, TimeUnit.SECONDS); meOf(TestAccounts.SESSION.displayName) }
+        on("PUT /me/display-name") { meOf("Yeni Ad") }
+        val vm = viewModel()
+        vm.refreshAccount()
+        await("the account read") { seen.any { it.key == "GET /me" } }
+        vm.changeDisplayName("Yeni Ad")
+        await("the confirmed name") { vm.state.value.account.confirmed == AccountChange.DISPLAY_NAME }
+        held.countDown()
+        Thread.sleep(300)
+        settle()
+        assertEquals("Yeni Ad", vm.state.value.account.user!!.displayName)
+        assertEquals("Yeni Ad", storedSession()!!.displayName)
+        // A read that leaves after the change is taken as before.
+        on("GET /me") { meOf("Başka Telefonda Verilen Ad") }
+        vm.refreshAccount()
+        await("the later read") { vm.state.value.account.user!!.displayName == "Başka Telefonda Verilen Ad" }
+    }
+
+    @Test fun anAccountReadThatLeftWhileANameChangeWasOnItsWayDoesNotPutTheOldNameBack() {
+        TestAccounts.seed(context)
+        val held = CountDownLatch(1)
+        on("PUT /me/display-name") { held.await(8, TimeUnit.SECONDS); meOf("Yeni Ad") }
+        on("GET /me") { meOf(TestAccounts.SESSION.displayName) }
+        val vm = viewModel()
+        vm.changeDisplayName("Yeni Ad")
+        await("the name change on its way") { seen.any { it.key == "PUT /me/display-name" } }
+        // The profile reads the account while the change waits, and the server answers that read with the name it holds now.
+        // The main looper stays still from here on, so both answers wait for it in the order they came.
+        vm.refreshAccount()
+        val end = System.currentTimeMillis() + 5_000
+        while (seen.none { it.key == "GET /me" } && System.currentTimeMillis() < end) Thread.sleep(10)
+        Thread.sleep(300)
+        held.countDown()
+        while (vm.state.value.account.user!!.displayName != "Yeni Ad") {
+            check(System.currentTimeMillis() < end + 5_000) { "the change never landed" }
+            Thread.sleep(10)
+        }
+        settle()
+        assertEquals("Yeni Ad", vm.state.value.account.user!!.displayName)
+        assertEquals("Yeni Ad", storedSession()!!.displayName)
+        assertEquals(AccountChange.DISPLAY_NAME, vm.state.value.account.confirmed)
     }
 
     private fun accepted(id: String) = MatchRecord(

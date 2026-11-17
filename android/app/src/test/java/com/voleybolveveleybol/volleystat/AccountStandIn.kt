@@ -7,6 +7,8 @@ import okhttp3.mockwebserver.RecordedRequest
 import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * A stand-in for the account routes of docs/API_V1.md section 10, for the screen tests that walk
@@ -28,11 +30,30 @@ class AccountStandIn : AutoCloseable {
     /** The answer to GET /me while set, instead of the account: a test makes the session end there. */
     @Volatile var meStatus: Int? = null
 
+    /** A route as "METHOD /path": the server does what the next request of it asks, and its answer never reaches the phone. */
+    @Volatile var loseNextAnswerOf: String? = null
+
+    /** Routes as "METHOD /path" whose requests wait for their latch before the stand-in reads them. The request is recorded on arrival. */
+    val hold = ConcurrentHashMap<String, CountDownLatch>()
+
+    /** Routes as "METHOD /path" that answer this way instead of as the stand-in would, while they are in here. */
+    val answers = ConcurrentHashMap<String, () -> MockResponse>()
+
     val baseUrl: String get() = server.url("/v1").toString()
 
     init {
         server.dispatcher = object : Dispatcher() {
-            override fun dispatch(request: RecordedRequest): MockResponse = synchronized(this@AccountStandIn) { route(request) }
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                val key = "${request.method} ${request.requestUrl!!.encodedPath.removePrefix("/v1")}"
+                requests += key to request.getHeader("Authorization")
+                hold[key]?.await(15, TimeUnit.SECONDS)
+                return synchronized(this@AccountStandIn) {
+                    val answer = answers[key]?.invoke() ?: route(request)
+                    if (loseNextAnswerOf != key) return@synchronized answer
+                    loseNextAnswerOf = null
+                    MockResponse().setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AFTER_REQUEST)
+                }
+            }
         }
         server.start()
     }
@@ -57,7 +78,6 @@ class AccountStandIn : AutoCloseable {
     private fun route(request: RecordedRequest): MockResponse {
         val path = request.requestUrl!!.encodedPath.removePrefix("/v1")
         val authorization = request.getHeader("Authorization")
-        requests += "${request.method} $path" to authorization
         val body = request.body.readUtf8().ifEmpty { "{}" }.let(::JSONObject)
         val signedIn = authorization?.removePrefix("Bearer ")?.let { sessions[it] }?.let { accounts[it] }
         return when ("${request.method} $path") {
@@ -125,6 +145,9 @@ class AccountStandIn : AutoCloseable {
         .put("createdAt", "2026-11-17T10:00:00Z").put("passwordTemporary", account.temporary)
 
     private fun ok(json: JSONObject, status: Int = 200) = MockResponse().setResponseCode(status).setHeader("Content-Type", "application/json").setBody(json.toString())
+
+    /** SERVER_BUSY as the real server sends it, with the wait it names. */
+    fun busy(retryAfterSeconds: Int) = refuse(503, "SERVER_BUSY").setHeader("Retry-After", retryAfterSeconds.toString())
 
     /** The API's error envelope. A 401 names the Bearer scheme, as the real server does. */
     private fun refuse(status: Int, code: String, details: JSONObject = JSONObject()) = MockResponse().setResponseCode(status).setHeader("Content-Type", "application/json")

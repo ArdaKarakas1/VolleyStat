@@ -487,13 +487,14 @@
     <string name="privacy_server">Uygulama videoyu, takım adlarını, maç bilgilerini ve hesap bilgilerini yalnızca geliştirme bilgisayarındaki yerel sunucuya gönderir.</string>
     <string name="privacy_picker">Uygulama yalnızca senin seçtiğin videoyu okur ve depolama izni istemez.</string>
     <string name="privacy_training">Uygulama videoyu model eğitimi için göndermez.</string>
-    <string name="privacy_accounts">Sunucu hesabın için yalnızca kullanıcı adını, görünen adını ve şifrenin özetini saklar. Uygulama e-posta adresini ve telefon numaranı sormaz.</string>
+    <!-- What the users, sessions and login_devices tables of the server hold (review finding T1). -->
+    <string name="privacy_accounts">Sunucu hesabın için kullanıcı adını, görünen adını ve şifrenin özetini saklar. Sunucu hesabın ne zaman ve nasıl açıldığını ve şifrenin son değiştiği zamanı da kaydeder. Her oturum ve giriş yaptığın her telefon için sunucu bir anahtar özetini ve kullanım zamanlarını saklar. Uygulama e-posta adresini ve telefon numaranı sormaz.</string>
     <!-- B2: the match routes do not check the session until slice B3, so anyone who reaches the server reaches every video. -->
     <string name="privacy_matches_open">Sunucu maçları ve videoları henüz hesaplara bağlamıyor. Sunucunun çalıştığı bilgisayarı kullanan herkes yüklediğin videoları görebilir. Oyuncuların izin vermediği videoları ve telifli yayınları yükleme.</string>
     <string name="privacy_phone_accounts">Uygulama bu telefonda her hesabın maçlarını, kadrolarını ve kamera kayıtlarını ayrı tutar. Bu telefonda başka bir hesapla giriş yapan kişi uygulamada senin maçlarını görmez.</string>
     <string name="privacy_session">Uygulama şifreni telefona yazmaz ve oturum bilgisini telefonun anahtar deposundaki bir anahtarla şifreleyip saklar.</string>
     <string name="privacy_retention">Sunucu hesabını sen silene kadar saklar. Sunucu videoyu ve maç bilgilerini sen maçı silene kadar saklar.</string>
-    <string name="privacy_delete">Sen maçı silince sunucu o maçın videosunu, analiz sonuçlarını, verdiğin kararları, yaptığın düzeltmeleri ve maç bilgilerini siler. Telefonundaki video dosyası kalır. Sen hesabını silince sunucu kullanıcı adını, görünen adını, şifrenin özetini ve oturumlarını siler.</string>
+    <string name="privacy_delete">Sen maçı silince sunucu o maçın videosunu, analiz sonuçlarını, verdiğin kararları, yaptığın düzeltmeleri ve maç bilgilerini siler. Telefonundaki video dosyası kalır. Sen hesabını silince sunucu hesabın için sakladığı bütün bilgileri siler.</string>
     <string name="privacy_faces">Uygulama ve sunucu yüz tanımaz. Rapor bir sayıyı oyuncuya yalnızca sen forma numarasını seçince yazar.</string>
     <string name="profile_server">Sunucu bağlantısı</string>
     <string name="server_emulator">Emülatör</string>
@@ -586,9 +587,24 @@
     <string name="password_show">Şifreyi göster</string>
     <string name="password_hide">Şifreyi gizle</string>
     <string name="account_waiting">Uygulama sunucunun yanıtını bekliyor.</string>
+    <!-- 503 SERVER_BUSY while the app waits out the server's Retry-After (at most 10 s) before its next try (design 2.12, R10).
+         The design's text is adapted: the app knows only what the server answered. -->
+    <string name="server_busy">Sunucu çok sayıda istek işlediğini bildirdi. Uygulama birkaç saniye sonra yeniden dener.</string>
     <!-- 401 AUTH_REQUIRED. The app keeps an upload's place, and the user resumes it after the next login. -->
     <string name="session_ended">Sunucu oturumunu kapattı. Yeniden giriş yapınca yarım kalan bir yüklemeyi kaldığı yerden sürdürebilirsin.</string>
     <string name="account_deleted">Sunucu hesabını sildi. Uygulama bu telefondaki maç kayıtlarını, kadroları ve kamerayla çektiğin videoları da sildi.</string>
+    <!-- A deletion got no answer, and the session then left the phone without a sign that the account is still there.
+         %1$s is the username, %2$s the label of action_delete_from_phone. -->
+    <string name="deletion_unconfirmed">Uygulama %1$s hesabını silme isteğinin yanıtını alamadı ve sunucunun hesabı silip silmediğini bilmiyor. Sunucu hesabı silmediyse giriş yapınca maçlarını yeniden görürsün. Sunucu hesabı sildiyse bu telefondaki verilerini %2$s düğmesiyle silebilirsin.</string>
+    <string name="action_delete_from_phone">Telefondan Sil</string>
+    <string name="delete_from_phone_title">Bu telefondaki verileri silmek istiyor musun?</string>
+    <!-- %1$s is the username. -->
+    <string name="delete_from_phone_body">Uygulama %1$s hesabının bu telefondaki maç kayıtlarını, kadrolarını ve kamerayla çektiğin videoları siler. Galeriden seçtiğin videolar galeride kalır. Uygulama bunun için sunucuya hiçbir istek göndermez.</string>
+    <string name="phone_data_deleted">Uygulama bu telefondaki maç kayıtlarını, kadroları ve kamerayla çektiğin videoları sildi.</string>
+    <!-- The keystore could not seal session.bin at login: the session lives in memory until the app ends. -->
+    <string name="session_not_kept">Uygulama oturumunu bu telefona kaydedemedi, bu yüzden bir sonraki açılışta şifreni yeniden sorar.</string>
+    <!-- A session belongs to the server that opened it, so the choice waits for a logout. -->
+    <string name="server_locked">Uygulama oturum açıkken sunucu seçimini değiştirmez. Başka bir sunucu seçmek için önce çıkış yapabilirsin.</string>
     <string name="register_data">Sunucu hesabın için kullanıcı adını, şifrenin özetini ve görünen adını saklar. Uygulama e-posta adresini ve telefon numaranı sormaz.</string>
     <string name="register_display_hint">Uygulama bu adı ana sayfadaki selamda gösterir. Sunucu bu adı şimdilik başka hiçbir kullanıcıya göstermez.</string>
     <string name="register_username_hint">Kullanıcı adını uygulamada senden başka kimse görmez. Kullanıcı adı küçük harf, rakam, nokta ve alt çizgi taşıyabilir.</string>
@@ -596,7 +612,8 @@
     <string name="register_password_hint">Şifre en az 10 karakter olmalı ve kullanıcı adını içermemeli. Sunucu çok yaygın şifreleri kabul etmez.</string>
     <string name="register_code_hint">Kayıt kodunu Voleybol Ve Veleybol verir. Kodu büyük ya da küçük harfle, tireli ya da tiresiz yazabilirsin.</string>
     <string name="username_invalid">Kullanıcı adı 3 ile 30 karakter arasında olmalı, bir harfle başlamalı ve yalnız a-z harfleri, rakam, nokta ve alt çizgi taşımalı.</string>
-    <string name="display_name_invalid">Görünen ad 2 ile 40 karakter arasında olmalı ve yalnız harf, rakam, boşluk, nokta, kesme işareti ve kısa çizgi taşımalı.</string>
+    <!-- The server's whole rule (API_V1 section 10): ".." meets length and characters and is refused for want of a letter or digit (T3). -->
+    <string name="display_name_invalid">Görünen ad 2 ile 40 karakter arasında olmalı ve en az bir harf ya da rakam içermeli. Görünen ad harf ve rakamın yanında yalnız boşluk, nokta, kesme işareti ve kısa çizgi taşıyabilir.</string>
     <!-- 403 SIGNUP_CLOSED. Invite links come with a later slice, so this app can open an account with a code only. -->
     <string name="register_gate">Sunucu şimdilik yalnızca kayıt koduyla hesap açar. Kayıt kodunu Voleybol Ve Veleybol verir. Kodu kayıt kodu alanına yazıp yeniden deneyebilirsin.</string>
     <string name="register_code_invalid">Sunucu bu kayıt kodunu kabul etmedi. Kodu kontrol edebilir ya da Voleybol Ve Veleybol\'dan yeni bir kod isteyebilirsin.</string>
@@ -616,7 +633,8 @@
     <string name="password_too_short">Şifre en az 10 karakter olmalı. Sunucu daha kısa bir şifreyi kabul etmez.</string>
     <string name="password_too_long">Şifre en çok 128 karakter olmalı. Sunucu daha uzun bir şifreyi kabul etmez.</string>
     <string name="password_contains_username">Şifre kullanıcı adını içeriyor. Sunucu kullanıcı adını içeren bir şifreyi kabul etmez. Başka bir şifre seçebilirsin.</string>
-    <string name="password_repetitive">Bu şifrede dörtten az farklı karakter var. Sunucu böyle bir şifreyi kabul etmez. Başka bir şifre seçebilirsin.</string>
+    <!-- The server counts after folding case and dropping marks, so "AaBbAaBbAaBb" is refused: the text says what the server counted (T2). -->
+    <string name="password_repetitive">Sunucu bu şifrede dörtten az farklı karakter saydı ve şifreyi kabul etmedi. Sunucu A ile a, ş ile s ve ı ile i gibi harf çiftlerini aynı karakter sayar. Başka bir şifre seçebilirsin.</string>
     <string name="password_common">Bu şifre çok yaygın şifreler listesinde var. Sunucu bu şifreyi kabul etmez. Başka bir şifre seçebilirsin.</string>
     <string name="password_rejected">Sunucu bu şifreyi kabul etmedi. Başka bir şifre seçebilirsin.</string>
     <string name="password_wrong">Sunucu yazdığın şifreyi hesabının şu anki şifresiyle eşleştiremedi. Şifreni kontrol edip yeniden deneyebilirsin.</string>
@@ -631,7 +649,10 @@
     <!-- The question of the first login about the data app 0.7 kept without an account. -->
     <string name="legacy_title">Eski Veriler</string>
     <string name="legacy_body">Uygulamanın önceki sürümü bu telefonda hesaba bağlı olmayan şu verileri sakladı. Bu verileri hesabına taşıyabilirsin.</string>
-    <string name="legacy_teams">%1$d takım ve kadroları</string>
+    <plurals name="legacy_teams">
+        <item quantity="one">%1$d takım ve kadrosu</item>
+        <item quantity="other">%1$d takım ve kadroları</item>
+    </plurals>
     <string name="legacy_recordings">%1$d kamera kaydı</string>
     <string name="legacy_draft">Yarım kalan maç kurulumu</string>
     <string name="legacy_keep_note">Taşımazsan uygulama bu verileri silmez ama hiçbir hesapta göstermez. Uygulama bu soruyu bir daha sormaz.</string>

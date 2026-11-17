@@ -260,7 +260,7 @@ class RallyListFlowTest {
     private fun openTheRallyList() {
         ViewModelProvider(app.activity)[AppViewModel::class.java].baseUrlOverride = server.url("/v1").toString()
         app.setContent {
-            VolleyStatTheme { VolleyStatApp(editorVideo = { _, startMs -> remember { control.positionMs = startMs; control.video } }) }
+            VolleyStatTheme { VolleyStatApp(editorVideo = { _, startMs, _ -> remember { control.positionMs = startMs; control.video } }) }
         }
         app.onAllNodesWithText("$HOME_TEAM - $AWAY_TEAM", substring = true).onFirst().performClick()
         waitFor(text(R.string.rallies_title))
@@ -312,6 +312,39 @@ class RallyListFlowTest {
         waitFor(text(R.string.review_position, 2, 3))
         back()
         waitFor(text(R.string.rallies_count, 3))
+    }
+
+    @Test fun theRangeEditorAndTheReviewClipReadTheVideoWithTheSessionInAHeader() {
+        // What the app hands each player: the video's own address and the headers of every request (review finding F9).
+        val editors = CopyOnWriteArrayList<Pair<String, Map<String, String>>>()
+        val clips = CopyOnWriteArrayList<Pair<String, Map<String, String>>>()
+        ViewModelProvider(app.activity)[AppViewModel::class.java].baseUrlOverride = server.url("/v1").toString()
+        app.setContent {
+            VolleyStatTheme {
+                VolleyStatApp(
+                    editorVideo = { url, startMs, headers -> editors += url to headers; remember { control.positionMs = startMs; control.video } },
+                    clipPlayer = { url, _, _, headers -> clips += url to headers },
+                )
+            }
+        }
+        app.onAllNodesWithText("$HOME_TEAM - $AWAY_TEAM", substring = true).onFirst().performClick()
+        waitFor(text(R.string.rallies_title))
+        app.onNodeWithText(text(R.string.rallies_title)).performScrollTo().performClick()
+        waitFor(text(R.string.rallies_count, 3))
+        app.onNodeWithText("00:15 · 9 sn").performClick()
+        waitFor(text(R.string.action_choose_winner))
+        tap(R.string.action_choose_winner)
+        waitFor(text(R.string.review_position, 2, 3))
+        app.waitForIdle()
+
+        val video = server.url("/v1/videos/video-1/content").toString()
+        val session = mapOf("Authorization" to "Bearer ${TestAccounts.SESSION.token}")
+        assertTrue("the editor was shown", editors.isNotEmpty())
+        assertTrue("the clip was shown", clips.isNotEmpty())
+        (editors + clips).forEach { (url, headers) ->
+            assertEquals(video, url)
+            assertEquals(session, headers)
+        }
     }
 
     @Test fun theReportOpenedFromAReviewAboveTheListIsTheOneReportThereIs() {
@@ -459,7 +492,7 @@ class RallyListFlowTest {
         var viewModel by mutableStateOf(ViewModelProvider(app.activity)[AppViewModel::class.java].also { it.baseUrlOverride = url })
         val restoration = StateRestorationTester(app)
         restoration.setContent {
-            VolleyStatTheme { VolleyStatApp(viewModel = viewModel, editorVideo = { _, startMs -> remember { control.positionMs = startMs; control.video } }) }
+            VolleyStatTheme { VolleyStatApp(viewModel = viewModel, editorVideo = { _, startMs, _ -> remember { control.positionMs = startMs; control.video } }) }
         }
         app.onAllNodesWithText("$HOME_TEAM - $AWAY_TEAM", substring = true).onFirst().performClick()
         waitFor(text(R.string.rallies_title))

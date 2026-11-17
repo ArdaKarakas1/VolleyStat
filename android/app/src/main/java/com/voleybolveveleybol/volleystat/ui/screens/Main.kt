@@ -211,6 +211,7 @@ fun HomeScreen(
             style = MaterialTheme.typography.headlineSmall, modifier = Modifier.semantics { heading() },
         )
         if (state.saveFailed) Notice(stringResource(R.string.store_save_failed), Tone.NEGATIVE)
+        if (state.account.sessionNotKept) Notice(stringResource(R.string.session_not_kept), Tone.CAUTION)
         // The operator reset the password: the app suggests a new one (design 3.4).
         if (state.account.user?.passwordTemporary == true) Notice(stringResource(R.string.password_temporary), Tone.CAUTION)
         NewMatchCard(onNewMatch)
@@ -430,7 +431,8 @@ fun ProfileScreen(
 /**
  * The server this debug build talks to, and a test of it. The login and register screens show it
  * too, so a phone on USB can reach its server before anyone is signed in. A build without a server
- * address says so.
+ * address says so. While someone is signed in the choice is read-only: the session belongs to the
+ * server that opened it (review finding S5).
  */
 @Composable
 fun ServerSection(state: AppUiState, onServerTarget: (ServerTarget) -> Unit, onTestServer: () -> Unit) {
@@ -438,17 +440,23 @@ fun ServerSection(state: AppUiState, onServerTarget: (ServerTarget) -> Unit, onT
     if (!state.serverConfigured) {
         Notice(stringResource(R.string.server_none), Tone.NEUTRAL)
     } else {
+        val locked = state.account.user != null
         VsCard {
+            if (locked) {
+                Text(stringResource(R.string.server_locked), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(8.dp))
+            }
             listOf(
                 Triple(ServerTarget.EMULATOR, R.string.server_emulator, R.string.server_emulator_body),
                 Triple(ServerTarget.USB_DEVICE, R.string.server_usb, R.string.server_usb_body),
             ).forEach { (target, title, body) ->
                 val selected = state.settings.serverTarget == target
                 Row(
-                    Modifier.fillMaxWidth().heightIn(min = 56.dp).selectable(selected = selected, role = Role.RadioButton, onClick = { onServerTarget(target) }),
+                    Modifier.fillMaxWidth().heightIn(min = 56.dp)
+                        .selectable(selected = selected, enabled = !locked, role = Role.RadioButton, onClick = { onServerTarget(target) }),
                     verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    RadioButton(selected = selected, onClick = null)
+                    RadioButton(selected = selected, onClick = null, enabled = !locked)
                     Column(Modifier.weight(1f).padding(vertical = 6.dp)) {
                         Text(stringResource(title), style = MaterialTheme.typography.titleSmall)
                         Text(stringResource(body), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
