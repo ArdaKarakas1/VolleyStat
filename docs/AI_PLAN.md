@@ -36,7 +36,7 @@ Ortak varsayım şudur: Kullanıcı tek telefonu arka çizginin arkasına, bulab
 
 Her bileşen yalnız öneri üretir. Bir bileşen emin olamadığı yerde `UNKNOWN` ve bir neden kodu döner. Sunucu öneriyi, kullanıcı kararını ve rapordaki değeri ayrı kayıtlarda tutar.
 
-Aşağıdaki kaynakların lisansı kapalı kaynak ticari ürünü kısıtlar. AGPL ticari kullanımı yasaklamaz. AGPL, yazılımı ağ üzerinden sunan tarafın hizmetin bütün kaynak kodunu aynı lisansla açmasını ister. GPL-3.0 bu ağ koşulunu taşımaz. GPL-3.0, türev kodu açma yükümlülüğünü yazılımın bir kopyasını başkasına veren tarafa yükler. Yalnız kendi sunucusunda çalışan GPL kodu bu yüzden AGPL kodundan farklı bir durumdadır. Ekibin Android uygulamasının içinde dağıttığı bir model ya da kod ise kopya vermek anlamına gelir. Bu paragraf oturumun lisans metninden çıkardığı okumadır ve hukuki görüş değildir. Ekip hukuki görüş gelene kadar ihtiyatlı davranır ve tablodaki AGPL ve GPL kaynaklarını ürünün dışında tutar. Ürün sahibi bütün kodu aynı lisansla açmaya karar verirse ya da bir hukukçu sunucuda GPL kullanımını onaylarsa ekip bu kaynakları yeniden değerlendirir. Ekip ticari olmayan kullanım koşulu taşıyan kaynakları hiçbir durumda ürüne almaz.
+Aşağıdaki kaynakların lisansı kapalı kaynak ticari ürünü kısıtlar. AGPL ticari kullanımı yasaklamaz. AGPL, yazılımı ağ üzerinden sunan tarafın hizmetin bütün kaynak kodunu aynı lisansla açmasını ister. GPL-3.0 bu ağ koşulunu taşımaz. GPL-3.0, türev kodu açma yükümlülüğünü yazılımın bir kopyasını başkasına veren tarafa yükler. Yalnız kendi sunucusunda çalışan GPL kodu bu yüzden AGPL kodundan farklı bir durumdadır. Ekibin Android uygulamasının içinde dağıttığı bir model ya da kod ise kopya vermek anlamına gelir. Bu paragraf oturumun lisans metninden çıkardığı okumadır ve hukuki görüş değildir. Ekip hukuki görüş gelene kadar ihtiyatlı davranır ve tablodaki AGPL ve GPL kaynaklarını ürünün dışında tutar. Ürün sahibi 16 Kasım 2026'da kodun kapalı bir ticari ürün olarak kalmasına karar verdi (ADR-0117). Ekip bu yüzden AGPL ve GPL kaynaklarını ürünün dışında tutar ve yalnız Apache 2.0, MIT ve BSD gibi serbest lisanslı kaynakları kullanır. Ekip ticari olmayan kullanım koşulu taşıyan kaynakları hiçbir durumda ürüne almaz.
 
 | Kaynak | Lisans | Not |
 |---|---|---|
@@ -249,7 +249,7 @@ Bu belge fiyat vermez, çünkü kimse aşağıdaki değerleri ölçmedi ve hiçb
 - **Etiketleme:** CVAT (MIT, okundu) ve Label Studio (Apache 2.0, okundu) yerel bilgisayarda ücretsiz çalışır. Ralli sınırı etiketi için `03_RALLI_GOLD.csv` şablonu ve bir video oynatıcı yeter.
 - **Testler:** GitHub Actions `ml/` testlerini sentetik kliplerle zaten çalıştırır.
 
-Ücretli bulut ve GPU kararı ürün sahibine aittir. Ekip bu kararı G7 ölçümü olmadan istemez.
+Ürün sahibinin NVIDIA ekran kartlı bir bilgisayarı yok (16 Kasım 2026). Ücretli bulut ve GPU kararı ürün sahibine aittir. Ekip bu kararı G7 ölçümü olmadan istemez.
 
 ## 6. Sahipten beklenenler
 
@@ -260,10 +260,10 @@ Aşağıdaki işleri yalnız ürün sahibi yapabilir:
 3. Ürün sahibi videoları depoya koymadan mühendise teslim eder ve her video için tarihi, salonu, kamera kurulumunu ve izin durumunu bildirir.
 4. Ürün sahibi voleybol bilen ikinci bir anotatör bulur. İki anotatör ilk 20–50 ralliyi birbirinden bağımsız etiketler (B0). `agreement` komutu uyum oranını ve kappa değerini ancak 30 ortak ralliden itibaren yazar. İki anotatör bu yüzden en az 30 ralliyi ortak etiketler.
 5. Ürün sahibi her maç için iki takımın forma numaralarını içeren kadroyu verir.
-6. Ürün sahibi lisans yönünü seçer: Kod kapalı bir ticari ürün olur ya da bütün kod AGPL ile açık kalır. Bu karar bölüm 2'deki tabloyu doğrudan etkiler. Ürün sahibi GPL-3.0 kaynakları için ayrıca bir hukukçuya danışır, çünkü bu lisans yalnız sunucuda çalışan kodu AGPL gibi bağlamaz (bölüm 2).
+6. Karar verildi (16 Kasım 2026, ADR-0117): Kod kapalı bir ticari ürün olarak kalır. Ekip AGPL ve GPL kaynaklarını bu yüzden kullanmaz.
 7. Ürün sahibi önce açılacak üç aksiyon sınıfını seçer (G5). Bu belge servis, hücum ve bloğu önerir. Sözleşmedeki bitiren aksiyon kartı hücumu, bloğu ve servis asını (`ACE`) zaten sorar. Kart oyunda kalan servisi sormaz. Servis yine de adaydır, çünkü her rallinin ilk teması servistir (2.5) ve bileşen servisi bir kuralla bulabilir.
 8. Ürün sahibi izin metni ve saklama süresi için bir KVKK uzmanından görüş alır.
-9. Ürün sahibi bulut, GPU ve bütçe kararını G7 ölçümünden sonra verir.
+9. Ürün sahibinin NVIDIA ekran kartlı bir bilgisayarı yok (16 Kasım 2026). Analiz ve ölçüm yerelde işlemcide çalışır. Eğitim ve ince ayar ileride ancak ücretsiz not defteri ortamlarında yapılır. Ekip oyuncu görüntüsünü bu ortamlara ancak izin metni eğitimi ve yurt dışına aktarımı kapsadığında yükler. Ürün sahibi bulut ve bütçe kararını G7 ölçümünden sonra verir.
 
 ## 7. Doğrulanmamış bilgiler
 

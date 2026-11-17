@@ -511,6 +511,11 @@
     <string name="recording_delete_title">Bu kaydı sileyim mi?</string>
     <string name="recording_delete_body">Uygulama %1$s dosyasını telefondan siler. Dosyanın başka kopyası yoksa kayıt geri gelmez.</string>
     <string name="profile_version">Sürüm %1$s</string>
+    <string name="profile_feedback">Geri bildirim</string>
+    <string name="feedback_body">Bir hata gördüysen ya da bir önerin varsa bize yaz. Uygulama e-posta uygulamanı açar ve mesaja yalnızca uygulamanın sürümünü ve telefonunun modelini ekler. Mesajını ve e-posta adresini yalnızca Voleybol Ve Veleybol görür.</string>
+    <string name="feedback_address">Adres: %1$s</string>
+    <string name="action_send_feedback">Geri Bildirim Gönder</string>
+    <string name="feedback_no_mail_app">Telefonunda bir e-posta uygulaması yok. Yukarıdaki adrese başka bir cihazdan yazabilirsin.</string>
 
     <!-- 13: the match rule (ADR-0115). The server counts the sets with it; the phone counts nothing. -->
     <string name="rule_card_label">Maç kuralı</string>
