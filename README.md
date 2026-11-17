@@ -19,7 +19,8 @@ Bu depo yalnızca Android uygulamasını ve onun arka ucunu içerir. Web sitesi 
 | Maç kuralı | Var, testli. Kullanıcı maçı açarken kuralı seçer ve FIVB kuralı seçili gelir. Sunucu set skorlarını bu kurala göre sayar. Kullanıcı kuralı ralli listesinden de değiştirir. |
 | Ralli baseline'ı (`ml/`, hareket enerjisi) | Var. **Kimse gerçek maçta doğruluğunu ölçmedi.** |
 | Eğitilmiş yapay zekâ modeli | **Yok.** Uygulama bugün kendiliğinden istatistik çıkarmaz. Kullanıcı her rallinin kazananını kendisi seçer. |
-| Hesap sistemi, HTTPS, bulut | Yok. Sunucu yalnızca geliştirme bilgisayarında çalışır. |
+| Hesaplar (sunucu 0.8) | Sunucuda var, testli: kayıt, giriş, oturum, şifre değişikliği, hesap silme. Uygulamada giriş ekranı henüz yok. Maç uçları oturum istemez. |
+| HTTPS, bulut | Yok. Sunucu yalnızca geliştirme bilgisayarında çalışır. |
 
 Özellik bazında tam döküm: [docs/GAP_ANALYSIS.md](docs/GAP_ANALYSIS.md). Yapay zekâ planı: [docs/AI_PLAN.md](docs/AI_PLAN.md). Mimari kararlar: [docs/ADR.md](docs/ADR.md).
 
@@ -37,7 +38,7 @@ python -m app      # 127.0.0.1:8000, yalnız bu bilgisayardan erişilir
 pytest -q          # başka bir terminalde
 ```
 
-Sunucuda hesap sistemi ve TLS yoktur. İnternete açmayın. Yalnızca sentetik ya da kullanım izni açık test videoları yükleyin.
+Sunucuda TLS yoktur ve maç uçları henüz oturum istemez. İnternete açmayın. Kayıt için operatör kodu `python -m app.admin signup-code` ile çıkar. Yalnızca sentetik ya da kullanım izni açık test videoları yükleyin.
 
 Sunucu varsayılan olarak analizör olmadan başlar ve analiz isteğine `503 MODEL_NOT_CONFIGURED` yanıtını verir. Analiz, inceleme ve rapor ekranlarını denemek için sunucuyu demo analizörle başlatın:
 
@@ -106,7 +107,7 @@ VolleyStat kapalı bir ticari ürünün kaynağıdır. `LICENSE` dosyası bütü
 
 - [docs/GAP_ANALYSIS.md](docs/GAP_ANALYSIS.md): Gereksinim ve kod farkı, sıradaki işler
 - [docs/AI_PLAN.md](docs/AI_PLAN.md): Maçı analiz edecek yapay zekâ için plan
-- [docs/API_V1.md](docs/API_V1.md): Analiz, doğrulama, ralli düzeltme, maç kuralı ve rapor sözleşmesi (API 0.7)
+- [docs/API_V1.md](docs/API_V1.md): Analiz, doğrulama, ralli düzeltme, maç kuralı, rapor ve hesap sözleşmesi (API 0.8)
 - [docs/API.md](docs/API.md): Yükleme ve dosya doğrulama uçları
 - [docs/UI_V1_PLAN.md](docs/UI_V1_PLAN.md): UI Tasarım V1 uygulama planı
 - [docs/design.md](docs/design.md): Tasarım sistemi

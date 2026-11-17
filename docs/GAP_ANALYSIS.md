@@ -19,7 +19,7 @@ Depoda eğitilmiş model yok. Kimse hiçbir yapay zekâ bileşeninin doğruluğu
 | ID | Özellik | Öncelik | Durum | Açıklama |
 |---|---|---|---|---|
 | FR-01 | Modern Android arayüzü | P0 | TEST EDİLDİ (JVM) | UI Tasarım V1: on ekran, dört sekme, açık ve koyu tema. Ekran görüntüsü testleri 411 dp, 320 dp ve 1,5 kat yazıyı kapsar. Kimse uygulamayı gerçek telefonda denemedi. |
-| FR-02 | Hesap ve takım taslağı | P0 | KISMEN | Takımlar ve kadrolar telefonda durur ve testlidir. Hesap sistemi yok. |
+| FR-02 | Hesap ve takım taslağı | P0 | KISMEN | Takımlar ve kadrolar telefonda durur ve testlidir. Sunucuda hesaplar var (sürüm 0.8, TEST EDİLDİ, ADR-0119): kayıt, giriş, oturum, şifre değişikliği ve hesap silme. Uygulamada giriş ekranı yok. Sunucudaki takım, davet bağlantısı, açık maç ve maç isteği sonraki dilimlerde gelir. |
 | FR-03 | Galeriden video | P0 | KISMEN | Sistem Photo Picker bağlı, küçük resim ve süre görünür. Seçici hiçbir otomatik testte çalışmadı. |
 | FR-04 | Kamera video kaydı | P0 | KISMEN | CameraX ile uygulama içi kayıt: süre, duraklat, bitir, boş alan uyarısı, izin akışı. Kayıt CI emülatöründe (API 34) TEST EDİLDİ. Uzun kayıt ve gerçek telefon denemesi yok. |
 | FR-05 | Kamera yerleşim rehberi | P0 | KISMEN | Çekim rehberi ekranı ve hizalama köşeleri var. Uygulama sahayı algılamaz ve kadrajı denetlemez. |
@@ -114,7 +114,7 @@ Sayılar son yerel koşudan gelir. CI aynı testleri her PR'da çalıştırır.
 
 | Kanıt | Sonuç |
 |---|---|
-| Arka uç `pytest` | 615 test geçti (yerelde Python 3.13). CI aynı testleri Python 3.12 ile çalıştırır. |
+| Arka uç `pytest` | 688 test geçti (yerelde Python 3.13). 73 test hesapları dener. CI aynı testleri Python 3.12 ile çalıştırır. |
 | `ml` `pytest` | 551 test geçti (yerel). 312 test kazanan ölçümüyle geldi. Bu testlerin hiçbiri gerçek maç verisi okumaz. Her test girdisini kendi içinde kurar. |
 | Android JVM testleri (`:core:test`, `:app:testDebugUnitTest`) | 290 test geçti, hiçbiri atlanmadı (yerel, sunucu açıkken): `:core` 5, `:app` 285. Testler 92 ekran görüntüsü üretti. |
 | Uygulama gerçek sunucuya karşı (JVM) | 11 test geçti (yerel): `BackendE2eTest` 7, `AppFlowE2eTest` 1, `AppUploadFlowE2eTest` 1, `RallyFixE2eTest` 2. Bu on bir test yukarıdaki 290 testin içindedir. `BackendE2eTest` her rallinin maç numarasını ve sayımın dışında kalan ralli sayısını da sunucudan okur. İkisi ralli düzeltmeyi dener: biri API istemcisinden, öbürü ekranlardan. İkisi maç kuralını dener. Biri API istemcisinden gider: Kural maçla gider, sunucu sunulan 18 kuralın hepsini kabul eder, listede yeni kuralı verir ve eski kurala dayanan geç bir isteği reddeder. Öbürü kuralı ekranlardan değiştirir. Bu iki test hiçbir set sınırına ulaşmaz. Setleri kuralla sayan rotaları sunucu testleri dener. |

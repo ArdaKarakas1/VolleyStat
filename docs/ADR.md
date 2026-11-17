@@ -290,3 +290,29 @@ Sınırlar:
 - Sunucu bir videonun bütün maçlarını aynı kuralla sayar.
 - Kaçan bir ralli bir set sınırını ve bir maç sınırını kaydırabilir. Kullanıcı listeyi onaylayana kadar sunucu hiçbir bölümü `MEASURED` yazmaz.
 
+## ADR-0119: Hesaplar: kullanıcı adı, şifre ve görünen ad
+
+**Tarih:** 17 Kasım 2026 · **Durum:** Kabul edildi
+
+**Bağlam:** Ürün sahibi 16 Kasım 2026'da giriş, takım kurma ve takıma katılma, kaptanlar arası maç isteği, kişi ve takım istatistiği istedi. Ürün sahibi 17 Kasım 2026'da girişi onayladı: kullanıcı adı, şifre ve görünen ad. Ekip bu katmanı dilimlerle kurar. Bu ADR ilk dilimi (B1, sunucuda hesaplar) kaydeder. Takım, davet bağlantısı, açık maç ve maç isteği kendi dilimleriyle bu ADR'ye eklenir. Tasarımın tamamı `claude/volleystat-accounts-design` dalındadır.
+
+Kararlar:
+
+- Kişi kullanıcı adı, şifre ve görünen ad verir. Sunucu e-posta ve telefon numarası istemez. Google ile giriş, ürün sahibi ücretsiz bir OAuth istemcisi açınca gelir.
+- Başka hiçbir kullanıcı bir kişinin kullanıcı adını görmez. Takım arkadaşları ve rakipler yalnız görünen adı görür.
+- Şifre en az 10, en çok 128 karakterdir. Şifre kullanıcı adını içeremez ve en yaygın 10 000 şifreden biri olamaz. Sunucu büyük harf ya da sembol istemez, çünkü bu kurallar şifreyi güçlendirmeden hatırlamayı zorlaştırır. Liste SecLists projesinden gelir ve MIT lisanslıdır (`THIRD_PARTY_NOTICES.md`).
+- Sunucu şifreyi scrypt ile özetler (N=2^15, r=8, p=3). Bir özet geliştirme makinesinde yaklaşık 170 ms sürer. Sunucu özetleri iki iş parçacıklı ayrı bir havuzda hesaplar ve en çok 16 özeti bekletir. Sunucu fazlasına `503 SERVER_BUSY` döner. Kalabalık bir giriş dalgası API'nin geri kalanını böylece bekletmez.
+- Oturum 30 gün kullanılmayınca, her durumda da 180 gün sonra biter. Sunucu oturum anahtarının, telefon anahtarının ve operatör kodunun yalnız SHA-256 özetini tutar.
+- Kayıt kapısı: Sunucu kaydı ancak bir davet bağlantısıyla ya da operatörün verdiği tek kullanımlık kodla açar. Kapı kapalıyken sunucu kullanıcı adını sorgulamaz, bu yüzden alınmış ve boş kullanıcı adına aynı yanıtı döner. Davet bağlantısı takım diliminde gelir. O zamana kadar operatör kodu `python -m app.admin signup-code` ile çıkar ve 7 gün geçerlidir. Testler ve CI `VOLLEYSTAT_SIGNUP=open` ile çalışır.
+- Deneme sınırı: Sunucu bir kullanıcı adının hatalı girişlerini sayar. İlk beş deneme serbesttir. Sonraki her hatadan sonra bekleme 30 saniyeden başlar ve 15 dakikaya kadar ikiye katlanır. Bir saatte 50 hata o kullanıcı adını 15 dakika kilitler. Daha önce bu hesaba giriş yapmış bir telefon kendi anahtarıyla sayılır, bu yüzden kullanıcı adını bilen bir yabancı sahibin telefonunu kilitleyemez. Sayaçlar yalnız sunucunun belleğinde durur ve diske yazılmaz.
+- Şifreyi unutan kişiye operatör `python -m app.admin reset-password <kullanıcı adı>` ile geçici bir şifre verir. Sunucu o hesabın bütün oturumlarını kapatır ve telefon anahtarlarını siler. Uygulama girişten sonra yeni bir şifre önerir. Kurtarma kodları sunucu internete açılınca gelir.
+- Kişi şifresini girerek hesabını siler. Sunucu kullanıcıyı, oturumlarını ve telefon anahtarlarını siler, sonra günlük dosyasını boşaltır. Takım ve maç kayıtlarının silinmesi kendi dilimleriyle gelir.
+- Sunucu erişim günlüğü yazmaz ve `X-Forwarded-For` başlığını yok sayar. Hiçbir istek adresi ya da yolu diske ulaşmaz.
+- Bu dilimde maç, yükleme, analiz ve rapor uçları oturum istemez. Uygulamanın 0.7.0 sürümü böylece 0.8.0 sunucusuyla çalışmayı sürdürür. Erişim denetimi ayrı bir dilimde gelir (B3).
+
+Sınırlar:
+
+- Sunucu artık kişisel veri tutar: kullanıcı adı, görünen ad ve şifre özeti. Ürün sahibi KVKK incelemesini sonraya bıraktı. Uygulama başka takımlara bu incelemeden önce açılmaz (ADR-0117).
+- Sunucu yalnız bu bilgisayardan erişilir (127.0.0.1). Bugün her istek aynı kaynaktan gelir. İnternet adresine göre sayaç sunucu internete açılınca gelir.
+- Sayaçlar sunucu yeniden başlayınca sıfırlanır. Bir saldırgan sunucuyu yeniden başlatamaz, bu yüzden ekip bu sınırı kabul eder.
+
