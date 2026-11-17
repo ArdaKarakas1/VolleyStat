@@ -986,3 +986,213 @@ def test_a_deleted_account_leaves_no_trace_while_another_connection_is_open(api,
 def test_a_lowercase_bearer_scheme_is_read(api):
     token = token_of(register(api))
     assert api.get("/v1/me", headers={"Authorization": f"bearer {token}"}).status_code == 200
+
+
+# --- mutation run of the slice: what the earlier tests let through ------------------------------
+
+def test_an_operator_code_uses_only_characters_that_can_not_be_confused(storage):
+    codes = [accounts.issue_operator_code(storage / "volleystat.sqlite3", "SIGNUP") for _ in range(40)]
+    letters = set("".join(codes).replace("-", ""))
+    assert letters <= set(accounts.CODE_ALPHABET)
+    assert not letters & set("01ILO")
+    assert all(len(code) == 19 and [len(group) for group in code.split("-")] == [4, 4, 4, 4] for code in codes)
+
+
+@pytest.mark.parametrize("text", ["ABC", "ABCD-EFGH-JKMN-PQR", "ABCD-EFGH-JKMN-PQRS-T", "ABCD-EFGH-JKMN-PQR0", "ABCD EFGH JKMN PQRI"])
+def test_a_text_that_can_not_be_an_operator_code_is_read_as_none(text):
+    assert accounts.normalize_operator_code(text) is None
+
+
+def test_a_captain_code_does_not_open_a_registration_before_the_teams_slice(gated, storage):
+    code = accounts.issue_operator_code(storage / "volleystat.sqlite3", "CAPTAIN")
+    # The gate answers before the fields: a bad username still gets the code's answer.
+    response = register(gated, username="X", operatorCode=code)
+    assert (response.status_code, error(response)["code"]) == (403, "SIGNUP_CODE_INVALID")
+
+
+@pytest.mark.parametrize("display_name", ["张伟", "Ǆemal Öz", "Ana Lı"])
+def test_letters_of_every_script_are_letters(display_name):
+    assert accounts.clean_display_name(display_name) == display_name
+
+
+@pytest.mark.parametrize("display_name", ["Ay se", "Ay\nse", "Ay\tse", "Aysé́", "́́"])
+def test_other_spaces_controls_and_loose_marks_are_refused(display_name):
+    assert accounts.clean_display_name(display_name) is None
+
+
+def test_the_length_of_a_password_is_counted_after_nfkc(api):
+    # ﬀ is one character and becomes "ff" under NFKC: nine characters typed count as ten.
+    assert register(api, password="ﬀsifre-77").status_code == 201
+
+
+def test_a_digest_of_another_kind_is_refused():
+    with pytest.raises(ValueError):
+        accounts.verify_password(PASSWORD, "bcrypt$32768$8$3$AAAA$AAAA")
+    with pytest.raises(ValueError):
+        accounts.verify_password(PASSWORD, "scrypt$32768$4$3$AAAA$AAAA")
+
+
+def test_failures_are_kept_for_an_hour_after_the_last_one(api, clock):
+    register(api)
+    for _ in range(5):
+        login(api, password=OTHER_PASSWORD)
+    clock.advance(minutes=59)
+    # The count of five is still there: one more failure locks the username again at once.
+    assert login(api, password=OTHER_PASSWORD).status_code == 401
+    assert login(api).status_code == 429
+
+
+def test_the_fifty_an_hour_window_forgets_failures_older_than_an_hour():
+    limiter = accounts.Limiter()
+    keys = [("login:user:ayse.k", accounts.WINDOW, "USER")]
+    for second in range(49):
+        limiter.fail(keys, 1000.0 + second)
+    limiter.fail(keys, 1000.0 + 3600 + 1)
+    assert limiter.wait(keys, 1000.0 + 3602) is None
+
+
+def test_the_fifty_an_hour_window_starts_again_after_its_lock():
+    limiter = accounts.Limiter()
+    keys = [("login:user:ayse.k", accounts.WINDOW, "USER")]
+    for second in range(50):
+        limiter.fail(keys, 1000.0 + second)
+    assert limiter.wait(keys, 1050.0) is not None
+    limiter.fail(keys, 1049.0 + 901)
+    assert limiter.wait(keys, 1049.0 + 902) is None
+
+
+def test_the_limiter_holds_ten_thousand_keys():
+    assert accounts.Limiter().max_keys == 10_000
+
+
+def test_a_locked_window_key_is_not_forgotten_to_make_room():
+    limiter = accounts.Limiter(max_keys=2)
+    window = [("login:user:ayse.k", accounts.WINDOW, "USER")]
+    for second in range(50):
+        limiter.fail(window, 1000.0 + second)
+    for name in ("b", "c", "d"):
+        limiter.fail([(f"login:user:{name}:local", accounts.BACKOFF, "USER")], 1060.0)
+    assert limiter.wait(window, 1061.0) is not None
+
+
+def test_a_session_answer_names_the_idle_end(api, clock):
+    session = register(api).json()["session"]
+    assert session["expiresAt"] == accounts.iso(clock.now + timedelta(days=30))
+    assert len(session["token"]) >= 43
+
+
+def test_the_temporary_password_ends_exactly_seven_days_after_the_reset(api, storage, clock):
+    register(api)
+    temporary = accounts.reset_password(storage / "volleystat.sqlite3", "ayse.k")
+    assert len(temporary) == 19 and set(temporary.replace("-", "")) <= set(accounts.CODE_ALPHABET)
+    clock.advance(days=7)
+    assert login(api, password=temporary).status_code == 401
+
+
+def test_a_right_password_inside_a_session_clears_the_count(api):
+    token = token_of(register(api))
+    for _ in range(4):
+        assert api.post("/v1/me/delete", headers=bearer(token), json={"password": OTHER_PASSWORD}).status_code == 403
+    assert api.put("/v1/me/display-name", headers=bearer(token), json={"displayName": "Ayşe"}).status_code == 200
+    changed = api.put("/v1/me/password", headers=bearer(token), json={"currentPassword": PASSWORD, "newPassword": "yepyeni-bir-sifre-7"})
+    assert changed.status_code == 200
+    for _ in range(4):
+        assert api.post("/v1/me/delete", headers=bearer(token), json={"password": OTHER_PASSWORD}).status_code == 403
+
+
+def test_a_taken_username_costs_no_hash(api, monkeypatch):
+    register(api)
+    monkeypatch.setattr(accounts, "hash_password", lambda password: pytest.fail("a taken username must not hash"))
+    assert register(api).status_code == 409
+
+
+def test_a_login_removes_the_ended_sessions_and_the_forgotten_phones_of_the_account(api, storage, clock):
+    register(api)
+    clock.advance(days=181)
+    assert login(api).status_code == 200
+    # The session and the phone of the registration ended long ago; only the new ones stay.
+    assert rows(storage, "SELECT COUNT(*) FROM sessions") == [(1,)]
+    assert rows(storage, "SELECT COUNT(*) FROM login_devices") == [(1,)]
+
+
+@pytest.mark.parametrize("value, mode", [(" OPEN ", "OPEN"), ("Link", "LINK")])
+def test_the_gate_setting_is_read_without_case_or_spaces(storage, monkeypatch, value, mode):
+    monkeypatch.setenv("VOLLEYSTAT_SIGNUP", value)
+    with TestClient(create_app(storage, analyzer="none")) as client:
+        assert client.get("/v1/health").json()["accounts"]["signup"] == mode
+
+
+def test_an_unknown_team_setting_stops_the_start_before_storage_is_touched(tmp_path, monkeypatch):
+    monkeypatch.setenv("VOLLEYSTAT_TEAMS", "herkes")
+    with pytest.raises(ValueError, match="VOLLEYSTAT_TEAMS"):
+        create_app(tmp_path / "hic-yok", analyzer="none")
+    assert not (tmp_path / "hic-yok").exists()
+
+
+def test_an_unknown_gate_setting_stops_the_start_before_storage_is_touched(tmp_path, monkeypatch):
+    monkeypatch.setenv("VOLLEYSTAT_SIGNUP", "herkes")
+    with pytest.raises(ValueError, match="VOLLEYSTAT_SIGNUP"):
+        create_app(tmp_path / "hic-yok", analyzer="none")
+    assert not (tmp_path / "hic-yok").exists()
+
+
+def test_the_hash_pool_closes_with_the_app(storage, open_signup):
+    app = create_app(storage, analyzer="none")
+    with TestClient(app):
+        pass
+    with pytest.raises(RuntimeError):
+        app.state.hash_pool._executor.submit(lambda: None)
+
+
+def test_the_admin_commands_create_the_storage_folder(tmp_path, capsys):
+    from app import admin
+    folder = tmp_path / "yeni-depo"
+    assert admin.main(["--storage", str(folder), "signup-code"]) == 0
+    assert (folder / "volleystat.sqlite3").exists()
+    assert oct(folder.stat().st_mode & 0o777) == "0o700"
+
+
+def test_the_database_keeps_one_account_per_username(storage):
+    TestClient(create_app(storage, analyzer="none"))
+    conn = sqlite3.connect(storage / "volleystat.sqlite3")
+    try:
+        conn.execute("INSERT INTO users(id, username, display_name, password_hash, created_at, password_changed_at, signup_via)"
+                     " VALUES('a', 'ayse.k', 'A', 'x', 't', 't', 'OPEN')")
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("INSERT INTO users(id, username, display_name, password_hash, created_at, password_changed_at, signup_via)"
+                         " VALUES('b', 'ayse.k', 'B', 'x', 't', 't', 'OPEN')")
+    finally:
+        conn.close()
+
+
+def test_a_password_that_is_common_in_another_case_is_common(api):
+    # The list holds "Good123654"; the lowercase form is common too.
+    response = register(api, password="good123654")
+    assert error(response)["details"]["reason"] == "COMMON"
+
+
+def test_a_deletion_whose_session_ended_while_it_hashed_deletes_nothing(storage, open_signup, monkeypatch):
+    with TestClient(create_app(storage, analyzer="none")) as client:
+        register(client)
+        thief = token_of(login(client))
+        hold_hash(monkeypatch, "verify_password", lambda: accounts.reset_password(storage / "volleystat.sqlite3", "ayse.k"))
+        late = client.post("/v1/me/delete", headers=bearer(thief), json={"password": PASSWORD})
+        assert late.status_code == 401
+        assert rows(storage, "SELECT COUNT(*) FROM users") == [(1,)]
+
+
+def test_a_deletion_waits_for_a_short_reader_before_it_empties_the_log(api, storage):
+    body = register(api, username="silinecek.kisi", display_name="Silinecek Kişi").json()
+    reader = sqlite3.connect(storage / "volleystat.sqlite3", check_same_thread=False)
+    reader.execute("BEGIN")
+    reader.execute("SELECT COUNT(*) FROM users").fetchall()
+    finished = threading.Timer(0.3, reader.rollback)
+    finished.start()
+    try:
+        assert api.post("/v1/me/delete", headers=bearer(body["session"]["token"]), json={"password": PASSWORD}).status_code == 204
+        finished.join()
+        files = b"".join(path.read_bytes() for path in storage.glob("volleystat.sqlite3*"))
+        for trace in ("silinecek.kisi", "Silinecek Kişi"):
+            assert trace.encode() not in files, trace
+    finally:
+        reader.close()

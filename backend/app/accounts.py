@@ -107,12 +107,11 @@ def username_ok(username: str) -> bool:
 def clean_display_name(text: str) -> str | None:
     """The display name as stored, or None when it breaks the rule.
 
-    NFC, no control or format character anywhere (that covers bidi and zero-width marks), trimmed,
-    runs of spaces made one, 2 to 40 characters of letters, digits, spaces and . ' -.
+    NFC, trimmed, runs of spaces made one, then 2 to 40 characters of letters, digits, spaces and
+    . ' -, with at least one letter or digit. Every other character is refused, control and format
+    characters (bidi and zero-width marks) included.
     """
     text = unicodedata.normalize("NFC", text)
-    if any(unicodedata.category(char) in ("Cc", "Cf") for char in text):
-        return None
     text = " ".join(part for part in text.split(" ") if part)
     if not 2 <= len(text) <= 40:
         return None

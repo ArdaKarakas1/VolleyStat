@@ -226,6 +226,7 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
                   description="LOCAL TEST DATA ONLY. Accounts exist, but the routes of matches do not ask for a session yet."
                               " No trained AI. Never expose to the internet.")
     app.state.worker = worker
+    app.state.hash_pool = hash_pool
     app.add_middleware(BodyLimit, exempt=is_chunk_upload)
 
     @app.exception_handler(StarletteHTTPException)
