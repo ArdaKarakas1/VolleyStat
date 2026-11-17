@@ -59,7 +59,7 @@ TEAM_MODES = {"operator": "OPERATOR", "open": "OPEN"}
 
 USERNAME = re.compile(r"[a-z][a-z0-9._]{2,29}")
 DISPLAY_NAME_MARKS = frozenset(" .'-")
-COMMON_PASSWORDS = Path(__file__).parent / "data" / "common_passwords.txt"
+COMMON_PASSWORDS = Path(__file__).parent / "wordlists" / "common_passwords.txt"
 
 
 def now() -> datetime:
