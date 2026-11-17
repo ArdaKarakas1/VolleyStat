@@ -61,7 +61,8 @@ data class UploadStatus(val nextOffset: Long, val status: String, val videoId: S
  * [onAuthRequired] before it throws, so the app can end that one session.
  */
 class ApiClient(
-    private val baseUrl: String,
+    /** The address every call of this client goes to. The view model compares it with the one it talks to when a login comes back. */
+    val baseUrl: String,
     /**
      * How long the app waits for the answer to a correction, and for the list and the cards it
      * reads right after one. The screen that sent the correction keeps the user until all three

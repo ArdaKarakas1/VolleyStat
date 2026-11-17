@@ -647,6 +647,7 @@
     <!-- No answer arrived: the request may have reached the server, so the text says no more than that. -->
     <string name="net_no_answer">Uygulama sunucudan yanıt alamadı. Biraz sonra yeniden deneyebilirsin.</string>
     <string name="account_unexpected">Uygulama sunucunun yanıtını okuyamadı. Sunucu seçimini kontrol edip yeniden deneyebilirsin.</string>
+    <string name="account_server_changed">Uygulama bu isteği şu an seçili olmayan bir sunucuya gönderdi ve gelen yanıtla oturum açmadı. Yeniden deneyebilirsin.</string>
     <string name="account_server_older">Sunucunun sürümü bu uygulamadan eski. Uygulama bu sunucuda hesap açamaz ve giriş yapamaz.</string>
     <string name="account_refused">Sunucu bu isteği kabul etmedi ve hiçbir şeyi değiştirmedi.</string>
     <!-- 503 SERVER_BUSY after the app's own repeats. %1$d is the number of times it sent the request. -->
@@ -674,6 +675,7 @@
     <string name="action_change_password">Şifreyi Değiştir</string>
     <string name="password_change_body">Sunucu yeni şifreyi kaydedince bu hesabın öteki bütün oturumlarını kapatır. Bu telefondaki oturumun açık kalır.</string>
     <string name="password_changed">Sunucu şifreni değiştirdi ve bu hesabın öteki bütün oturumlarını kapattı.</string>
+    <string name="password_not_handed_over">Android şifre değiştirme ekranını sunucunun yanıtı gelmeden yeniden kurdu. Bu yüzden uygulama yeni şifreni şifre yöneticisine iletemedi. Şifre yöneticin bu hesabın eski şifresini tutuyorsa yeni şifreyi oraya sen yazabilirsin.</string>
     <string name="action_logout">Çıkış Yap</string>
     <string name="logout_title">Çıkış yapmak istiyor musun?</string>
     <string name="logout_body">Uygulama bu hesabın maçlarını, kadrolarını ve kamera kayıtlarını bu telefonda saklar. Yeniden giriş yapınca hepsini yerinde bulursun.</string>

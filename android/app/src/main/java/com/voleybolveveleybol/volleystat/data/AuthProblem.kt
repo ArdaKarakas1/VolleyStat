@@ -34,6 +34,12 @@ sealed interface AuthProblem {
     data object Unreachable : AuthProblem
     /** Something answered that is not this API, or an answer this app can not read. */
     data object UnexpectedAnswer : AuthProblem
+    /**
+     * A login or a registration came back from another address than the one the app talks to now. The
+     * app opened no session with it (second review, R2-B); the server choice waits while a call is on
+     * its way, so only a change of the address itself leads here.
+     */
+    data object ServerChanged : AuthProblem
     /** A server before 0.8: it has no account routes. */
     data object ServerOutdated : AuthProblem
     /** 401 LOGIN_FAILED: the username and the password do not match an account (the same answer for both). */
@@ -60,6 +66,7 @@ sealed interface AuthProblem {
     companion object {
         fun of(error: Throwable): AuthProblem = when (error) {
             is ApiException -> of(error)
+            is AnswerFromAnotherServer -> ServerChanged
             is JSONException -> UnexpectedAnswer
             is IOException -> Unreachable
             else -> UnexpectedAnswer
@@ -96,3 +103,6 @@ sealed interface AuthProblem {
             runCatching { enumValueOf<T>(name) }.getOrDefault(fallback)
     }
 }
+
+/** Thrown when the answer to a login or a registration came from another address than the one the app talks to now. */
+class AnswerFromAnotherServer : Exception("The answer came from another server than the one the app talks to now")

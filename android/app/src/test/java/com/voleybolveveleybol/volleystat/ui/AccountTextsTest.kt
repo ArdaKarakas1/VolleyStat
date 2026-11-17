@@ -38,6 +38,8 @@ class AccountTextsTest {
         assertEquals("a server without /v1/auth is older", string(R.string.account_server_older), text(AuthProblem.ServerOutdated))
         assertEquals(string(R.string.session_ended), text(AuthProblem.SessionEnded))
         assertEquals(string(R.string.account_refused), text(AuthProblem.Refused(422, "VALIDATION_ERROR")))
+        assertEquals("an answer from another address than the chosen one", string(R.string.account_server_changed), text(AuthProblem.ServerChanged))
+        assertEquals(AuthProblem.ServerChanged, AuthProblem.of(com.voleybolveveleybol.volleystat.data.AnswerFromAnotherServer()))
     }
 
     @Test fun theAnswersOfARegistrationHaveTheirOwnTexts() {
@@ -143,7 +145,7 @@ class AccountTextsTest {
             AuthProblem.Unreachable, AuthProblem.UnexpectedAnswer, AuthProblem.ServerOutdated, AuthProblem.LoginFailed, AuthProblem.SessionEnded,
             AuthProblem.ServerBusy(1), AuthProblem.SignupClosed(SignupClosedReason.NO_LINK), AuthProblem.SignupCodeInvalid, AuthProblem.LinkNotFound,
             AuthProblem.UsernameTaken, AuthProblem.UsernameInvalid, AuthProblem.DisplayNameInvalid, AuthProblem.PasswordWrong, AuthProblem.Refused(400, "X"),
-            AuthProblem.TooManyAttempts(AttemptScope.USER, null),
+            AuthProblem.TooManyAttempts(AttemptScope.USER, null), AuthProblem.ServerChanged,
         ) + PasswordRule.entries.map { AuthProblem.PasswordRejected(it) } + AttemptScope.entries.map { AuthProblem.TooManyAttempts(it, 30) }
         AccountAction.entries.forEach { action ->
             problems.forEach { problem ->

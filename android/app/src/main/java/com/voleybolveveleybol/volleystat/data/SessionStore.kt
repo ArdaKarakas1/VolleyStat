@@ -45,16 +45,24 @@ internal fun replaceAtomically(file: File, bytes: ByteArray) {
 /** session.bin: the one session of this phone, sealed with [cipher]. */
 class SessionStore(private val file: File, private val cipher: SessionCipher) {
 
-    /** The saved session, or null. A file that is damaged, cut short or sealed with another key is no session. */
+    /**
+     * The saved session, or null. A file that is damaged, cut short or sealed with another key is no
+     * session. A failure that may pass (a keystore error at the start of the app) is tried once more,
+     * as device.bin is (second review, R2-C). If it stays, this start has no session, and the file
+     * stays as it is for the next start: nothing here deletes or rewrites it.
+     */
     fun load(): Session? {
-        if (!file.isFile) return null
+        val json = try {
+            readSealed(file, cipher)
+        } catch (error: Exception) {
+            return null
+        }
         return try {
-            val json = JSONObject(String(cipher.open(file.readBytes()), Charsets.UTF_8))
             Session(
                 json.getString("token"), json.getString("userId"), json.getString("username"),
                 json.getString("displayName"), json.getString("expiresAt"), json.optBoolean("deletionUnanswered", false),
             ).takeIf { it.token.isNotEmpty() && it.userId.isNotEmpty() }
-        } catch (error: Exception) {
+        } catch (damaged: org.json.JSONException) {
             null
         }
     }
@@ -140,9 +148,10 @@ private fun readSealed(file: File, cipher: SessionCipher): JSONObject {
  * data until the user answers or the account logs in again. The list outlives the process, so the
  * folder of an account the server may have deleted never drops out of reach.
  *
- * [ids] (deletions.ids) alone says which accounts are in doubt. It is plain JSON and holds only user
- * ids, which already stand in plain text as the names of the account folders (accounts/<id>/), so it
- * adds no personal data, and it never depends on the keystore. [file] (deletions.bin) keeps each
+ * [ids] (deletions.ids) says which accounts are in doubt. It is plain JSON and holds only user ids,
+ * which already stand in plain text as the names of the account folders (accounts/<id>/), so it adds
+ * no personal data, and it never depends on the keystore. Only where it can not be read does the
+ * sealed list stand in for it (see [held]). [file] (deletions.bin) keeps each
  * one's username for the text of the offer, sealed like session.bin. A username that can not be read
  * (a new keystore key, a damaged file, a keystore that fails now) leaves its account in doubt
  * without a name, and the offer then names no account.
@@ -186,14 +195,16 @@ class DeletionDoubtStore(
     }
 
     /**
-     * The ids in deletions.ids. A phone of the first round of this slice kept the list in deletions.bin
-     * only; its order counts until the first write of the plain list, and while the keystore can not
-     * open it, this throws so that no write replaces it.
+     * The ids in deletions.ids. Where that list is missing or can not be read, deletions.bin names the
+     * same accounts in the same order: a phone of the first round of this slice kept the list there
+     * only, and a damaged plain list (storage that failed) leaves the sealed one as the only record.
+     * Its order counts until the next write of the plain list. While the keystore can not open it, this
+     * throws, so that no write replaces either file (second checker's finding on F1).
      */
     private fun held(names: Map<String, String>?): List<String> {
         if (ids.isFile) {
-            val accounts = runCatching { JSONObject(ids.readText()).optJSONArray("accounts") }.getOrNull() ?: return emptyList()
-            return (0 until accounts.length()).map { accounts.optString(it) }.filter { it.isNotEmpty() }.distinct()
+            val accounts = runCatching { JSONObject(ids.readText()).getJSONArray("accounts") }.getOrNull()
+            if (accounts != null) return (0 until accounts.length()).map { accounts.optString(it) }.filter { it.isNotEmpty() }.distinct()
         }
         check(names != null || !file.isFile) { "The keystore can not open the list of the accounts in doubt now" }
         return names?.keys?.toList().orEmpty()

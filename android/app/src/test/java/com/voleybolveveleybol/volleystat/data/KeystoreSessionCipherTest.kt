@@ -7,6 +7,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Rule
@@ -49,12 +50,16 @@ private object Keystore {
     val readFailures = ArrayDeque<() -> Exception>()
     /** What the next inits of the cipher throw, one each, as AndroidKeyStore's Cipher.init does. */
     val initFailures = ArrayDeque<() -> Exception>()
+    /** What the next finishes of the cipher throw, one each, as AndroidKeyStore's doFinal does. */
+    val finishFailures = ArrayDeque<() -> Exception>()
+    /** How often the cipher was asked to finish an operation. */
+    var finishes = 0
     var deletes = 0
     var generated = 0
 
     fun reset() {
-        entries.clear(); unreadable.clear(); busyReads = 0; deletes = 0; generated = 0
-        readFailures.clear(); initFailures.clear()
+        entries.clear(); unreadable.clear(); busyReads = 0; deletes = 0; generated = 0; finishes = 0
+        readFailures.clear(); initFailures.clear(); finishFailures.clear()
         busyError = { KeyStoreException("Keystore is busy") }
     }
 }
@@ -74,6 +79,12 @@ internal object KeystoreCode {
     const val VALUE_CORRUPTED = 8
     const val BACKEND_BUSY = 18
     const val OPERATION_BUSY = 19
+    /** Keystore2's KEY_PERMANENTLY_INVALIDATED, which the framework turns into a KeyPermanentlyInvalidatedException on API 33 and later. */
+    const val KEY_PERMANENTLY_INVALIDATED = 17
+    /** KeyMint's INVALID_OPERATION_HANDLE: Keystore2 pruned the operation between its start and its finish. */
+    const val INVALID_OPERATION_HANDLE = -28
+    /** KeyMint's VERIFICATION_FAILED: the tag of a GCM blob does not match. */
+    const val VERIFICATION_FAILED = -30
     const val INVALID_KEY_BLOB = -33
 }
 
@@ -83,6 +94,12 @@ internal fun failedKeyRead(code: Int): Exception =
 
 /** What AndroidKeyStore's Cipher.init throws for a keystore error of the operation. */
 internal fun failedCipherInit(code: Int): Exception = java.security.InvalidKeyException("Keystore operation failed", keystoreError(code))
+
+/** What AndroidKeyStore's doFinal throws for every keystore error but INVALID_ARGUMENT and VERIFICATION_FAILED. */
+internal fun failedFinish(code: Int): Exception = javax.crypto.IllegalBlockSizeException().apply { initCause(keystoreError(code)) }
+
+/** What AndroidKeyStore's doFinal throws when the tag does not match: VERIFICATION_FAILED, as the cause of an AEADBadTagException. */
+internal fun tagThatDoesNotMatch(): Exception = javax.crypto.AEADBadTagException().apply { initCause(keystoreError(KeystoreCode.VERIFICATION_FAILED)) }
 
 class StandInKeyStoreSpi : KeyStoreSpi() {
     override fun engineGetKey(alias: String, password: CharArray?): Key? {
@@ -134,11 +151,15 @@ class StandInKey(val bytes: ByteArray) : SecretKey {
     override fun getEncoded(): ByteArray? = null
 }
 
-/** AES/GCM of the JVM, except that an init first throws what [Keystore.initFailures] holds. */
+/** AES/GCM of the JVM, except that an init first throws what [Keystore.initFailures] holds and a finish what [Keystore.finishFailures] holds. */
 class StandInCipherSpi : javax.crypto.CipherSpi() {
     private val inner = javax.crypto.Cipher.getInstance(AesGcmCipher.TRANSFORMATION, "SunJCE")
     private fun failIfAsked() {
         Keystore.initFailures.removeFirstOrNull()?.let { throw it() }
+    }
+    private fun failFinishIfAsked() {
+        Keystore.finishes++
+        Keystore.finishFailures.removeFirstOrNull()?.let { throw it() }
     }
     private fun usable(key: Key): Key = (key as? StandInKey)?.let { SecretKeySpec(it.bytes, "AES") } ?: key
     override fun engineSetMode(mode: String?) {}
@@ -152,8 +173,8 @@ class StandInCipherSpi : javax.crypto.CipherSpi() {
     override fun engineInit(opmode: Int, key: Key, params: java.security.AlgorithmParameters?, random: SecureRandom?) { failIfAsked(); inner.init(opmode, usable(key), params, random) }
     override fun engineUpdate(input: ByteArray?, inputOffset: Int, inputLen: Int): ByteArray? = inner.update(input, inputOffset, inputLen)
     override fun engineUpdate(input: ByteArray?, inputOffset: Int, inputLen: Int, output: ByteArray?, outputOffset: Int) = inner.update(input, inputOffset, inputLen, output, outputOffset)
-    override fun engineDoFinal(input: ByteArray?, inputOffset: Int, inputLen: Int): ByteArray = inner.doFinal(input, inputOffset, inputLen)
-    override fun engineDoFinal(input: ByteArray?, inputOffset: Int, inputLen: Int, output: ByteArray?, outputOffset: Int) = inner.doFinal(input, inputOffset, inputLen, output, outputOffset)
+    override fun engineDoFinal(input: ByteArray?, inputOffset: Int, inputLen: Int): ByteArray { failFinishIfAsked(); return inner.doFinal(input, inputOffset, inputLen) }
+    override fun engineDoFinal(input: ByteArray?, inputOffset: Int, inputLen: Int, output: ByteArray?, outputOffset: Int): Int { failFinishIfAsked(); return inner.doFinal(input, inputOffset, inputLen, output, outputOffset) }
 }
 
 /** A JCA provider named like Android's, so [KeystoreSessionCipher] runs its own code against it on the JVM. */
@@ -281,6 +302,137 @@ class KeystoreSessionCipherTest {
             assertReadable(files)
         }
         assertEquals("the key stays", 0, Keystore.deletes)
+    }
+
+    @Test fun aKeyThatOnlyTheSecondTryShowsLostIsReplacedOnceAndTheSealSucceeds() {
+        // The first failure may pass, so the same key is tried once more; that try shows the key is lost for good.
+        listOf<Pair<() -> Exception, () -> Exception>>(
+            { failedKeyRead(KeystoreCode.SYSTEM_ERROR) } to { android.security.keystore.KeyPermanentlyInvalidatedException("Key permanently invalidated") },
+            { failedKeyRead(KeystoreCode.BACKEND_BUSY) } to { failedKeyRead(KeystoreCode.VALUE_CORRUPTED) },
+        ).forEachIndexed { index, (passing, lost) ->
+            KeystoreSessionCipher().seal("eski".toByteArray())
+            Keystore.readFailures += passing
+            Keystore.readFailures += lost
+            val sealed = KeystoreSessionCipher().seal("yeni".toByteArray())
+            assertArrayEquals("yeni".toByteArray(), KeystoreSessionCipher().open(sealed))
+            assertEquals(lost().toString(), index + 1, Keystore.deletes)
+            assertEquals(lost().toString(), index + 2, Keystore.generated)
+        }
+    }
+
+    // The second review's R2-C: AndroidKeyStore's doFinal wraps a keystore error in an IllegalBlockSizeException (an
+    // operation Keystore2 pruned, SYSTEM_ERROR, OPERATION_BUSY). Such an error may pass like any other keystore error.
+
+    private val failingFinishes = listOf(KeystoreCode.INVALID_OPERATION_HANDLE, KeystoreCode.SYSTEM_ERROR, KeystoreCode.OPERATION_BUSY)
+
+    @Test fun aKeystoreErrorAtTheFinishIsTriedOnceMoreWithTheSameKey() {
+        val files = sealedFiles()
+        failingFinishes.forEach { code ->
+            Keystore.finishes = 0
+            Keystore.finishFailures += { failedFinish(code) }
+            val sealed = KeystoreSessionCipher().seal("sonra".toByteArray())
+            assertEquals("$code: one more finish with the same key", 2, Keystore.finishes)
+            assertArrayEquals("sonra".toByteArray(), KeystoreSessionCipher().open(sealed))
+            // At the start of the app: one failed finish does not read the live session as none.
+            Keystore.finishFailures += { failedFinish(code) }
+            assertEquals("$code", session, SessionStore(files.first, KeystoreSessionCipher()).load())
+            Keystore.finishFailures += { failedFinish(code) }
+            Keystore.finishFailures += { failedFinish(code) }
+            try {
+                KeystoreSessionCipher().seal("sonra".toByteArray())
+                fail("two failed finishes fail this call")
+            } catch (expected: javax.crypto.IllegalBlockSizeException) {
+            }
+            assertReadable(files)
+        }
+        assertEquals("the key stays", 0, Keystore.deletes)
+        assertEquals(1, Keystore.generated)
+    }
+
+    @Test fun aTagThatDoesNotMatchStaysDamageAndIsNotTriedAgain() {
+        val files = sealedFiles()
+        Keystore.finishes = 0
+        Keystore.finishFailures += { tagThatDoesNotMatch() }
+        try {
+            KeystoreSessionCipher().open(files.first.readBytes())
+            fail("a tag that does not match opens nothing")
+        } catch (expected: javax.crypto.AEADBadTagException) {
+        }
+        assertEquals("a damaged file is read once", 1, Keystore.finishes)
+        Keystore.finishes = 0
+        Keystore.finishFailures += { tagThatDoesNotMatch() }
+        assertNull("session.bin reads as no session", SessionStore(files.first, KeystoreSessionCipher()).load())
+        assertEquals("the store does not read a damaged file again either", 1, Keystore.finishes)
+        assertEquals(0, Keystore.deletes)
+        assertReadable(files)
+    }
+
+    // The second review's problem 4: a phone may refuse the reflective read of the internal code. On API 33 and later
+    // the public code alone must then name a corrupted or missing key; below API 33 only the internal code can.
+
+    /** Runs [block] with the internal-code reader refusing, as a platform that hides getErrorCode() does. */
+    private fun withTheInternalCodeHidden(block: () -> Unit) {
+        val reflective = readInternalKeystoreCode
+        readInternalKeystoreCode = { throw NoSuchMethodException("getErrorCode is hidden on this platform") }
+        try {
+            block()
+        } finally {
+            readInternalKeystoreCode = reflective
+        }
+    }
+
+    /** Runs [block] as a phone of API [sdk] would. Robolectric's framework classes stay those of API 35. */
+    private fun onApi(sdk: Int, block: () -> Unit) {
+        val real = android.os.Build.VERSION.SDK_INT
+        org.robolectric.util.ReflectionHelpers.setStaticField(android.os.Build.VERSION::class.java, "SDK_INT", sdk)
+        try {
+            block()
+        } finally {
+            org.robolectric.util.ReflectionHelpers.setStaticField(android.os.Build.VERSION::class.java, "SDK_INT", real)
+        }
+    }
+
+    /**
+     * Seals once with a sound key, then once more with one [refusal] in [where] (the key read, the
+     * cipher's init or its finish), and says whether the keystore's key was replaced. The seal
+     * succeeds either way: with a new key, or with the same key on its second try.
+     */
+    private fun replacesTheKey(where: ArrayDeque<() -> Exception> = Keystore.initFailures, refusal: () -> Exception): Boolean {
+        KeystoreSessionCipher().seal("eski".toByteArray())
+        val deletes = Keystore.deletes
+        where += refusal
+        val sealed = KeystoreSessionCipher().seal("yeni".toByteArray())
+        assertArrayEquals("yeni".toByteArray(), KeystoreSessionCipher().open(sealed))
+        return Keystore.deletes > deletes
+    }
+
+    @Test fun withTheInternalCodeHiddenThePublicCodeStillReplacesACorruptedOrMissingKey() {
+        withTheInternalCodeHidden {
+            listOf(KeystoreCode.VALUE_CORRUPTED, KeystoreCode.KEY_NOT_FOUND).forEach { code ->
+                assertTrue("$code at init", replacesTheKey { failedCipherInit(code) })
+                assertTrue("$code at the key read", replacesTheKey(Keystore.readFailures) { failedKeyRead(code) })
+                assertTrue("$code at the finish", replacesTheKey(Keystore.finishFailures) { failedFinish(code) })
+            }
+            passing.forEach { code -> assertFalse("$code passes", replacesTheKey { failedCipherInit(code) }) }
+            // ADR-0119's limit: an invalid key blob has no public code, so such a platform keeps that key.
+            assertFalse(replacesTheKey { failedCipherInit(KeystoreCode.INVALID_KEY_BLOB) })
+        }
+    }
+
+    @Test fun belowApi33OnlyTheInternalCodeNamesALostKey() {
+        onApi(32) {
+            listOf(KeystoreCode.KEY_NOT_FOUND, KeystoreCode.VALUE_CORRUPTED, KeystoreCode.KEY_PERMANENTLY_INVALIDATED, KeystoreCode.INVALID_KEY_BLOB).forEach { code ->
+                assertTrue("$code", keystoreLostTheKey(failedCipherInit(code)))
+                assertTrue("$code replaces the key", replacesTheKey { failedCipherInit(code) })
+            }
+            passing.forEach { code -> assertFalse("$code passes", replacesTheKey { failedCipherInit(code) }) }
+            // There is no public code below API 33: the app never asks for one, so a hidden internal code shows nothing.
+            withTheInternalCodeHidden {
+                assertFalse(keystoreLostTheKey(failedCipherInit(KeystoreCode.VALUE_CORRUPTED)))
+                assertFalse(replacesTheKey { failedCipherInit(KeystoreCode.VALUE_CORRUPTED) })
+            }
+        }
+        assertEquals(35, android.os.Build.VERSION.SDK_INT)
     }
 
     @Test fun aBusyKeystoreKeepsItsKeyAndTheSecondTrySucceeds() {

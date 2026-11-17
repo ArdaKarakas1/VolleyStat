@@ -118,6 +118,7 @@ fun accountProblemText(problem: AuthProblem, action: AccountAction): AccountText
     return when (problem) {
         AuthProblem.Unreachable -> AccountText(R.string.net_no_answer)
         AuthProblem.UnexpectedAnswer -> AccountText(R.string.account_unexpected)
+        AuthProblem.ServerChanged -> AccountText(R.string.account_server_changed)
         AuthProblem.ServerOutdated -> AccountText(R.string.account_server_older)
         AuthProblem.LoginFailed -> AccountText(R.string.login_failed)
         AuthProblem.SessionEnded -> AccountText(R.string.session_ended)
@@ -612,8 +613,12 @@ fun AccountSection(state: AppUiState, user: AccountUser, actions: ProfileAccount
                 else AccountOutcome(account, AccountAction.DISPLAY_NAME)
             }
             SecondaryButton(stringResource(R.string.action_change_password), { savingName = false; actions.onOpenPasswordChange() }, enabled = !account.busy)
-            // The password screen closes on the server's confirmation; the card says what the server did.
-            if (account.confirmed == AccountChange.PASSWORD) Notice(stringResource(R.string.password_changed), Tone.POSITIVE, Modifier.announced())
+            // The password screen closes on the server's confirmation; the card says what the server did, and whether
+            // the new password reached no password manager (a screen Android rebuilt meanwhile, R2-D).
+            if (account.confirmed == AccountChange.PASSWORD) {
+                Notice(stringResource(R.string.password_changed), Tone.POSITIVE, Modifier.announced())
+                if (account.newPasswordNotHandedOver) Notice(stringResource(R.string.password_not_handed_over), Tone.CAUTION, Modifier.announced())
+            }
             SecondaryButton(
                 stringResource(R.string.action_logout),
                 {
@@ -674,20 +679,37 @@ private fun DangerButton(text: String, onClick: () -> Unit, enabled: Boolean) {
  * password the app can not check in advance (a common one, say), and a refused password must never
  * be offered for saving (review finding S6). The username field, read-only, tells the password
  * manager which entry the new password belongs to.
+ *
+ * Android may rebuild the screen while the change is on its way (a dark theme switch, say), and the
+ * call goes on (F8). The rebuilt screen knows that it sent a change, but its password fields start
+ * empty by design, so it has nothing to commit. When that change is confirmed, it calls
+ * [onNewPasswordNotHandedOver] instead, and the profile says that the password manager did not get
+ * the new password (second review, R2-D).
  */
 @Composable
-fun PasswordChangeScreen(account: AccountUi, onChange: (current: String, new: String) -> Unit, onBack: () -> Unit) {
+fun PasswordChangeScreen(account: AccountUi, onChange: (current: String, new: String) -> Unit, onBack: () -> Unit, onNewPasswordNotHandedOver: () -> Unit = {}) {
     var current by remember { mutableStateOf("") }
     var new by remember { mutableStateOf("") }
-    // Only a change this screen sent may commit the autofill, and only once.
-    var sent by remember { mutableStateOf(false) }
+    // A change this screen sent, through a rebuild of the screen. Only a change sent from the fields the screen
+    // still shows may commit the autofill, and only once.
+    var sent by rememberSaveable { mutableStateOf(false) }
+    var sentFromTheseFields by remember { mutableStateOf(false) }
     var committed by remember { mutableStateOf(false) }
+    var toldNotHandedOver by remember { mutableStateOf(false) }
     val commitAutofill by rememberUpdatedState(autofillCommit())
     val cancelAutofill by rememberUpdatedState(autofillCancel())
+    val notHandedOver by rememberUpdatedState(onNewPasswordNotHandedOver)
     LaunchedEffect(account.confirmed) {
-        if (sent && !committed && account.confirmed == AccountChange.PASSWORD) {
-            committed = true
-            commitAutofill()
+        if (!sent || account.confirmed != AccountChange.PASSWORD) return@LaunchedEffect
+        when {
+            sentFromTheseFields -> if (!committed) {
+                committed = true
+                commitAutofill()
+            }
+            !toldNotHandedOver -> {
+                toldNotHandedOver = true
+                notHandedOver()
+            }
         }
     }
     DisposableEffect(Unit) { onDispose { if (!committed) cancelAutofill() } }
@@ -695,6 +717,7 @@ fun PasswordChangeScreen(account: AccountUi, onChange: (current: String, new: St
     val submit = {
         if (ready) {
             sent = true
+            sentFromTheseFields = true
             onChange(current, new)
         }
     }

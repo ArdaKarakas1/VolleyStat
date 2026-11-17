@@ -45,6 +45,7 @@ import com.voleybolveveleybol.volleystat.ui.screens.ServerSection
 import com.voleybolveveleybol.volleystat.ui.theme.VolleyStatTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -158,6 +159,23 @@ class AccountSafetyScreenTest {
         assertEquals(listOf(ServerTarget.USB_DEVICE), chosen)
     }
 
+    // The second review's R2-B: the login and register screens show the choice too, and it waits while their call is on its way.
+
+    @Test fun theLoginScreensServerChoiceWaitsWhileTheLoginIsOnItsWay() {
+        var state by mutableStateOf(AppUiState(settings = Settings(serverTarget = ServerTarget.USB_DEVICE), account = AccountUi(busy = true)))
+        val chosen = mutableListOf<ServerTarget>()
+        show { LoginScreen(state.account, onLogin = { _, _ -> }, onCreateAccount = {}, server = { ServerSection(state, { chosen += it }, {}) }) }
+        val emulator = compose.onNode(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton) and hasText(text(R.string.server_emulator), substring = true))
+        emulator.performScrollTo().assertIsNotEnabled().performClick()
+        assertEquals("a tap changes nothing", emptyList<ServerTarget>(), chosen)
+        // Nobody is signed in, so the reason of a signed-in phone does not stand there.
+        assertFalse(shown(text(R.string.server_locked)))
+
+        state = state.copy(account = AccountUi())
+        emulator.performScrollTo().assertIsEnabled().performClick()
+        assertEquals(listOf(ServerTarget.EMULATOR), chosen)
+    }
+
     // Review finding S6: the password manager hears of a new password only after the server took it.
 
     private val ali = AccountUser("user-ali", "ali", "Ali")
@@ -167,11 +185,13 @@ class AccountSafetyScreenTest {
     private class CountingAutofill {
         var commits = 0
         var cancels = 0
+        /** How often the screen said that it could not hand a confirmed new password to the password manager. */
+        var notHandedOver = 0
     }
 
     private fun passwordChange(autofill: CountingAutofill, account: () -> AccountUi, open: () -> Boolean = { true }) = show {
         CompositionLocalProvider(LocalAutofillCommit provides { autofill.commits++ }, LocalAutofillCancel provides { autofill.cancels++ }) {
-            if (open()) PasswordChangeScreen(account(), { _, _ -> }, onBack = {})
+            if (open()) PasswordChangeScreen(account(), { _, _ -> }, onBack = {}, onNewPasswordNotHandedOver = { autofill.notHandedOver++ })
         }
     }
 
@@ -203,10 +223,58 @@ class AccountSafetyScreenTest {
         account = account.copy(busy = false, confirmed = AccountChange.PASSWORD)
         compose.waitForIdle()
         assertEquals(1, autofill.commits)
+        assertEquals("the screen that sent the change hands it over itself", 0, autofill.notHandedOver)
         open = false
         compose.waitForIdle()
         assertEquals("a committed session is not cancelled", 0, autofill.cancels)
         assertEquals(1, autofill.commits)
+    }
+
+    /**
+     * The second review's R2-D: a dark theme switch rebuilds the screen while the change is on its way, and the
+     * call goes on (F8). The rebuilt screen has empty fields by design, so it can not commit the new password.
+     * It says so instead of closing as if the password manager had it.
+     */
+    @Test fun aPasswordChangeConfirmedAfterTheScreenWasRebuiltSaysThePasswordManagerDidNotGetIt() {
+        val autofill = CountingAutofill()
+        var account by mutableStateOf(AccountUi(user = ali))
+        val restoration = androidx.compose.ui.test.junit4.StateRestorationTester(compose)
+        restoration.setContent {
+            CompositionLocalProvider(LocalAutofillCommit provides { autofill.commits++ }, LocalAutofillCancel provides { autofill.cancels++ }) {
+                VolleyStatTheme(dark = false) {
+                    PasswordChangeScreen(account, { _, _ -> account = account.copy(busy = true) }, onBack = {}, onNewPasswordNotHandedOver = { autofill.notHandedOver++ })
+                }
+            }
+        }
+        field(R.string.field_current_password).performTextInput("eski bir şifre 1")
+        field(R.string.field_new_password).performTextInput("yeni bir şifre 2")
+        confirm.performClick()
+        compose.waitForIdle()
+        assertTrue(account.busy)
+        restoration.emulateSavedInstanceStateRestore()
+        account = account.copy(busy = false, confirmed = AccountChange.PASSWORD)
+        compose.waitForIdle()
+        assertEquals("the rebuilt fields are empty: nothing to commit", 0, autofill.commits)
+        assertEquals(1, autofill.notHandedOver)
+        // A later state of the same confirmation says it once.
+        account = account.copy(problem = null)
+        compose.waitForIdle()
+        assertEquals(1, autofill.notHandedOver)
+    }
+
+    @Test fun theProfileSaysThatThePasswordManagerDidNotGetTheNewPassword() {
+        var state by mutableStateOf(
+            AppUiState(
+                settings = Settings(welcomeSeen = true, accountSeen = true, legacyHandled = true),
+                account = AccountUi(user = ali, confirmed = AccountChange.PASSWORD),
+            )
+        )
+        show { com.voleybolveveleybol.volleystat.ui.screens.ProfileScreen(state, "0.8.0", {}, {}, {}, { true }, account = com.voleybolveveleybol.volleystat.ui.screens.ProfileAccountActions()) }
+        compose.onNodeWithText(text(R.string.password_changed)).performScrollTo().assertIsDisplayed()
+        assertFalse(shown(text(R.string.password_not_handed_over)))
+        state = state.copy(account = state.account.copy(newPasswordNotHandedOver = true))
+        compose.onNodeWithText(text(R.string.password_changed)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.password_not_handed_over)).performScrollTo().assertIsDisplayed()
     }
 
     @Test fun leavingThePasswordChangeWithoutTheServersWordCancelsTheAutofill() {
@@ -230,6 +298,7 @@ class AccountSafetyScreenTest {
         passwordChange(autofill, { AccountUi(user = ali, confirmed = AccountChange.PASSWORD) })
         compose.waitForIdle()
         assertEquals(0, autofill.commits)
+        assertEquals("nor does it speak of a password it never sent", 0, autofill.notHandedOver)
     }
 
     @Test fun theOfferWaitsWhileAnAccountCallIsOnItsWay() {

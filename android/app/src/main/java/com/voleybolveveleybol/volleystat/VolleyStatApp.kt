@@ -469,7 +469,10 @@ fun VolleyStatApp(
                 StopAccountCallOnLeave(viewModel)
                 // A confirmed change closes the screen, and the profile says what the server did.
                 LaunchedEffect(state.account.confirmed) { if (state.account.confirmed == AccountChange.PASSWORD) leave(Routes.PASSWORD) }
-                PasswordChangeScreen(state.account, viewModel::changePassword, onBack = { viewModel.clearAccountProblem(); nav.popBackStack() })
+                PasswordChangeScreen(
+                    state.account, viewModel::changePassword, onBack = { viewModel.clearAccountProblem(); nav.popBackStack() },
+                    onNewPasswordNotHandedOver = viewModel::newPasswordNotHandedOver,
+                )
             }
             composable(Routes.DELETE_ACCOUNT) {
                 // After the deletion the app opens the login, which says what the server deleted.

@@ -354,5 +354,27 @@ class AccountFlowTest {
         waitFor(text(R.string.password_changed))
         compose.onNodeWithText(text(R.string.profile_account)).assertIsDisplayed()
         assertFalse("the password screen closed", shown(text(R.string.field_current_password)))
+        assertFalse("its own screen handed the new password over", shown(text(R.string.password_not_handed_over)))
+    }
+
+    /** The second review's R2-D: a change confirmed after Android rebuilt its screen reached no password manager, and the profile says so. */
+    @Test fun aPasswordChangeConfirmedAfterTheScreenWasRecreatedSaysThePasswordManagerDidNotGetIt() {
+        standIn.add(TestAccounts.SESSION.username, TestAccounts.SESSION.displayName, PASSWORD, token = TestAccounts.SESSION.token, id = TestAccounts.SESSION.userId)
+        TestAccounts.seed(context)
+        val held = java.util.concurrent.CountDownLatch(1)
+        standIn.hold["PUT /me/password"] = held
+        launch()
+        tap(R.string.nav_profile)
+        button(R.string.action_change_password).performScrollTo().performClick()
+        field(R.string.field_current_password).performTextInput(PASSWORD)
+        field(R.string.field_new_password).performTextInput("yeni ve uzun şifre 77")
+        button(R.string.action_change_password).performClick()
+        compose.waitUntil(10_000) { standIn.requests.any { it.first == "PUT /me/password" } }
+        // A dark theme switch rebuilds the screen while the change is on its way; the call goes on (F8).
+        scenario!!.recreate()
+        held.countDown()
+        waitFor(text(R.string.password_changed))
+        compose.onNodeWithText(text(R.string.password_not_handed_over)).performScrollTo().assertIsDisplayed()
+        assertFalse("the password screen closed", shown(text(R.string.field_current_password)))
     }
 }

@@ -294,6 +294,40 @@ class DeviceTokenStoreTest {
         assertEquals(listOf("u-1" to "ali"), DeletionDoubtStore(file, cipher).load())
     }
 
+    // The second checker's finding: a damaged deletions.ids must not drop the accounts that deletions.bin still names.
+
+    @Test fun aDamagedPlainListIsReadFromTheSealedOneAndTheNextDoubtKeepsEveryUsername() {
+        listOf("{\"version\":1,\"accou", "{\"version\":1}", "[]", "").forEach { damaged ->
+            file.delete()
+            ids.delete()
+            DeletionDoubtStore(file, cipher).apply {
+                add("user-ali", "ali")
+                add("user-veli", "veli")
+            }
+            ids.writeText(damaged)
+            assertEquals(damaged, listOf("user-veli" to "veli", "user-ali" to "ali"), DeletionDoubtStore(file, cipher).load())
+            DeletionDoubtStore(file, cipher).add("user-ayse", "ayse")
+            assertEquals(damaged, listOf("user-ayse" to "ayse", "user-veli" to "veli", "user-ali" to "ali"), DeletionDoubtStore(file, cipher).load())
+            assertEquals(damaged, listOf("user-ayse", "user-veli", "user-ali"), org.json.JSONObject(ids.readText()).getJSONArray("accounts").let { a -> (0 until a.length()).map(a::getString) })
+        }
+    }
+
+    @Test fun aDamagedPlainListIsNotReplacedWhileTheKeystoreCanNotOpenTheSealedOne() {
+        DeletionDoubtStore(file, cipher).apply {
+            add("user-ali", "ali")
+            add("user-veli", "veli")
+        }
+        ids.writeText("{\"version\":1,\"accou")
+        val sealed = file.readBytes()
+        val flaky = FlakyCipher(cipher, failures = 2) { java.security.KeyStoreException("busy") }
+        assertTrue("a new doubt can not be written now", runCatching { DeletionDoubtStore(file, flaky).add("user-ayse", "ayse") }.isFailure)
+        flaky.failures = 2
+        assertTrue(runCatching { DeletionDoubtStore(file, flaky).remove("user-ali") }.isFailure)
+        org.junit.Assert.assertArrayEquals(sealed, file.readBytes())
+        assertEquals("{\"version\":1,\"accou", ids.readText())
+        assertEquals("once the keystore opens it, every account is there", listOf("user-veli" to "veli", "user-ali" to "ali"), DeletionDoubtStore(file, cipher).load())
+    }
+
     private fun sha256Hex(text: String) =
         java.security.MessageDigest.getInstance("SHA-256").digest(text.toByteArray()).joinToString("") { "%02x".format(it) }
 }

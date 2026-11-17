@@ -21,6 +21,7 @@ import com.voleybolveveleybol.volleystat.model.gapTarget
 import com.voleybolveveleybol.volleystat.model.rallyTarget
 import com.voleybolveveleybol.volleystat.ui.screens.RalliesScreen
 import com.voleybolveveleybol.volleystat.ui.screens.RallyEditorScreen
+import com.voleybolveveleybol.volleystat.AccountChange
 import com.voleybolveveleybol.volleystat.AccountUi
 import com.voleybolveveleybol.volleystat.LegacyQuestion
 import com.voleybolveveleybol.volleystat.data.AttemptScope
@@ -382,8 +383,9 @@ class ScreenshotTest {
     @Test fun s14_s15_accounts() {
         val signedOut = state.copy(account = AccountUi())
         val server: @Composable () -> Unit = { ServerSection(signedOut, {}, {}) }
+        // The server choice of the login screen follows its account call: it waits while one is on its way (R2-B).
         fun login(account: AccountUi = AccountUi()): @Composable () -> Unit = {
-            LoginScreen(account, { _, _ -> }, {}, server = server, initialUsername = "deneme", initialPassword = "uzun bir şifre 42")
+            LoginScreen(account, { _, _ -> }, {}, server = { ServerSection(signedOut.copy(account = account), {}, {}) }, initialUsername = "deneme", initialPassword = "uzun bir şifre 42")
         }
         fun register(account: AccountUi = AccountUi(), username: String? = null): @Composable () -> Unit = {
             RegisterScreen(account, { _, _, _, _ -> }, {}, {}, server = server, initialDisplayName = "Çağrı Öztürk", initialUsername = username, initialPassword = "uzun bir şifre 42", initialCode = "ABCD-EFGH-JKMN-PQRS")
@@ -395,6 +397,9 @@ class ScreenshotTest {
         shot("14_giris_hata", content = login(AccountUi(problem = AuthProblem.LoginFailed)))
         shot("14_giris_oturum_kapandi", content = login(AccountUi(sessionEnded = true)))
         shot("14_giris_bekliyor", content = login(AccountUi(busy = true)))
+        // The server choice waits while the login is on its way (second review, R2-B); a tall window shows it below the form.
+        shotOn("14_giris_bekliyor_sunucu", "+w411dp-h1300dp-port", content = login(AccountUi(busy = true)))
+        shot("14_giris_sunucu_degisti", content = login(AccountUi(problem = AuthProblem.ServerChanged)))
         // The app waits out a SERVER_BUSY answer before its next try (review finding T5).
         val retrying = AccountUi(busy = true, retryingAfterBusy = true)
         shot("14_giris_sunucu_mesgul", content = login(retrying))
@@ -439,5 +444,10 @@ class ScreenshotTest {
             androidx.compose.foundation.layout.Column(Modifier.fillMaxSize().background(androidx.compose.material3.MaterialTheme.colorScheme.background)) { ServerSection(state, {}, {}) }
         }
         shotOn("profil_hesap_koyu", "+w411dp-h1100dp-port", dark = true) { ProfileScreen(state, "0.8.0", {}, {}, {}, { true }) }
+        // A password change confirmed after Android rebuilt its screen: the password manager did not get it (second review, R2-D).
+        val notHandedOver = state.copy(account = state.account.copy(confirmed = AccountChange.PASSWORD, newPasswordNotHandedOver = true))
+        shotOn("profil_sifre_iletilemedi", "+w411dp-h1300dp-port") { ProfileScreen(notHandedOver, "0.8.0", {}, {}, {}, { true }) }
+        shotOn("profil_sifre_iletilemedi_koyu", "+w411dp-h1300dp-port", dark = true) { ProfileScreen(notHandedOver, "0.8.0", {}, {}, {}, { true }) }
+        shotOn("kucuk_buyuk_yazi_profil_sifre_iletilemedi", "+w320dp-h1900dp-port", fontScale = 1.5f) { ProfileScreen(notHandedOver, "0.8.0", {}, {}, {}, { true }) }
     }
 }

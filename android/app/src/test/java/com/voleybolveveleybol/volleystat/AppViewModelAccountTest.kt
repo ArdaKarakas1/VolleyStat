@@ -720,6 +720,33 @@ class AppViewModelAccountTest {
         assertEquals(AccountChange.PASSWORD, vm.state.value.account.confirmed)
     }
 
+    @Test fun aNewPasswordTheScreenCouldNotHandOverIsNamedUntilTheNextCall() {
+        TestAccounts.seed(context)
+        on("PUT /me/password") {
+            ok(JSONObject().put("user", JSONObject().put("id", TestAccounts.SESSION.userId).put("username", TestAccounts.SESSION.username)
+                .put("displayName", TestAccounts.SESSION.displayName).put("createdAt", "2026-11-17T10:00:00Z").put("passwordTemporary", false)))
+        }
+        val vm = viewModel()
+        // Only a confirmed change can be one the password manager did not get.
+        vm.newPasswordNotHandedOver()
+        assertFalse(vm.state.value.account.newPasswordNotHandedOver)
+        vm.changePassword("eski şifre 12345", "yeni şifre 67890")
+        await("the answer") { !vm.state.value.account.busy && vm.state.value.account.confirmed == AccountChange.PASSWORD }
+        vm.newPasswordNotHandedOver()
+        assertTrue(vm.state.value.account.newPasswordNotHandedOver)
+        vm.clearAccountProblem()
+        assertFalse(vm.state.value.account.newPasswordNotHandedOver)
+
+        vm.changePassword("yeni şifre 67890", "bir başka şifre 1")
+        await("the second answer") { !vm.state.value.account.busy && vm.state.value.account.confirmed == AccountChange.PASSWORD }
+        vm.newPasswordNotHandedOver()
+        assertTrue(vm.state.value.account.newPasswordNotHandedOver)
+        on("PUT /me/display-name") { refuse(422, "DISPLAY_NAME_INVALID") }
+        vm.changeDisplayName("x")
+        await("the next call") { !vm.state.value.account.busy && vm.state.value.account.problem != null }
+        assertFalse("the next call ends the note with the confirmation", vm.state.value.account.newPasswordNotHandedOver)
+    }
+
     @Test fun aWrongCurrentPasswordChangesNothing() {
         TestAccounts.seed(context)
         deviceTokens().remember(TestAccounts.SESSION.username, "device-old")

@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.voleybolveveleybol.volleystat.data.AccountFiles
 import com.voleybolveveleybol.volleystat.data.AccountSpace
 import com.voleybolveveleybol.volleystat.data.AccountUser
+import com.voleybolveveleybol.volleystat.data.AnswerFromAnotherServer
 import com.voleybolveveleybol.volleystat.data.ApiClient
 import com.voleybolveveleybol.volleystat.data.ApiException
 import com.voleybolveveleybol.volleystat.data.AuthProblem
@@ -147,6 +148,13 @@ data class AccountUi(
      * memory only, so the next start asks for the password; Home says so. A later save that works clears it.
      */
     val sessionNotKept: Boolean = false,
+    /**
+     * The server confirmed a new password, and the screen that sent it could not hand it to the
+     * password manager: Android rebuilt that screen while the change was on its way, and the rebuilt
+     * screen's fields are empty (second review, R2-D). The profile says so next to the confirmation.
+     * The next call and clearAccountProblem() clear it, as they clear [confirmed].
+     */
+    val newPasswordNotHandedOver: Boolean = false,
 )
 
 data class AppUiState(
@@ -582,10 +590,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * Chooses the server of a debug build. A session belongs to the server that opened it, so the
      * choice waits for a logout: otherwise its token would go to the other address, in plain HTTP,
-     * and that server's 401 would end a session that is still alive (review finding S5).
+     * and that server's 401 would end a session that is still alive (review finding S5). It also
+     * waits while an account call is on its way: a login sent to one server must not sign in a
+     * session that then talks to the other (second review, R2-B).
      */
-    fun setServerTarget(target: ServerTarget) {
-        if (session != null) return
+    fun setServerTarget(target: ServerTarget) = synchronized(accountLock) {
+        if (session != null || _state.value.account.busy) return@synchronized
         changeDevice { it.copy(serverTarget = target) }
         _state.update { it.copy(serverTest = ServerTest.IDLE, serverConfigured = baseUrl(target).isNotBlank()) }
     }
@@ -1069,7 +1079,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun login(username: String, password: String) {
         val name = normalizeUsername(username)
-        accountCall { api -> signIn(api.login(name, password, deviceTokens.tokenFor(name))) }
+        accountCall { api -> signIn(api.login(name, password, deviceTokens.tokenFor(name)), api.baseUrl) }
     }
 
     /**
@@ -1099,7 +1109,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 throw error
             }
             unansweredRegistration = null
-            signIn(result)
+            signIn(result, api.baseUrl)
         }
     }
 
@@ -1192,7 +1202,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         leave(sent, ended = false, offer = false)
         folders.delete(sent.userId)
         runCatching { deviceTokens.forget(sent.username) }
-        _state.update { it.copy(account = it.account.copy(confirmed = AccountChange.DELETED)) }
+        synchronized(accountLock) {
+            // Another call of this session may have met the ended session before the 204 came, and its 401 left a
+            // doubt about this account. The 204 is the server's word that the account is gone: the doubt goes, in
+            // memory and on the disk, and the next account in doubt, if any, takes its place on the login screen.
+            dropDoubt(sent.userId)
+            _state.update { it.copy(account = it.account.copy(confirmed = AccountChange.DELETED, unconfirmedDeletion = inDoubt.firstOrNull())) }
+        }
     }
 
     /**
@@ -1202,8 +1218,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
      * the app then deletes nothing on its own and leaves the choice to the user.
      */
     private fun deleteAfterEndedSession(sent: Session, password: String) {
+        val asked = ApiClient(baseUrl(_state.value.settings.serverTarget))
         val again = try {
-            ApiClient(baseUrl(_state.value.settings.serverTarget)).login(sent.username, password, deviceTokens.tokenFor(sent.username))
+            asked.login(sent.username, password, deviceTokens.tokenFor(sent.username))
         } catch (error: ApiException) {
             // Any other failure answers nothing. The session stays on the phone with its mark, and a repeat asks again.
             if (error.code != "LOGIN_FAILED") throw error
@@ -1211,12 +1228,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
         if (again == null || again.user.id != sent.userId) {
             // The username now names another account: its new session is closed again, and none of it reaches the phone.
-            again?.let { other -> runCatching { ApiClient(baseUrl(_state.value.settings.serverTarget), token = other.token).logout() } }
+            again?.let { other -> runCatching { ApiClient(asked.baseUrl, token = other.token).logout() } }
             leave(sent, ended = true)
             return
         }
         // The account is still there, and the user asked for its deletion: the request goes out again with the new session.
-        signIn(again)
+        signIn(again, asked.baseUrl)
         deleteOnServer(client(endsSession = false), password, mayLogin = false)
     }
 
@@ -1314,7 +1331,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun clearAccountProblem() = _state.update { it.copy(account = it.account.copy(problem = null, confirmed = null, sessionEnded = false)) }
+    /** The password screen could not hand the confirmed new password to the password manager. Only a confirmed change counts. */
+    fun newPasswordNotHandedOver() = _state.update { state ->
+        if (state.account.confirmed != AccountChange.PASSWORD) state else state.copy(account = state.account.copy(newPasswordNotHandedOver = true))
+    }
+
+    fun clearAccountProblem() =
+        _state.update { it.copy(account = it.account.copy(problem = null, confirmed = null, sessionEnded = false, newPasswordNotHandedOver = false)) }
 
     /** Stops an account call that waits to repeat after SERVER_BUSY, for a screen the user left (design 10.7, R10). */
     fun cancelAccountCall() {
@@ -1329,7 +1352,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private fun accountCall(endsSession: Boolean = true, call: (ApiClient) -> Unit) {
         synchronized(accountLock) {
             if (_state.value.account.busy) return
-            _state.update { it.copy(account = it.account.copy(busy = true, problem = null, confirmed = null)) }
+            _state.update { it.copy(account = it.account.copy(busy = true, problem = null, confirmed = null, newPasswordNotHandedOver = false)) }
             accountCallMarks.incrementAndGet()
         }
         accountJob = viewModelScope.launch {
@@ -1368,8 +1391,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun retryingAfterBusy(waiting: Boolean) = _state.update { it.copy(account = it.account.copy(retryingAfterBusy = waiting)) }
 
-    /** Takes the server's confirmation of a login or a registration. Runs on the thread of the call. */
-    private fun signIn(result: SignedIn) {
+    /**
+     * Takes the server's confirmation of a login or a registration that went to [sentTo]. Runs on the
+     * thread of the call. An answer from another address than the one the app talks to now opens no
+     * session: its token would go to that other address with every later call (second review, R2-B).
+     * The session goes back closed to the server that opened it, and nothing of it reaches the disk.
+     */
+    private fun signIn(result: SignedIn, sentTo: String) {
+        if (sentTo != baseUrl(_state.value.settings.serverTarget)) {
+            runCatching { ApiClient(sentTo, token = result.token).logout() }
+            throw AnswerFromAnotherServer()
+        }
         val next = Session(result.token, result.user.id, result.user.username, result.user.displayName, result.expiresAt)
         // An id that can not name a folder throws here, before anything is written.
         val nextSpace = folders.of(next.userId)

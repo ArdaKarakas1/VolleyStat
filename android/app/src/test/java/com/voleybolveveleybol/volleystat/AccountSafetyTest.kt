@@ -9,6 +9,7 @@ import com.voleybolveveleybol.volleystat.data.SessionStore
 import com.voleybolveveleybol.volleystat.data.StoredState
 import com.voleybolveveleybol.volleystat.model.LocalVideo
 import com.voleybolveveleybol.volleystat.model.MatchRecord
+import com.voleybolveveleybol.volleystat.model.ServerTarget
 import com.voleybolveveleybol.volleystat.model.Team
 import com.voleybolveveleybol.volleystat.model.VideoSource
 import okhttp3.mockwebserver.Dispatcher
@@ -287,6 +288,61 @@ class AccountSafetyTest {
         assertEquals(UnconfirmedDeletion(user.userId, user.username), vm.state.value.account.unconfirmedDeletion)
     }
 
+    // ----- the second review's follow-up of S1: a 204 is the server's word that the account is gone -----
+
+    /**
+     * Holds the 204 of the deletion until the profile's read of the account met the ended session.
+     * That read's 401 leaves the marked session and keeps a doubt; the 204 that follows says what happened.
+     */
+    private fun AppViewModel.deleteWhileAnotherCallMeetsTheEndedSession() {
+        val held = java.util.concurrent.CountDownLatch(1)
+        on("POST /me/delete") {
+            held.await(10, java.util.concurrent.TimeUnit.SECONDS)
+            MockResponse().setResponseCode(204)
+        }
+        on("GET /me") { refuse(401, "AUTH_REQUIRED") }
+        deleteAccount(password)
+        await("the deletion reaches the server") { seen.any { it.key == "POST /me/delete" } }
+        // The server has deleted the account by now; the profile's read of it meets the ended session.
+        refreshAccount()
+        await("the read's 401") { state.value.account.user == null }
+        assertEquals("until the 204 the app does not know", UnconfirmedDeletion(user.userId, user.username), state.value.account.unconfirmedDeletion)
+        held.countDown()
+        await("the 204") { !state.value.account.busy }
+    }
+
+    @Test fun a401OfAnotherCallBeforeThe204LeavesNoDoubtAboutAConfirmedDeletion() {
+        seedAccountWithData()
+        val vm = viewModel()
+        vm.deleteWhileAnotherCallMeetsTheEndedSession()
+
+        val account = vm.state.value.account
+        assertEquals(AccountChange.DELETED, account.confirmed)
+        assertNull("the login screen does not also say that the app does not know", account.unconfirmedDeletion)
+        assertFalse(folder.exists())
+        assertNull(deviceTokens().tokenFor(user.username))
+        assertFalse("no doubt stays on the disk", File(files, "deletions.ids").exists())
+        assertEquals(emptyList<Pair<String, String?>>(), com.voleybolveveleybol.volleystat.data.DeletionDoubtStore(File(files, "deletions.bin"), PlainSessionCipher).load())
+        assertNull("nor after a restart", viewModel().state.value.account.unconfirmedDeletion)
+    }
+
+    @Test fun theDoubtOfAnotherAccountTakesThePlaceOfOneThe204Ended() {
+        seedAccountWithData()
+        // Veli's deletion got no answer on an earlier day, and his folder is still on the phone.
+        TestAccounts.space(context, "user-veli").store.save(StoredState(teams = listOf(Team("t2", "Veli'nin Takımı"))))
+        com.voleybolveveleybol.volleystat.data.DeletionDoubtStore(File(files, "deletions.bin"), PlainSessionCipher).add("user-veli", "veli")
+        val vm = viewModel()
+        vm.deleteWhileAnotherCallMeetsTheEndedSession()
+
+        val veli = UnconfirmedDeletion("user-veli", "veli")
+        assertEquals(AccountChange.DELETED, vm.state.value.account.confirmed)
+        assertEquals("the offer about Veli comes back in the same update", veli, vm.state.value.account.unconfirmedDeletion)
+        assertEquals(listOf("user-veli" to "veli"), com.voleybolveveleybol.volleystat.data.DeletionDoubtStore(File(files, "deletions.bin"), PlainSessionCipher).load())
+        assertFalse(File(files, "deletions.ids").readText().contains(user.userId))
+        assertEquals(veli, viewModel().state.value.account.unconfirmedDeletion)
+        assertTrue(File(files, "accounts/user-veli/volleystat.json").exists())
+    }
+
     @Test fun aServerErrorThatSaysNothingKeepsTheMark() {
         seedAccountWithData()
         on("POST /me/delete") { refuse(500, "INTERNAL") }
@@ -452,6 +508,48 @@ class AccountSafetyTest {
         assertFalse(folder.exists())
         assertNull(restarted.state.value.account.unconfirmedDeletion)
         assertNull(viewModel().state.value.account.unconfirmedDeletion)
+    }
+
+    @Test fun aDamagedPlainListStillOffersTheAccountByNameAfterARestart() {
+        seedAccountWithData()
+        viewModel().deleteUntilTheOfferShows()
+        File(files, "deletions.ids").writeText("{\"version\":1,\"accou")
+        val restarted = viewModel()
+        assertEquals("deletions.bin still names the account", UnconfirmedDeletion(user.userId, user.username), restarted.state.value.account.unconfirmedDeletion)
+        restarted.deleteUnconfirmedAccountData()
+        assertFalse(folder.exists())
+        assertNull(deviceTokens().tokenFor(user.username))
+        assertNull(viewModel().state.value.account.unconfirmedDeletion)
+    }
+
+    // ----- the second review's R2-C: one keystore error at the start of the app does not sign a live session out -----
+
+    /** Seals nothing, as [PlainSessionCipher], and fails the next [failures] opens as AndroidKeyStore's doFinal does. */
+    private class FailingOpens(@Volatile var failures: Int) : com.voleybolveveleybol.volleystat.data.SessionCipher {
+        override fun seal(plain: ByteArray): ByteArray = plain.copyOf()
+        override fun open(sealed: ByteArray): ByteArray {
+            if (failures > 0) {
+                failures--
+                throw javax.crypto.IllegalBlockSizeException("Keystore operation failed")
+            }
+            return sealed.copyOf()
+        }
+    }
+
+    @Test fun oneFailedOpenAtTheStartKeepsTheSessionAndOneThatStaysLeavesItOnTheDisk() {
+        seedAccountWithData()
+        val sessionFile = File(files, "session.bin")
+        val before = sessionFile.readBytes()
+        TestApplication.cipher = FailingOpens(failures = 1)
+        val vm = viewModel()
+        assertEquals("one failed open is tried again", Entry.HOME, vm.state.value.entry)
+        assertEquals(user.userId, vm.state.value.account.user?.id)
+
+        TestApplication.cipher = FailingOpens(failures = 2)
+        assertEquals("a keystore that fails twice opens the login", Entry.LOGIN, viewModel().state.value.entry)
+        org.junit.Assert.assertArrayEquals("and leaves session.bin as it was", before, sessionFile.readBytes())
+        TestApplication.cipher = PlainSessionCipher
+        assertEquals("the next start reads the session", user.userId, viewModel().state.value.account.user?.id)
     }
 
     // ----- the guards the checker's mutants S1h, S1i, S1j and F1f showed untested -----
@@ -650,6 +748,83 @@ class AccountSafetyTest {
         await("the logout") { vm.state.value.account.user == null && !vm.state.value.account.busy }
         vm.setServerTarget(other)
         assertEquals(other, vm.state.value.settings.serverTarget)
+    }
+
+    // The second review's R2-B: the lock must also hold while a login or a registration waits for its answer.
+
+    @Test fun theServerChoiceWaitsWhileALoginIsOnItsWay() {
+        TestAccounts.device(context, com.voleybolveveleybol.volleystat.model.Settings(serverTarget = ServerTarget.USB_DEVICE, welcomeSeen = true, accountSeen = true, legacyHandled = true))
+        val deviceFile = File(files, "device.json")
+        val held = java.util.concurrent.CountDownLatch(1)
+        on("POST /auth/login") {
+            held.await(10, java.util.concurrent.TimeUnit.SECONDS)
+            signedIn("token-of-usb-server")
+        }
+        val vm = viewModel()
+        vm.login(user.username, password)
+        await("the login reaches the USB server") { seen.any { it.key == "POST /auth/login" } }
+        assertTrue(vm.state.value.account.busy)
+        val before = deviceFile.readText()
+        vm.setServerTarget(ServerTarget.EMULATOR)
+        assertEquals("the choice waits for the answer", ServerTarget.USB_DEVICE, vm.state.value.settings.serverTarget)
+        assertEquals(before, deviceFile.readText())
+        held.countDown()
+        await("the login") { vm.state.value.account.user != null && !vm.state.value.account.busy }
+
+        vm.baseUrlOverride = null
+        assertEquals("the session talks to the server that opened it", BuildConfig.API_URL_USB, vm.serverBaseUrl())
+        assertEquals("Bearer token-of-usb-server", vm.playbackHeaders()["Authorization"])
+    }
+
+    @Test fun theServerChoiceWaitsWhileARegistrationIsOnItsWay() {
+        TestAccounts.device(context, com.voleybolveveleybol.volleystat.model.Settings(serverTarget = ServerTarget.USB_DEVICE, welcomeSeen = true, legacyHandled = true))
+        val held = java.util.concurrent.CountDownLatch(1)
+        on("POST /auth/register") {
+            held.await(10, java.util.concurrent.TimeUnit.SECONDS)
+            refuse(409, "USERNAME_TAKEN")
+        }
+        val vm = viewModel()
+        vm.register("Test Kullanıcı", user.username, password, "KOD-1")
+        await("the registration reaches the USB server") { seen.any { it.key == "POST /auth/register" } }
+        vm.setServerTarget(ServerTarget.EMULATOR)
+        assertEquals(ServerTarget.USB_DEVICE, vm.state.value.settings.serverTarget)
+        held.countDown()
+        await("the answer") { !vm.state.value.account.busy }
+        assertEquals(AuthProblem.UsernameTaken, vm.state.value.account.problem)
+        // Without a session and without a call on its way, the choice is free again.
+        vm.setServerTarget(ServerTarget.EMULATOR)
+        assertEquals(ServerTarget.EMULATOR, vm.state.value.settings.serverTarget)
+    }
+
+    @Test fun aLoginAnswerFromAnotherAddressThanTheCurrentOneSignsNothingIn() {
+        TestAccounts.device(context, TestAccounts.SIGNED_IN_PHONE)
+        val other = MockWebServer().apply { start() }
+        try {
+            val held = java.util.concurrent.CountDownLatch(1)
+            on("POST /auth/login") {
+                held.await(10, java.util.concurrent.TimeUnit.SECONDS)
+                signedIn("token-of-server-a")
+            }
+            on("POST /auth/logout") { MockResponse().setResponseCode(204) }
+            val vm = viewModel()
+            vm.login(user.username, password)
+            await("the login reaches server A") { seen.any { it.key == "POST /auth/login" } }
+            // The screens can no longer change the server while the call waits; the test changes the address itself.
+            vm.baseUrlOverride = other.url("/v1").toString()
+            held.countDown()
+            await("the answer") { !vm.state.value.account.busy }
+
+            assertNull("server A's session reaches no other address", vm.state.value.account.user)
+            assertEquals(AuthProblem.ServerChanged, vm.state.value.account.problem)
+            assertTrue(vm.playbackHeaders().isEmpty())
+            assertFalse(File(files, "session.bin").exists())
+            assertNull("its device token is not kept either", deviceTokens().tokenFor(user.username))
+            assertEquals("the session goes back closed to the server that opened it", "Bearer token-of-server-a", seen.single { it.key == "POST /auth/logout" }.authorization)
+            assertEquals(0, other.requestCount)
+            assertEquals(Entry.LOGIN, vm.state.value.entry)
+        } finally {
+            other.shutdown()
+        }
     }
 
     @Test fun aDeletionThatMeetsAnEndedSessionWithoutAnEarlierLostAnswerIsAnOrdinaryEnd() {

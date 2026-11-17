@@ -91,6 +91,69 @@ class SessionStoreTest {
         assertEquals("the old file stays as it was", 40, file.length())
     }
 
+    // The second review's R2-C: one failure of the keystore at the start of the app must not read a live
+    // session as none. The store tries a failure that is no damage once more, as device.bin does.
+
+    /** Fails the next [failures] opens with [error], and counts every open. */
+    private class FlakyCipher(private val inner: SessionCipher, var failures: Int, val error: () -> Exception) : SessionCipher {
+        var opens = 0
+        override fun seal(plain: ByteArray) = inner.seal(plain)
+        override fun open(sealed: ByteArray): ByteArray {
+            opens++
+            if (failures > 0) {
+                failures--
+                throw error()
+            }
+            return inner.open(sealed)
+        }
+    }
+
+    private val passing = listOf<() -> Exception>(
+        { javax.crypto.IllegalBlockSizeException("Keystore operation failed") },
+        { java.security.InvalidKeyException("Keystore operation failed") },
+        { java.security.KeyStoreException("busy") },
+        { java.security.ProviderException("Keystore operation failed") },
+        { GeneralSecurityException("transient") },
+    )
+
+    @Test fun oneFailedOpenIsTriedAgainAndTheSessionIsRead() {
+        val file = File(folder.root, "session.bin")
+        SessionStore(file, cipher).save(session)
+        passing.forEach { error ->
+            assertEquals(error().javaClass.simpleName, session, SessionStore(file, FlakyCipher(cipher, failures = 1, error = error)).load())
+        }
+    }
+
+    @Test fun aLoadThatStillFailsReadsAsNoSessionAndLeavesTheFileAsItIs() {
+        val file = File(folder.root, "session.bin")
+        SessionStore(file, cipher).save(session)
+        val before = file.readBytes()
+        passing.forEach { error ->
+            val flaky = FlakyCipher(cipher, failures = 2, error = error)
+            assertNull(SessionStore(file, flaky).load())
+            assertEquals("one more try, and no third", 2, flaky.opens)
+            assertArrayEquals(before, file.readBytes())
+            assertEquals("the next start reads the session", session, SessionStore(file, cipher).load())
+        }
+    }
+
+    @Test fun aDamagedFileIsReadOnce() {
+        val file = File(folder.root, "session.bin")
+        SessionStore(file, cipher).save(session)
+        val bytes = file.readBytes()
+        bytes[bytes.size - 5] = (bytes[bytes.size - 5].toInt() xor 1).toByte()
+        file.writeBytes(bytes)
+        val counting = FlakyCipher(cipher, failures = 0) { error("never") }
+        assertNull(SessionStore(file, counting).load())
+        assertEquals("a tag that does not match is damage", 1, counting.opens)
+        file.writeBytes(bytes.copyOf(7))
+        assertNull(SessionStore(file, counting).load())
+        assertEquals("so is a file cut short", 2, counting.opens)
+        file.writeBytes(cipher.seal("kein json".toByteArray()))
+        assertNull(SessionStore(file, counting).load())
+        assertEquals("and sealed text that is no JSON", 3, counting.opens)
+    }
+
     @Test fun clearRemovesTheFileAndASessionThatIsNotThereIsNoSession() {
         val file = File(folder.root, "session.bin")
         val store = SessionStore(file, cipher)

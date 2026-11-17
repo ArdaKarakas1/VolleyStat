@@ -432,7 +432,8 @@ fun ProfileScreen(
  * The server this debug build talks to, and a test of it. The login and register screens show it
  * too, so a phone on USB can reach its server before anyone is signed in. A build without a server
  * address says so. While someone is signed in the choice is read-only: the session belongs to the
- * server that opened it (review finding S5).
+ * server that opened it (review finding S5). It also waits while an account call is on its way, so
+ * a login's answer comes back to the server it went to (second review, R2-B).
  */
 @Composable
 fun ServerSection(state: AppUiState, onServerTarget: (ServerTarget) -> Unit, onTestServer: () -> Unit) {
@@ -440,9 +441,10 @@ fun ServerSection(state: AppUiState, onServerTarget: (ServerTarget) -> Unit, onT
     if (!state.serverConfigured) {
         Notice(stringResource(R.string.server_none), Tone.NEUTRAL)
     } else {
-        val locked = state.account.user != null
+        val signedIn = state.account.user != null
+        val locked = signedIn || state.account.busy
         VsCard {
-            if (locked) {
+            if (signedIn) {
                 Text(stringResource(R.string.server_locked), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(8.dp))
             }

@@ -10,6 +10,7 @@ import java.security.KeyStore
 import java.security.KeyStoreException
 import java.security.ProviderException
 import java.security.UnrecoverableKeyException
+import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -81,8 +82,9 @@ open class AesGcmCipher(private val key: () -> SecretKey) : SessionCipher {
  * key then read as nothing: the user logs in again and gets a new device token, and the plain list
  * of deletions.ids keeps the accounts in doubt. Any other keystore error keeps the key: the call is
  * tried once more with the same key and otherwise fails alone. Keystore2's getKey turns every
- * keystore error into an UnrecoverableKeyException and Cipher.init every error of the operation into
- * an InvalidKeyException, so neither type alone says anything about the key.
+ * keystore error into an UnrecoverableKeyException, Cipher.init every error of the operation into
+ * an InvalidKeyException and doFinal into an IllegalBlockSizeException, so no type alone says
+ * anything about the key.
  */
 class KeystoreSessionCipher(private val alias: String = KEY_ALIAS) : SessionCipher {
     private val aes = AesGcmCipher { keystoreKey(alias) }
@@ -112,9 +114,19 @@ class KeystoreSessionCipher(private val alias: String = KEY_ALIAS) : SessionCiph
         operation()
     }
 
-    /** The failures of the keystore itself, as AndroidKeyStore reports them. A changed or damaged file is none of them. */
-    private fun mayPass(error: Exception) =
-        error is UnrecoverableKeyException || error is InvalidKeyException || error is KeyStoreException || error is ProviderException
+    /**
+     * The failures of the keystore itself, as AndroidKeyStore reports them: getKey's
+     * UnrecoverableKeyException, Cipher.init's InvalidKeyException, a KeyStoreException or a
+     * ProviderException, and any failure the keystore's own android.security.KeyStoreException caused.
+     * doFinal wraps such an error (an operation Keystore2 pruned, SYSTEM_ERROR, OPERATION_BUSY) in an
+     * IllegalBlockSizeException (second review, R2-C). A tag that does not match and this app's own
+     * format checks are damage, whatever their cause: the same file fails the same way again.
+     */
+    private fun mayPass(error: Exception) = when (error) {
+        is AEADBadTagException, is SealedFileDamaged -> false
+        is UnrecoverableKeyException, is InvalidKeyException, is KeyStoreException, is ProviderException -> true
+        else -> causesOf(error).any { it.javaClass.name == KEYSTORE_EXCEPTION }
+    }
 
     companion object {
         const val KEY_ALIAS = "volleystat-session-key"
@@ -153,12 +165,17 @@ class KeystoreSessionCipher(private val alias: String = KEY_ALIAS) : SessionCiph
  * reflection fails and the error counts as one that may pass.
  */
 internal fun keystoreLostTheKey(error: Throwable): Boolean =
-    generateSequence(error) { failure -> failure.cause?.takeIf { it !== failure } }.take(MAX_CAUSES).any { failure ->
-        failure is KeyPermanentlyInvalidatedException || keystoreCodeShowsLoss(failure)
-    }
+    causesOf(error).any { failure -> failure is KeyPermanentlyInvalidatedException || keystoreCodeShowsLoss(failure) }
+
+/** [error] and the failures that caused it, nearest first. */
+private fun causesOf(error: Throwable): Sequence<Throwable> =
+    generateSequence(error) { failure -> failure.cause?.takeIf { it !== failure } }.take(MAX_CAUSES)
+
+/** The class the keystore service's errors reach the app as. It is public only from API 33, so the app names it. */
+private const val KEYSTORE_EXCEPTION = "android.security.KeyStoreException"
 
 private fun keystoreCodeShowsLoss(failure: Throwable): Boolean {
-    if (failure.javaClass.name != "android.security.KeyStoreException") return false
+    if (failure.javaClass.name != KEYSTORE_EXCEPTION) return false
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && failure is android.security.KeyStoreException &&
         (failure.numericErrorCode == android.security.KeyStoreException.ERROR_KEY_CORRUPTED ||
             failure.numericErrorCode == android.security.KeyStoreException.ERROR_KEY_DOES_NOT_EXIST)
@@ -166,7 +183,7 @@ private fun keystoreCodeShowsLoss(failure: Throwable): Boolean {
         return true
     }
     val internal = try {
-        failure.javaClass.getMethod("getErrorCode").invoke(failure) as? Int
+        readInternalKeystoreCode(failure) as? Int
     } catch (hidden: ReflectiveOperationException) {
         null
     } catch (hidden: RuntimeException) {
@@ -174,6 +191,15 @@ private fun keystoreCodeShowsLoss(failure: Throwable): Boolean {
     }
     return internal in INTERNAL_CODES_OF_A_LOST_KEY
 }
+
+/**
+ * Reads the keystore's internal code of an android.security.KeyStoreException through its hidden
+ * getErrorCode(). A platform that hides the method throws here, and the error then counts as one
+ * that may pass. Tests put a reader here that throws, as such a platform does: Robolectric hides no
+ * method, so without it no test would ever need the public code (second review, problem 4).
+ */
+@Volatile
+internal var readInternalKeystoreCode: (Throwable) -> Any? = { failure -> failure.javaClass.getMethod("getErrorCode").invoke(failure) }
 
 private const val MAX_CAUSES = 8
 
