@@ -46,6 +46,7 @@ import java.io.File
 import java.io.IOException
 import java.time.LocalDate
 import java.util.UUID
+import org.json.JSONException
 
 /** Live progress of the one upload the app runs at a time. */
 data class UploadProgress(
@@ -101,7 +102,8 @@ enum class JobLoad { LOADING, READY, NO_JOB, NO_ANALYZER, VIDEO_MISSING, UNREACH
 
 enum class ReviewProblem { STALE, SAVE_FAILED, LOAD_FAILED }
 
-enum class ReportLoad { LOADING, READY, NONE, UNREACHABLE }
+/** OUTDATED: the server answered, but not with a report this app can read. A server before 0.7 answers that way. */
+enum class ReportLoad { LOADING, READY, NONE, UNREACHABLE, OUTDATED }
 
 /** OUTDATED: the server answered, but not with a rally list this app can read. An older server answers that way. */
 enum class RalliesLoad { LOADING, READY, UNREACHABLE, OUTDATED }
@@ -717,6 +719,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     Result.success(send(api(), jobId, list.version))
                 } catch (error: IOException) {
                     Result.failure(error)
+                } catch (error: JSONException) {
+                    // The server answered with something this app can not read. The list read below tells whether the correction was made.
+                    Result.failure(error)
                 }
             }
             // The screen that sent the correction keeps the user until the last of these reads is over, so each of them waits the short wait.
@@ -792,18 +797,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         viewModelScope.launch {
-            val outcome = withContext(Dispatchers.IO) {
-                try {
-                    Result.success(api().report(serverMatchId))
-                } catch (error: IOException) {
-                    Result.failure(error)
-                }
-            }
+            val outcome = withContext(Dispatchers.IO) { runCatching { api().report(serverMatchId) } }
+            // No answer and a refusal are failures of the connection or of the request. An answer that came and
+            // can not be read as a report is the answer of another server version: asking again will not change it.
+            val failure = if (outcome.exceptionOrNull() is IOException) ReportLoad.UNREACHABLE else ReportLoad.OUTDATED
             _analysis.update { current ->
                 if (current.matchId != matchId) return@update current
                 outcome.fold(
                     onSuccess = { report -> current.copy(report = report, reportLoad = if (report == null) ReportLoad.NONE else ReportLoad.READY) },
-                    onFailure = { current.copy(reportLoad = ReportLoad.UNREACHABLE) },
+                    onFailure = { current.copy(reportLoad = failure) },
                 )
             }
         }

@@ -218,7 +218,7 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
                 # Joining the thread can wait for a running analyzer to notice the stop signal.
                 await run_in_threadpool(worker.stop)
 
-    app = FastAPI(title="VolleyStat Local Development API", version="0.6.0", lifespan=lifespan,
+    app = FastAPI(title="VolleyStat Local Development API", version="0.7.0", lifespan=lifespan,
                   description="LOCAL TEST DATA ONLY. No authentication, no trained AI. Never expose to the internet.")
     app.state.worker = worker
     app.add_middleware(BodyLimit, exempt=is_chunk_upload)

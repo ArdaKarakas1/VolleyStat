@@ -1,4 +1,4 @@
-# Analiz, inceleme ve rapor sözleşmesi (API 0.6)
+# Analiz, inceleme ve rapor sözleşmesi (API 0.7)
 
 Bu belge arka uç, Android istemcisi ve analiz modülleri arasındaki tek sözleşmedir. Bir taraf bu belgeyi değiştirmeden davranışını değiştirmez. Kök: `/v1`. Yükleme uçları [API.md](API.md) içindedir ve aynen geçerlidir.
 
@@ -118,7 +118,7 @@ Bir videonun aynı anda tek süren işi olur. `Idempotency-Key` başlığı iste
 
 ## 4. Ralliler
 
-`GET /v1/analyses/{jobId}/rallies` → `{"rallies": [Rally], "rallyListVersion": 4, "listConfirmed": false, "videoDurationMs": 5400000, "sets": [Set], "rules": Rules}`
+`GET /v1/analyses/{jobId}/rallies` → `{"rallies": [Rally], "rallyListVersion": 4, "listConfirmed": false, "videoDurationMs": 5400000, "matches": [Part], "rules": Rules}`
 
 ```json
 {"id": "…", "sequence": 3, "startMs": 41200, "endMs": 52800, "origin": "ANALYZER",
@@ -130,10 +130,10 @@ Bir videonun aynı anda tek süren işi olur. `Idempotency-Key` başlığı iste
 
 - `sequence`: Rallinin maç sırasındaki numarası. Sunucu her düzeltmeden sonra rallileri başlangıç zamanına göre yeniden numaralar. İstemci ralliyi `id` ile tanır, `sequence` ile tanımaz.
 - `origin`: `ANALYZER` (ralli bir analizör önerisinden geliyor) ya da `USER` (ralliyi kullanıcı ekledi ya da bölerek oluşturdu). `USER` ralli öneri taşımaz: `proposedWinner` `UNKNOWN`, `confidence` `null` ve `uncertaintyReasons` boş gelir.
-- `scoreAfter`: `{"set": 1, "home": 4, "away": 3}`. Sunucu bu değeri raporun skor sayımıyla aynı yürüyüşten üretir. Değer `REJECTED` rallide, kazananı belli olmayan ilk rallide ve ondan sonraki her rallide `null` olur. Telefon skor hesaplamaz.
+- `scoreAfter`: `{"match": 1, "set": 1, "home": 4, "away": 3}`. `match` rallinin videodaki hangi bölüme girdiğini söyler (bölüm 7, skor). Sunucu bu değeri raporun skor sayımıyla aynı yürüyüşten üretir. Değer `REJECTED` rallide, kazananı belli olmayan ilk rallide ve ondan sonraki her rallide `null` olur. Telefon skor hesaplamaz.
 - `videoDurationMs`: Bir düzeltmenin verebileceği en büyük zaman.
-- `sets`: Listenin bu sürümünün set skorları, raporun `score.sets` alanıyla aynı biçimde ve aynı sayımdan (`{"number": 1, "home": 25, "away": 21, "complete": true}`). Kullanıcı listeyi onaylamadan önce bu skorları maçta oynanan skorlarla karşılaştırır (bölüm 9). İstemci onay ekranında raporu değil bu alanı gösterir, çünkü onay isteği bu yanıttaki `rallyListVersion` değerini taşır.
-- `rules`: Sunucunun `sets` ve `scoreAfter` değerlerini saydığı maç kuralı (bölüm 1). Sunucu `rules` ve `sets` alanını aynı okumadan verir. İstemci skor denetiminde bu kuralı bir cümleyle söyler: "Sunucu seti 21 sayıda, 3. seti 15 sayıda ve iki farkla bitirir."
+- `matches`: Listenin bu sürümünün bölümleri ve set skorları, raporun `score.matches` alanıyla aynı sayımdan. Rapordan tek farkı bölüm başına istatistik taşımamasıdır (`teams`, `players` ve `unattributed` yoktur). Kullanıcı listeyi onaylamadan önce bu skorları maçta oynanan skorlarla karşılaştırır (bölüm 9). İstemci onay ekranında raporu değil bu alanı gösterir, çünkü onay isteği bu yanıttaki `rallyListVersion` değerini taşır.
+- `rules`: Sunucunun `matches` ve `scoreAfter` değerlerini saydığı maç kuralı (bölüm 1). Sunucu `rules` ve `matches` alanını aynı okumadan verir. İstemci skor denetiminde bu kuralı bir cümleyle söyler: "Sunucu seti 21 sayıda, 3. seti 15 sayıda ve iki farkla bitirir."
 
 - `status`: `PROPOSED` (karar yok), `VERIFIED` (kullanıcı kazananı seçti), `UNRESOLVED` (kullanıcı emin değil), `REJECTED` (kullanıcı "ralli değil" dedi).
 - `winner`: `HOME`, `AWAY` ya da `null`. Yalnız kullanıcı kararıyla dolar.
@@ -201,9 +201,12 @@ Bir videonun aynı anda tek süren işi olur. `Idempotency-Key` başlığı iste
   "rallies": {"proposed": 18, "total": 18, "userCreated": 0, "verified": 7, "rejected": 1, "unresolved": 0, "open": 10},
   "ralliesMayBeMissing": true,
   "rules": {"setsToWin": 3, "setTarget": 25, "decidingSetTarget": 15, "winBy": 2, "decidingSetNumber": 5},
-  "score": {"status": "PARTIAL", "setsWon": {"home": 0, "away": 0},
-            "sets": [{"number": 1, "home": 4, "away": 3, "complete": false}],
-            "stoppedAtRally": 9},
+  "score": {"status": "PARTIAL", "stoppedAtRally": 9, "unplacedRallies": 10,
+            "matches": [{"number": 1, "kind": "STOPPED", "winner": null,
+                         "setsWon": {"home": 0, "away": 0},
+                         "sets": [{"number": 1, "home": 4, "away": 3, "complete": false}],
+                         "firstRally": 1, "lastRally": 7,
+                         "teams": {"…": "…"}, "players": ["…"], "unattributed": {"home": 2, "away": 3}}]},
   "teams": {
     "home": {"points": {"value": 4, "status": "PARTIAL"},
              "attackPoints": {"value": 2, "status": "PARTIAL"},
@@ -224,9 +227,11 @@ Bir videonun aynı anda tek süren işi olur. `Idempotency-Key` başlığı iste
 - `rallyList`: `confirmed` kullanıcının bugünkü listeyi eksiksiz ilan ettiğini söyler. `confirmedAt` o onayın zamanıdır ve onay düşünce `null` olur. `corrections` kullanıcının bu işte yaptığı ekleme, taşıma, bölme ve birleştirme sayısıdır. Sunucu liste onayını ve hiçbir şeyi değiştirmeyen taşımayı bu sayıya katmaz. Sayı sıfırdan büyükse rapordaki aralıklar yalnız analizörün değildir, istemci kaynağı buna göre yazar.
 - Rapor maçın rallisi olan en yeni işini izler. `revision` o işe aittir. Eski bir işin kartına verilen karar o işin `revision` değerini artırır ve raporu değiştirmez.
 - `ralliesMayBeMissing`: Bu alan, analizörün türü ne olursa olsun, kullanıcı ralli listesini onaylayana kadar `true` olur. Hiçbir analizör bütün rallileri bulmaz ve listeyi yalnız kullanıcının kendi denetimi kapatır. Deneme analizörünün işinde (`mock: true`) bu alan her zaman `true` kalır, çünkü sunucu o işin listesini onaylatmaz. Alan `true` iken sunucu `teams` altındaki hiçbir değeri ve `score.status` alanını `MEASURED` olarak bildirmez. Kullanıcı bütün kartları yanıtlamış olsa bile bu alanlar en fazla `PARTIAL` olur. `coverage[].status` bu kuralın dışındadır: O alan kullanıcının listedeki rallilerin ne kadarını karara bağladığını söyler ve kullanıcı bütün rallileri karara bağladığında `MEASURED` olur. `coverage` listede olmayan ralliyi saymaz.
-- Skor: Sunucu rallileri sırayla sayar, reddedilen ralliyi atlar ve seti maçın kuralına göre kapatır (`rules`, bölüm 1): Set `setTarget` sayıda, `decidingSetNumber` numaralı karar seti `decidingSetTarget` sayıda ve iki farkla biter. Maçı bitiren bir kural yoktur. Ralliler sürdükçe sunucu yeni set açar, çünkü antrenman maçları çoğu zaman sabit sayıda set oynar. Karar setinden sonraki set yine `setTarget` sayıya gider. Sunucu kuralı her raporda maçın kaydından okur, bu yüzden kural değişince rapor yeni kuralla sayar.
-- Sayım kazananı belli olmayan ilk rallide durur (kartı açık ya da yanıtı `UNSURE`). `score.stoppedAtRally` o rallinin sıra numarasını taşır, sayım sona ulaştıysa `null` olur. O ralliden önce biten setler `complete: true` kalır. Rallinin içinde bulunduğu set o ana kadarki sayılarla ve `complete: false` olarak gelir. Sayım o setin ilk rallisinde durduysa set için satır gelmez, çünkü o sette sayılmış bir sayı yoktur. Sonraki ralliler hiçbir set satırına girmez. `setsWon` yalnızca biten setleri sayar. Hiç doğrulanmış ralli yoksa `score.status` `UNKNOWN`, `setsWon` alanları `null` olur.
-- `teams.<taraf>.points` maçın doğrulanmış bütün rallilerini sayar, sayımın durduğu ralliden sonrakileri de. Hiç doğrulanmış ralli yokken iki taraf için de `null` ve `UNKNOWN` olur. Bir ralli doğrulandığı anda iki taraf da sayı taşır: Doğrulanan rallilerin hiçbirini kazanmamış taraf `0` taşır.
+- Skor: Sunucu rallileri sırayla sayar, reddedilen ralliyi atlar ve seti maçın kuralına göre kapatır (`rules`, bölüm 1): Set `setTarget` sayıda, `decidingSetNumber` numaralı karar seti `decidingSetTarget` sayıda ve iki farkla biter. Bir takım `setsToWin` sete ulaşınca maç biter (FIVB 6.3.1). Sunucu sonraki ralliyle aynı kuralla yeni bir maç açar ve o maçın setlerini yeniden 1'den sayar. Sunucu kuralı her raporda maçın kaydından okur, bu yüzden kural değişince rapor yeni kuralla sayar.
+- `score.matches` videonun bölümleridir. `kind` dört değerden birini alır: `MATCH` (bir takım gereken setleri aldı, `winner` o takımdır), `AFTER_MATCH` (biten son maçtan sonra oynanan ve bir maçı bitirmeyen setler), `UNFINISHED` (hiçbir maç bitmediyse aynı setler) ve `STOPPED` (sayımın durduğu bölüm: Bu bölüm sonradan bir maça dönüşebilir ve sunucu bunu bilemez). `MATCH` dışındaki bir bölüm yalnız listenin sonunda durur ve `winner` taşımaz. `setsWon` bölümde biten setleri sayar. `firstRally` ve `lastRally` bölümün ilk ve son rallisinin sıra numarasıdır.
+- Her bölüm kendi istatistiğini taşır: `teams`, `players` ve `unattributed` bölümün rallilerini videonun alanlarıyla aynı kurallarla sayar. Bir bölümün değerleri yalnız liste onaylıysa ve bölüm `STOPPED` değilse `MEASURED` olur. Videonun `teams`, `players` ve `unattributed` alanları bütün videonun toplamıdır.
+- Sayım kazananı belli olmayan ilk rallide durur (kartı açık ya da yanıtı `UNSURE`). `score.stoppedAtRally` o rallinin sıra numarasını taşır, sayım sona ulaştıysa `null` olur. O ralliden önce biten setler `complete: true` kalır. Rallinin içinde bulunduğu set o ana kadarki sayılarla ve `complete: false` olarak gelir. Sayım bir setin ya da bir bölümün ilk rallisinde durduysa o set ya da bölüm için satır gelmez, çünkü orada sayılmış bir sayı yoktur. Sonraki ralliler hiçbir bölüme girmez. `score.unplacedRallies` sayımın durduğu ralliden listenin sonuna kadarki reddedilmemiş ralli sayısıdır. Hiç doğrulanmış ralli yoksa `score.status` `UNKNOWN` olur ve `matches` boş gelir.
+- `teams.<taraf>.points` videonun doğrulanmış bütün rallilerini sayar, sayımın durduğu ralliden sonrakileri de. Hiç doğrulanmış ralli yokken iki taraf için de `null` ve `UNKNOWN` olur. Bir ralli doğrulandığı anda iki taraf da sayı taşır: Doğrulanan rallilerin hiçbirini kazanmamış taraf `0` taşır.
 - `REJECTED` ralli hiçbir sayıma girmez. `eligibleN` reddedilenleri dışarıda tutar.
 - Takımın sayı türleri (`attackPoints` …) yalnızca `TERMINAL_ACTION` kararı olan rallilerden gelir. Hiç karar yoksa `UNKNOWN`, bir kısmında varsa `PARTIAL` olur. Sunucu sıfır olan bir alt sınırı sayı olarak göndermez: O türde henüz karar yoksa ve sayım tamamlanmadıysa değer `null` ve `UNKNOWN` olur. `0` yalnızca sayım tamamlandığında (`MEASURED`) gelir.
 - `players` yalnızca `SCORER` kararıyla forma numarası verilen sayıları içerir. Bu sayılar düz sayımdır ve doğrulama sürdükçe artabilir. Oyuncusu bilinmeyen sayılar `unattributed` altında kalır ve takım toplamına girer. `unattributed.<taraf>` o tarafın `points` değeri `null` iken `null`, değilse sayıdır.

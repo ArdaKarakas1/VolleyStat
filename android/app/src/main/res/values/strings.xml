@@ -418,6 +418,7 @@
     <string name="report_score_unknown">Skor yok</string>
     <string name="report_score_partial">Kısmi skor</string>
     <string name="report_score_at_least">Set skoru en az %1$d - %2$d</string>
+    <string name="report_matches_at_least">Kazanılan maç en az %1$d - %2$d</string>
     <string name="report_loading">Uygulama raporu alıyor</string>
     <string name="report_verification_draft">Taslak</string>
     <string name="report_verification_partial">Bir kısmını doğruladın</string>
@@ -427,7 +428,7 @@
     <string name="report_may_miss">Rapor yalnızca listedeki rallileri sayar. Listede olmayan bir rallinin sayısı raporda yoktur. Sen ralli listesini onaylayınca set skorunun ve \"Sayı\" satırının artı işareti kalkar. Sayı türü satırlarının artı işareti, sen her sayının türünü seçince kalkar.</string>
     <string name="report_may_miss_demo">Rapor yalnızca listedeki rallileri sayar. Sunucu bu aralıkları uydurdu, bu yüzden sayılar gerçek maç hakkında bilgi vermez.</string>
     <string name="report_list_confirmed">Sen ralli listesinin videodaki bütün rallileri içerdiğini onayladın. Sunucu sayıları bu listeye göre sayar.</string>
-    <string name="report_score_stopped">%1$d. rallinin kazananı belli değil. Sunucu set skorunu bu ralliden sonrası için hesaplamaz.</string>
+    <string name="report_score_stopped">%1$d. rallinin kazananı belli değil. Sunucu set skorunu bu ralliden sonrası için hesaplamaz ve sonraki rallileri hiçbir maça yazmaz, ama doğrulanmış olanları videonun toplamında yine sayar.</string>
     <string name="report_stats">Maç İstatistikleri</string>
     <string name="report_team_stats">Takım İstatistikleri</string>
     <string name="report_player_stats">Oyuncu İstatistikleri</string>
@@ -455,6 +456,7 @@
     <string name="report_unavailable_title">Rapor henüz yok</string>
     <string name="report_unavailable_body">Bu maç için analiz işi yok.</string>
     <string name="report_load_failed">Uygulama raporu sunucudan alamadı.</string>
+    <string name="report_outdated_server">Sunucu raporu bu uygulamanın okuyabildiği biçimde vermedi. Sunucunun güncel sürümle çalıştığını denetle.</string>
     <string name="value_not_measured">Ölçüm yok</string>
     <string name="value_partial_note">Artı işareti alt sınırı gösterir. Sayı doğrulama sürdükçe artabilir.</string>
     <string name="value_missing_note">Kesik çizgili kutu ölçüm olmadığını gösterir. Uygulama eksik ölçümü sıfır yazmaz.</string>
@@ -542,8 +544,19 @@
     <!-- A choice the user has not saved: the server counts with it only after Save. -->
     <string name="rule_counting_if_saved">Kaydedersen sunucu seti %1$d sayıda, %2$d. seti %3$d sayıda ve iki farkla bitirir.</string>
     <string name="rule_counting_same_if_saved">Kaydedersen sunucu her seti %1$d sayıda ve iki farkla bitirir.</string>
-    <!-- The server never ends a match (ADR-0112), so a set played after a team has won counts too. -->
-    <string name="rule_no_match_end">Sunucu maçı bitirmez ve bir takım maçı aldıktan sonra oynanan setleri de sayar.</string>
+    <!-- A match ends when a team has won the sets the rule asks for; the next rally opens a new match (ADR-0118). -->
+    <string name="rule_match_end">Bir takım gereken setleri alınca sunucu maçı bitirir ve sonraki ralliyle aynı kuralla yeni bir maç açar.</string>
+    <string name="part_match">Maç %1$d</string>
+    <string name="part_after_match">Maç sonrası</string>
+    <string name="part_unfinished">Bitmemiş maç</string>
+    <string name="part_stopped">Sayımın durduğu bölüm</string>
+    <string name="report_matches">Maçlar</string>
+    <string name="report_matches_won">Kazanılan maç</string>
+    <string name="report_scope_video">Bütün video</string>
+    <string name="report_scope_label">İstatistiğin kapsamı</string>
+    <string name="report_part_sets">Setler: %1$s</string>
+    <string name="report_part_after_match_note">Bu setler bir maçı bitirmedi. Sunucu bu setleri hiçbir maçın sonucuna katmaz.</string>
+    <string name="report_part_stopped_note">Sunucu sayımı bu bölümde durdurdu. Bu bölüm sonradan bir maça dönüşebilir.</string>
     <string name="action_save_rule">Kuralı Kaydet</string>
     <string name="rule_sending">Uygulama kuralı sunucuya gönderiyor</string>
     <!-- The server accepts every rule the app offers, so a refusal never blames the rule. -->

@@ -61,6 +61,10 @@ import com.voleybolveveleybol.volleystat.ui.components.Tone
 import com.voleybolveveleybol.volleystat.ui.components.VsCard
 import com.voleybolveveleybol.volleystat.ui.components.dashedOutline
 import com.voleybolveveleybol.volleystat.ui.theme.Dimens
+import androidx.compose.material3.FilterChip
+import com.voleybolveveleybol.volleystat.model.MatchPart
+import com.voleybolveveleybol.volleystat.model.ReviewCard
+import androidx.compose.foundation.selection.selectableGroup
 
 /**
  * A reported number in one of its three honest forms: measured, a lower bound (marked with a
@@ -90,23 +94,48 @@ private fun TeamColumn(name: String, home: Boolean, modifier: Modifier = Modifie
     }
 }
 
-/** Home on the left, away on the right, sets won in the middle. Words stand in the middle when there is no score. */
+/** The name of a part of a video (ADR-0118): "Maç 2", "Maç sonrası", "Bitmemiş maç" or the part the count stopped in. */
+@Composable
+fun partLabel(part: MatchPart): String = when (part.kind) {
+    MatchPart.MATCH -> stringResource(R.string.part_match, part.number)
+    MatchPart.AFTER_MATCH -> stringResource(R.string.part_after_match)
+    MatchPart.UNFINISHED -> stringResource(R.string.part_unfinished)
+    else -> stringResource(R.string.part_stopped)
+}
+
+/** A score of two numbers; under PARTIAL a lower bound, so it carries the plus like every other partial number. */
+@Composable
+private fun BigScore(home: Int, away: Int, atLeast: Boolean, spokenId: Int) {
+    val plus = if (atLeast) "+" else ""
+    val spoken = stringResource(spokenId, home, away)
+    Text(
+        "$home$plus - $away$plus", style = MaterialTheme.typography.displayLarge, maxLines = 1, softWrap = false,
+        modifier = if (atLeast) Modifier.semantics { contentDescription = spoken } else Modifier,
+    )
+}
+
+/**
+ * Home on the left, away on the right, the score in the middle. Words stand in the middle when there
+ * is no score. A video of one part shows its sets won; a video of several parts shows the matches
+ * each team won, and the matches card below holds the sets.
+ */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ScoreHeader(match: MatchRecord, report: MatchReport?, modifier: Modifier = Modifier) {
-    val known = report != null && report.setsWonHome != null && report.setsWonAway != null
+    val known = report != null && report.scoreStatus != StatValue.UNKNOWN
+    val parts = report?.matches.orEmpty()
+    val single = parts.size <= 1
     Column(modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TeamColumn(match.homeTeam, home = true, modifier = Modifier.weight(1f))
             if (known) {
-                // Sets won under PARTIAL are a lower bound like every other partial number, so they carry the plus too.
-                val atLeast = report!!.scoreStatus == "PARTIAL"
-                val plus = if (atLeast) "+" else ""
-                val spoken = stringResource(R.string.report_score_at_least, report.setsWonHome ?: 0, report.setsWonAway ?: 0)
-                Text(
-                    "${report.setsWonHome}$plus - ${report.setsWonAway}$plus", style = MaterialTheme.typography.displayLarge, maxLines = 1, softWrap = false,
-                    modifier = if (atLeast) Modifier.semantics { contentDescription = spoken } else Modifier,
-                )
+                val atLeast = report!!.scoreStatus == StatValue.PARTIAL
+                if (single) {
+                    BigScore(parts.firstOrNull()?.setsWonHome ?: 0, parts.firstOrNull()?.setsWonAway ?: 0, atLeast, R.string.report_score_at_least)
+                } else {
+                    val won = { side: String -> parts.count { it.kind == MatchPart.MATCH && it.winner == side } }
+                    BigScore(won(ReviewCard.HOME), won(ReviewCard.AWAY), atLeast, R.string.report_matches_at_least)
+                }
             } else {
                 Text(
                     stringResource(R.string.report_score_unknown), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -115,9 +144,13 @@ fun ScoreHeader(match: MatchRecord, report: MatchReport?, modifier: Modifier = M
             }
             TeamColumn(match.awayTeam, home = false, modifier = Modifier.weight(1f))
         }
-        if (report != null && report.sets.isNotEmpty()) {
+        if (known && !single) {
+            Text(stringResource(R.string.report_matches_won), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        val sets = if (single) parts.firstOrNull()?.sets.orEmpty() else emptyList()
+        if (sets.isNotEmpty()) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                report.sets.forEach { set ->
+                sets.forEach { set ->
                     val open = stringResource(R.string.report_set_open, set.number)
                     Text(
                         "${set.home}-${set.away}", style = MaterialTheme.typography.titleSmall,
@@ -127,6 +160,67 @@ fun ScoreHeader(match: MatchRecord, report: MatchReport?, modifier: Modifier = M
                             .padding(horizontal = 12.dp, vertical = 8.dp),
                     )
                 }
+            }
+        }
+    }
+}
+
+/**
+ * Every part of a video with its sets: shown when the video holds more than one part. A part's sets won
+ * are a lower bound while the list may miss rallies, and in the part the count stopped in, which may
+ * still close more sets. A match that ended before the stop on a confirmed list is final.
+ */
+@Composable
+private fun MatchesCard(parts: List<MatchPart>, mayBeMissing: Boolean) {
+    VsCard(padding = PaddingValues(0.dp)) {
+        SectionHeader(stringResource(R.string.report_matches))
+        Column(Modifier.padding(horizontal = Dimens.cardPadding, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            parts.forEach { part ->
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(partLabel(part), style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f).semantics { heading() })
+                        val atLeast = mayBeMissing || part.kind == MatchPart.STOPPED
+                        val plus = if (atLeast) "+" else ""
+                        val spoken = stringResource(R.string.report_score_at_least, part.setsWonHome, part.setsWonAway)
+                        Text(
+                            "${part.setsWonHome}$plus - ${part.setsWonAway}$plus", style = MaterialTheme.typography.titleSmall,
+                            modifier = if (atLeast) Modifier.semantics { contentDescription = spoken } else Modifier,
+                        )
+                    }
+                    if (part.sets.isNotEmpty()) {
+                        // A set that the rule has not closed yet is marked, so it never reads as a final set score,
+                        // and a screen reader says in words that it is still running.
+                        val sets = part.sets.joinToString(", ") { "${it.home}-${it.away}" + if (it.complete) "" else "…" }
+                        val open = part.sets.associate { it.number to stringResource(R.string.report_set_open, it.number) }
+                        val spokenSets = stringResource(R.string.report_part_sets, part.sets.joinToString(", ") {
+                            if (it.complete) "${it.home}-${it.away}" else "${open.getValue(it.number)}: ${it.home}-${it.away}"
+                        })
+                        Text(
+                            stringResource(R.string.report_part_sets, sets), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = if (part.sets.all { it.complete }) Modifier else Modifier.semantics { contentDescription = spokenSets },
+                        )
+                    }
+                    when (part.kind) {
+                        MatchPart.AFTER_MATCH, MatchPart.UNFINISHED ->
+                            Text(stringResource(R.string.report_part_after_match_note), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        MatchPart.STOPPED ->
+                            Text(stringResource(R.string.report_part_stopped_note), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** The whole video or one of its parts: what the statistics below are counted over. Index 0 is the whole video. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ScopeChoice(parts: List<MatchPart>, selected: Int, onSelect: (Int) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(stringResource(R.string.report_scope_label), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.selectableGroup()) {
+            (listOf(stringResource(R.string.report_scope_video)) + parts.map { partLabel(it) }).forEachIndexed { index, label ->
+                FilterChip(selected = index == selected, onClick = { onSelect(index) }, label = { Text(label) })
             }
         }
     }
@@ -174,6 +268,8 @@ fun ReportScreen(
     onOpenRallies: () -> Unit = {},
 ) {
     var pointTypesOpen by rememberSaveable { mutableStateOf(false) }
+    // 0 is the whole video; i is part i of the report. A report that lost parts falls back to the video.
+    var scope by rememberSaveable { mutableIntStateOf(0) }
     FlowScaffold(title = stringResource(R.string.report_title), onBack = onBack) {
         when {
             load == ReportLoad.LOADING -> ReportLoading()
@@ -181,6 +277,8 @@ fun ReportScreen(
                 Notice(stringResource(R.string.report_load_failed), Tone.NEGATIVE)
                 PrimaryButton(stringResource(R.string.action_retry), onRetry)
             }
+            // The server answered, and not with a report this app can read. Asking again would get the same answer.
+            load == ReportLoad.OUTDATED -> Notice(stringResource(R.string.report_outdated_server), Tone.NEGATIVE)
             report == null -> {
                 ScoreHeader(match, null)
                 NotYetCard(stringResource(R.string.report_unavailable_title), stringResource(R.string.report_unavailable_body))
@@ -213,14 +311,20 @@ fun ReportScreen(
                     PrimaryButton(stringResource(R.string.report_open_review, report.ralliesOpen), onOpenReview, icon = R.drawable.ic_fact_check)
                 }
 
+                val several = report.matches.size > 1
+                if (several) MatchesCard(report.matches, mayBeMissing = report.ralliesMayBeMissing)
+                val part = report.matches.getOrNull(scope - 1)?.takeIf { several }
+                val home = part?.home ?: report.home
+                val away = part?.away ?: report.away
                 VsCard(padding = PaddingValues(0.dp)) {
                     SectionHeader(stringResource(R.string.report_team_stats), demo = report.mock)
                     Column(Modifier.padding(horizontal = Dimens.cardPadding, vertical = 8.dp)) {
-                        CompareRow(stringResource(R.string.report_points), report.home.points, report.away.points)
-                        CompareRow(stringResource(R.string.report_attack_points), report.home.attackPoints, report.away.attackPoints)
-                        CompareRow(stringResource(R.string.report_block_points), report.home.blockPoints, report.away.blockPoints)
-                        CompareRow(stringResource(R.string.report_aces), report.home.aces, report.away.aces)
-                        CompareRow(stringResource(R.string.report_opponent_errors), report.home.opponentErrors, report.away.opponentErrors)
+                        if (several) ScopeChoice(report.matches, if (part == null) 0 else scope, onSelect = { scope = it })
+                        CompareRow(stringResource(R.string.report_points), home.points, away.points)
+                        CompareRow(stringResource(R.string.report_attack_points), home.attackPoints, away.attackPoints)
+                        CompareRow(stringResource(R.string.report_block_points), home.blockPoints, away.blockPoints)
+                        CompareRow(stringResource(R.string.report_aces), home.aces, away.aces)
+                        CompareRow(stringResource(R.string.report_opponent_errors), home.opponentErrors, away.opponentErrors)
                         Text(stringResource(R.string.value_partial_note), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Text(stringResource(R.string.value_missing_note), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
@@ -270,8 +374,8 @@ fun ReportScreen(
                         // The rule the server counted this report's set score with. Without one the report names none.
                         report.rules?.let { rules ->
                             Text(stringResource(R.string.report_rules, ruleCounting(rules)), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            // A set played after a team has won is in the score above too, so the report says so.
-                            Text(stringResource(R.string.rule_no_match_end), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            // Play after a won match starts a new match (ADR-0118), so the report says where a match ends.
+                            Text(stringResource(R.string.rule_match_end), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }
@@ -311,23 +415,31 @@ fun PlayersScreen(
                     PrimaryButton(stringResource(R.string.action_retry), onRetry)
                 }
                 ReportLoad.NONE -> NotYetCard(stringResource(R.string.report_unavailable_title), stringResource(R.string.report_unavailable_body))
+                ReportLoad.OUTDATED -> Notice(stringResource(R.string.report_outdated_server), Tone.NEGATIVE)
                 else -> ReportLoading()
             }
         }
         return
     }
     var side by rememberSaveable { mutableIntStateOf(0) }
+    var scope by rememberSaveable { mutableIntStateOf(0) }
+    val several = report.matches.size > 1
+    // 0 is the whole video; i is part i of the report.
+    val part = report.matches.getOrNull(scope - 1)?.takeIf { several }
     val home = side == 0
     val roster = if (home) homeRoster else awayRoster
-    val lines = report?.players.orEmpty().filter { it.home == home }.sortedBy { it.jersey }
-    val unattributed = if (home) report?.unattributedHome else report?.unattributedAway
+    val lines = (part?.players ?: report.players).filter { it.home == home }.sortedBy { it.jersey }
+    val unattributed = if (part != null) (if (home) part.unattributedHome else part.unattributedAway)
+    else if (home) report.unattributedHome else report.unattributedAway
     // A player's count can still grow while rallies are undecided or points have no player yet,
     // so until then every number in the table is a lower bound and must not read as a final total.
-    val lowerBound = report.ralliesMayBeMissing || report.verificationStatus != "VERIFIED" || (unattributed ?: 0) > 0
+    val partOpen = part != null && part.home?.points?.status != StatValue.MEASURED
+    val lowerBound = report.ralliesMayBeMissing || report.verificationStatus != "VERIFIED" || partOpen || (unattributed ?: 0) > 0
     val missing = stringResource(R.string.value_not_measured)
     FlowScaffold(title = stringResource(R.string.players_title), onBack = onBack) {
         if (report?.mock == true) DemoBanner(compact = true)
         SegmentedChoice(listOf(match.homeTeam, match.awayTeam), side, onSelect = { side = it })
+        if (several) ScopeChoice(report.matches, if (part == null) 0 else scope, onSelect = { scope = it })
         VsCard(padding = PaddingValues(vertical = 8.dp)) {
             BoxWithConstraints(Modifier.fillMaxWidth()) {
                 val number = Modifier.width(36.dp)

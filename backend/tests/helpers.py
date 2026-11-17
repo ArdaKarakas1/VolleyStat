@@ -147,3 +147,24 @@ def rows(storage, query, *parameters):
 def execute(storage, statement, *parameters):
     with sqlite3.connect(storage / "volleystat.sqlite3") as db:
         db.execute(statement, parameters)
+
+
+def one_match(score):
+    """The score of a video that holds one match at most, in the shape of the tests written before
+    several matches could share a video: status, setsWon, sets and stoppedAtRally."""
+    assert len(score["matches"]) <= 1, score["matches"]
+    only = score["matches"][0] if score["matches"] else None
+    nothing = {"home": None, "away": None} if score["status"] == "UNKNOWN" else {"home": 0, "away": 0}
+    return {"status": score["status"], "setsWon": only["setsWon"] if only else nothing,
+            "sets": only["sets"] if only else [], "stoppedAtRally": score["stoppedAtRally"]}
+
+
+def only_sets(rally_list):
+    """The sets of a rally list whose video holds one match at most."""
+    assert len(rally_list["matches"]) <= 1, rally_list["matches"]
+    return rally_list["matches"][0]["sets"] if rally_list["matches"] else []
+
+
+def without_statistics(parts):
+    """The parts of a report score as the rally list gives them: without the statistics of each part."""
+    return [{key: value for key, value in part.items() if key not in ("teams", "players", "unattributed")} for part in parts]

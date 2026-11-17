@@ -30,6 +30,7 @@ import com.voleybolveveleybol.volleystat.model.AnalysisJob
 import com.voleybolveveleybol.volleystat.model.AnalysisSummary
 import com.voleybolveveleybol.volleystat.model.Coverage
 import com.voleybolveveleybol.volleystat.model.Draft
+import com.voleybolveveleybol.volleystat.model.MatchPart
 import com.voleybolveveleybol.volleystat.model.MatchRules
 import com.voleybolveveleybol.volleystat.model.LocalVideo
 import com.voleybolveveleybol.volleystat.model.MatchKind
@@ -75,6 +76,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import com.voleybolveveleybol.volleystat.part
 
 /**
  * Renders every screen in its main states with fixed, invented data. The images are the visual
@@ -122,7 +124,7 @@ class ScreenshotTest {
     private val report = MatchReport(
         "j1", "motion-baseline", "BASELINE", mock = false, verificationStatus = "PARTIALLY_VERIFIED",
         ralliesProposed = 42, ralliesVerified = 30, ralliesRejected = 2, ralliesUnresolved = 1, ralliesOpen = 9,
-        scoreStatus = "PARTIAL", setsWonHome = 1, setsWonAway = 0, sets = listOf(SetScore(1, 25, 21, true), SetScore(2, 3, 4, false)),
+        scoreStatus = "PARTIAL", matches = listOf(part(SetScore(1, 25, 21, true), SetScore(2, 3, 4, false))),
         ralliesMayBeMissing = true,
         home = TeamStats(StatValue(28, "PARTIAL"), StatValue(11, "PARTIAL"), StatValue(3, "PARTIAL"), StatValue(2, "PARTIAL"), StatValue(null, "UNKNOWN")),
         away = TeamStats(StatValue(25, "PARTIAL"), StatValue(9, "PARTIAL"), StatValue(null, "UNKNOWN"), StatValue(1, "PARTIAL"), StatValue(4, "PARTIAL")),
@@ -138,11 +140,11 @@ class ScreenshotTest {
     }
 
     /** One screen on another device shape or text size, then back to the default phone. */
-    private fun shotOn(name: String, qualifiers: String, fontScale: Float = 1f, content: @Composable () -> Unit) {
+    private fun shotOn(name: String, qualifiers: String, fontScale: Float = 1f, dark: Boolean = false, content: @Composable () -> Unit) {
         RuntimeEnvironment.setQualifiers(qualifiers)
         RuntimeEnvironment.setFontScale(fontScale)
         try {
-            shot(name, content = content)
+            shot(name, dark = dark, content = content)
         } finally {
             RuntimeEnvironment.setFontScale(1f)
             RuntimeEnvironment.setQualifiers("+w411dp-h891dp-port")
@@ -247,7 +249,7 @@ class ScreenshotTest {
             rally(5, 190_000, 204_000, winner = null, status = Rally.PROPOSED),
             rally(6, 221_000, 229_000, winner = null, status = Rally.UNRESOLVED),
         ),
-        version = 12, confirmed = false, videoDurationMs = 4_980_000, sets = listOf(SetScore(1, 2, 1, false)),
+        version = 12, confirmed = false, videoDurationMs = 4_980_000, matches = listOf(part(SetScore(1, 2, 1, false))),
     )
     private val decidedList = waitingList.copy(
         rallies = waitingList.rallies.map {
@@ -257,7 +259,7 @@ class ScreenshotTest {
                 else -> it
             }
         },
-        sets = listOf(SetScore(1, 3, 2, false)),
+        matches = listOf(part(SetScore(1, 3, 2, false))),
     )
 
     private fun listState(list: RallyList, mock: Boolean = false) =
@@ -318,9 +320,25 @@ class ScreenshotTest {
         // The rule line closes the last card of the report, so a tall window keeps it in the picture.
         shotOn("09_mac_raporu_kural", "+w411dp-h2400dp-port") {
             // Set scores a server counting to 21 could give.
-            ReportScreen(finished, ReportLoad.READY, report.copy(rules = MatchRules(2, 21, 15), sets = listOf(SetScore(1, 21, 18, true), SetScore(2, 3, 4, false))), {}, {}, {}, {}, {})
+            ReportScreen(finished, ReportLoad.READY, report.copy(rules = MatchRules(2, 21, 15), matches = listOf(part(SetScore(1, 21, 18, true), SetScore(2, 3, 4, false)))), {}, {}, {}, {}, {})
         }
         shot("10_oyuncu_istatistik") { PlayersScreen(finished, report, players, teams[1].players) {} }
+        shot("09_mac_raporu_eski_sunucu") { ReportScreen(finished, ReportLoad.OUTDATED, null, {}, {}, {}, {}, {}) }
+        // Home wins two matches and away one; the count stops in a fourth part. Every number is invented.
+        val severalMatches = report.copy(
+            matches = listOf(
+                part(SetScore(1, 25, 20, true), SetScore(2, 25, 18, true), SetScore(3, 25, 10, true), kind = MatchPart.MATCH, winner = "HOME"),
+                part(SetScore(1, 18, 25, true), SetScore(2, 20, 25, true), SetScore(3, 23, 25, true), number = 2, kind = MatchPart.MATCH, winner = "AWAY"),
+                part(SetScore(1, 25, 21, true), SetScore(2, 25, 19, true), SetScore(3, 25, 17, true), number = 3, kind = MatchPart.MATCH, winner = "HOME"),
+                part(SetScore(1, 25, 22, true), SetScore(2, 24, 23, false), number = 4, kind = MatchPart.STOPPED),
+            ),
+            scoreStoppedAtRally = 431,
+        )
+        shotOn("09_mac_raporu_coklu_mac", "+w411dp-h2400dp-port") { ReportScreen(finished, ReportLoad.READY, severalMatches, {}, {}, {}, {}, {}) }
+        // On a confirmed list only the part the count stopped in keeps the plus.
+        shotOn("09_mac_raporu_coklu_mac_onayli_koyu", "+w411dp-h2400dp-port", dark = true) {
+            ReportScreen(finished, ReportLoad.READY, severalMatches.copy(ralliesMayBeMissing = false, listConfirmed = true), {}, {}, {}, {}, {})
+        }
     }
 
     @Test fun s13_rules() {

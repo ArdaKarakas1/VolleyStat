@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from app.analyzers.base import MOCK, AnalyzerInfo
 from app.main import create_app
-from tests.helpers import ScriptedAnalyzer, cards, decide, proposals, request_job, rows, run_pending, serve, tiny_clip
+from tests.helpers import ScriptedAnalyzer, cards, decide, one_match, only_sets, proposals, request_job, rows, run_pending, serve, tiny_clip, without_statistics
 from tests.test_api import create_match
 from tests.test_media import store
 
@@ -103,33 +103,34 @@ def best_of_three(storage, make_clip):
 def test_a_best_of_three_match_to_21_with_a_third_set_to_15_is_counted_as_played(best_of_three):
     client, match_id, job_id, _ = best_of_three
     played = [set_line(1, 21, 0), set_line(2, 0, 21), set_line(3, 15, 0)]
-    assert listing(client, job_id)["sets"] == played
+    assert only_sets(listing(client, job_id)) == played
     score = report_of(client, match_id)["score"]
     # Until the user confirms the list, a rally may still be missing.
-    assert score == {"status": "PARTIAL", "setsWon": {"home": 2, "away": 1}, "sets": played, "stoppedAtRally": None}
+    assert one_match(score) == {"status": "PARTIAL", "setsWon": {"home": 2, "away": 1}, "sets": played, "stoppedAtRally": None}
+    assert score["matches"][0]["kind"] == "MATCH" and score["matches"][0]["winner"] == "HOME"
     assert confirm(client, job_id).status_code == 200
-    assert report_of(client, match_id)["score"] == {**score, "status": "MEASURED"}
+    assert one_match(report_of(client, match_id)["score"]) == {**one_match(score), "status": "MEASURED"}
 
 
 def test_the_rally_list_names_the_rule_its_sets_were_counted_with(best_of_three):
     client, _, job_id, _ = best_of_three
     found = listing(client, job_id)
-    assert set(found) == {"rallies", "rallyListVersion", "listConfirmed", "videoDurationMs", "sets", "rules"}
+    assert set(found) == {"rallies", "rallyListVersion", "listConfirmed", "videoDurationMs", "matches", "rules"}
     assert found["rules"] == payload(BEST_OF_THREE_TO_21)
 
 
 def test_the_score_after_each_rally_follows_the_match_rule(best_of_three):
     client, _, job_id, _ = best_of_three
     after = {rally["sequence"]: rally["scoreAfter"] for rally in listing(client, job_id)["rallies"]}
-    assert after[21] == {"set": 1, "home": 21, "away": 0}
-    assert after[22] == {"set": 2, "home": 0, "away": 1}
-    assert after[42] == {"set": 2, "home": 0, "away": 21}
-    assert after[57] == {"set": 3, "home": 15, "away": 0}
+    assert after[21] == {"match": 1, "set": 1, "home": 21, "away": 0}
+    assert after[22] == {"match": 1, "set": 2, "home": 0, "away": 1}
+    assert after[42] == {"match": 1, "set": 2, "home": 0, "away": 21}
+    assert after[57] == {"match": 1, "set": 3, "home": 15, "away": 0}
 
 
 def test_the_rallies_a_correction_returns_are_scored_with_the_match_rule(best_of_three):
     client, _, job_id, _ = best_of_three
-    for sequence, expected in ((22, {"set": 2, "home": 0, "away": 1}), (57, {"set": 3, "home": 15, "away": 0})):
+    for sequence, expected in ((22, {"match": 1, "set": 2, "home": 0, "away": 1}), (57, {"match": 1, "set": 3, "home": 15, "away": 0})):
         found = listing(client, job_id)
         moved = found["rallies"][sequence - 1]
         response = client.post(f"/v1/rallies/{moved['id']}/move", json={
@@ -155,9 +156,26 @@ def test_two_matches_count_with_their_own_rules(storage, make_clip):
             match_id = create_match(client, rules=rules)
             job_id = analysed(client, minute_clip(make_clip), match_id)
             answer_winners(client, job_id, ["HOME"] * 21)
-            counted[name] = (listing(client, job_id)["sets"], report_of(client, match_id)["score"]["setsWon"])
+            counted[name] = (only_sets(listing(client, job_id)), one_match(report_of(client, match_id)["score"])["setsWon"])
         assert counted["fivb"] == ([set_line(1, 21, 0, complete=False)], {"home": 0, "away": 0})
         assert counted["to 21"] == ([set_line(1, 21, 0)], {"home": 1, "away": 0})
+
+
+def test_the_rally_list_and_the_report_split_two_matches_alike(storage, make_clip):
+    # Best of three to 15: HOME wins 15-0 and 15-0, and rally 31 opens the second match.
+    with serve(storage, ScriptedAnalyzer(result=proposals(SPANS))) as client:
+        match_id = create_match(client, rules={"setsToWin": 2, "setTarget": 15, "decidingSetTarget": 15})
+        job_id = analysed(client, minute_clip(make_clip), match_id)
+        answer_winners(client, job_id, ["HOME"] * 31)
+        found = listing(client, job_id)
+        report = report_of(client, match_id)
+    assert [(part["number"], part["kind"], part["setsWon"]) for part in found["matches"]] == [
+        (1, "MATCH", {"home": 2, "away": 0}), (2, "STOPPED", {"home": 0, "away": 0})]
+    assert found["matches"] == without_statistics(report["score"]["matches"])
+    after = {rally["sequence"]: rally["scoreAfter"] for rally in found["rallies"]}
+    assert after[30] == {"match": 1, "set": 2, "home": 15, "away": 0}
+    assert after[31] == {"match": 2, "set": 1, "home": 1, "away": 0}
+    assert after[32] is None
 
 
 # --- changing the rule ------------------------------------------------------------------------
@@ -173,11 +191,11 @@ def test_changing_the_rule_recounts_the_list_and_the_report(best_of_three):
     found = listing(client, job_id)
     assert (found["rallyListVersion"], found["listConfirmed"], found["rules"]) == (before["rallyListVersion"] + 1, False, payload(FIVB))
     # Counted to 25, the first set runs on into the rallies of the second one.
-    assert found["sets"] == [set_line(1, 25, 21), set_line(2, 11, 0, complete=False)]
+    assert only_sets(found) == [set_line(1, 25, 21), set_line(2, 11, 0, complete=False)]
     after = {rally["sequence"]: rally["scoreAfter"] for rally in found["rallies"]}
-    assert (after[46], after[47]) == ({"set": 1, "home": 25, "away": 21}, {"set": 2, "home": 1, "away": 0})
-    score = report_of(client, match_id)["score"]
-    assert (score["status"], score["setsWon"], score["sets"]) == ("PARTIAL", {"home": 1, "away": 0}, found["sets"])
+    assert (after[46], after[47]) == ({"match": 1, "set": 1, "home": 25, "away": 21}, {"match": 1, "set": 2, "home": 1, "away": 0})
+    score = one_match(report_of(client, match_id)["score"])
+    assert (score["status"], score["setsWon"], score["sets"]) == ("PARTIAL", {"home": 1, "away": 0}, only_sets(found))
     assert report_of(client, match_id)["rules"] == payload(FIVB)
 
 
@@ -388,10 +406,10 @@ def test_a_demo_list_is_counted_with_the_new_rule_and_still_can_not_be_confirmed
         match_id = create_match(client)
         job_id = analysed(client, minute_clip(make_clip), match_id)
         answer_winners(client, job_id, ["HOME"] * 21)
-        assert listing(client, job_id)["sets"] == [set_line(1, 21, 0, complete=False)]
+        assert only_sets(listing(client, job_id)) == [set_line(1, 21, 0, complete=False)]
         assert put_rules(client, match_id, BEST_OF_THREE_TO_21).status_code == 200
         found = listing(client, job_id)
-        assert (found["sets"], found["rules"]) == ([set_line(1, 21, 0)], payload(BEST_OF_THREE_TO_21))
+        assert (only_sets(found), found["rules"]) == ([set_line(1, 21, 0)], payload(BEST_OF_THREE_TO_21))
         refused = confirm(client, job_id)
         assert refused.status_code == 409 and refused.json()["error"]["code"] == "MOCK_LIST_NOT_CONFIRMABLE"
 

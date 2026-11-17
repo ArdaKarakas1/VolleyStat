@@ -51,6 +51,8 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList
+import com.voleybolveveleybol.volleystat.model.SetScore
+import com.voleybolveveleybol.volleystat.partJson
 
 private const val HOME_TEAM = "Liste Ev"
 private const val AWAY_TEAM = "Liste Misafir"
@@ -122,9 +124,9 @@ class RallyListFlowTest {
         JSONObject().put("id", "r${index + 1}").put("sequence", index + 1).put("startMs", spans[index].first).put("endMs", spans[index].second)
             .put("origin", "ANALYZER").put("status", if (winners[index] != null) "VERIFIED" else if (index in unsure) "UNRESOLVED" else "PROPOSED")
             .put("proposedWinner", "UNKNOWN").put("winner", winners[index] ?: JSONObject.NULL)
-            .put("scoreAfter", score?.let { JSONObject().put("set", 1).put("home", it.first).put("away", it.second) } ?: JSONObject.NULL)
+            .put("scoreAfter", score?.let { JSONObject().put("match", 1).put("set", 1).put("home", it.first).put("away", it.second) } ?: JSONObject.NULL)
     })).put("rallyListVersion", version).put("listConfirmed", confirmed).put("videoDurationMs", 60_000).put("rules", rulesJson())
-        .put("sets", JSONArray(listOfNotNull(scores().lastOrNull { it != null }?.let { JSONObject().put("number", 1).put("home", it.first).put("away", it.second).put("complete", false) })))
+        .put("matches", JSONArray(listOfNotNull(scores().lastOrNull { it != null }?.let { partJson(listOf(SetScore(1, it.first, it.second, false))) })))
 
     private fun cards() = JSONObject().put("cards", JSONArray(winners.indices.map { index ->
         val answer = winners[index] ?: if (index in unsure) "UNSURE" else null
@@ -148,8 +150,8 @@ class RallyListFlowTest {
             .put("rallyList", JSONObject().put("confirmed", confirmed).put("confirmedAt", JSONObject.NULL).put("corrections", 0))
             .put("rallies", JSONObject().put("proposed", 3).put("total", 3).put("userCreated", 0).put("verified", home + away).put("rejected", 0)
                 .put("unresolved", unsure.size).put("open", open))
-            .put("score", JSONObject().put("status", if (confirmed) "MEASURED" else "PARTIAL").put("setsWon", JSONObject().put("home", 0).put("away", 0))
-                .put("sets", JSONArray(listOf(JSONObject().put("number", 1).put("home", home).put("away", away).put("complete", false)))).put("stoppedAtRally", JSONObject.NULL))
+            .put("score", JSONObject().put("status", if (confirmed) "MEASURED" else "PARTIAL").put("stoppedAtRally", JSONObject.NULL).put("unplacedRallies", 0)
+                .put("matches", JSONArray(listOf(partJson(listOf(SetScore(1, home, away, false)))))))
             .put("teams", JSONObject().put("home", team(home)).put("away", team(away)))
             .put("players", JSONArray()).put("unattributed", JSONObject().put("home", home).put("away", away))
             .put("coverage", JSONArray(listOf(JSONObject().put("metricId", "RALLY_WINNER").put("eligibleN", 3).put("observedN", home + away).put("verifiedN", home + away).put("status", "PARTIAL"))))
@@ -329,6 +331,7 @@ class RallyListFlowTest {
 
         // The report was below all along. The app goes back to it and reads it again, and one step back leaves the match.
         waitFor(text(R.string.report_review_video))
+        app.waitUntil(5_000) { requests.count { it == "GET /matches/server-1/report" } > readsBefore }
         assertEquals(readsBefore + 1, requests.count { it == "GET /matches/server-1/report" })
         back()
         app.onNodeWithText(text(R.string.home_new_match_body)).assertIsDisplayed()

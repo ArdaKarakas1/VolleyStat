@@ -3,6 +3,7 @@ package com.voleybolveveleybol.volleystat.data
 import com.voleybolveveleybol.volleystat.model.AnalysisJob
 import com.voleybolveveleybol.volleystat.model.Correction
 import com.voleybolveveleybol.volleystat.model.Coverage
+import com.voleybolveveleybol.volleystat.model.MatchPart
 import com.voleybolveveleybol.volleystat.model.MatchReport
 import com.voleybolveveleybol.volleystat.model.MatchRules
 import com.voleybolveveleybol.volleystat.model.PlayerLine
@@ -159,7 +160,7 @@ class ApiClient(
         // A list without its rule comes from a server before 0.6, which counts every match with the FIVB rule.
         return RallyList(
             json.getJSONArray("rallies").objects().map(::parseRally), json.getInt("rallyListVersion"),
-            json.getBoolean("listConfirmed"), json.getLong("videoDurationMs"), json.getJSONArray("sets").objects().map(::parseSet),
+            json.getBoolean("listConfirmed"), json.getLong("videoDurationMs"), json.getJSONArray("matches").objects().map(::parsePart),
             parseRules(json.getJSONObject("rules")),
         )
     }
@@ -191,10 +192,38 @@ class ApiClient(
 
     private fun parseSet(json: JSONObject) = SetScore(json.getInt("number"), json.getInt("home"), json.getInt("away"), json.getBoolean("complete"))
 
+    // A null stays null: an unknown number never becomes 0 on the way to the screen.
+    private fun parseValue(team: JSONObject, name: String) = team.getJSONObject(name).let { StatValue(if (it.isNull("value")) null else it.getInt("value"), it.getString("status")) }
+
+    private fun parseTeam(team: JSONObject) =
+        TeamStats(parseValue(team, "points"), parseValue(team, "attackPoints"), parseValue(team, "blockPoints"), parseValue(team, "aces"), parseValue(team, "opponentErrors"))
+
+    private fun parsePlayers(players: JSONArray) = players.objects().map {
+        PlayerLine(it.getString("side") == "HOME", it.getInt("jersey"), it.getInt("points"), it.getInt("attackPoints"), it.getInt("blockPoints"), it.getInt("aces"))
+    }
+
+    private fun JSONObject.intOrNull(name: String) = if (isNull(name)) null else getInt(name)
+
+    /** One part of a video. The rally list sends no statistics, so those stay null there. */
+    private fun parsePart(json: JSONObject): MatchPart {
+        val setsWon = json.getJSONObject("setsWon")
+        val teams = json.optJSONObject("teams")
+        val unattributed = json.optJSONObject("unattributed")
+        return MatchPart(
+            number = json.getInt("number"), kind = json.getString("kind"), winner = json.optStringOrNull("winner"),
+            setsWonHome = setsWon.getInt("home"), setsWonAway = setsWon.getInt("away"),
+            sets = json.getJSONArray("sets").objects().map(::parseSet),
+            firstRally = json.getInt("firstRally"), lastRally = json.getInt("lastRally"),
+            home = teams?.let { parseTeam(it.getJSONObject("home")) }, away = teams?.let { parseTeam(it.getJSONObject("away")) },
+            players = json.optJSONArray("players")?.let(::parsePlayers).orEmpty(),
+            unattributedHome = unattributed?.intOrNull("home"), unattributedAway = unattributed?.intOrNull("away"),
+        )
+    }
+
     private fun parseRally(json: JSONObject) = Rally(
         id = json.getString("id"), sequence = json.getInt("sequence"), startMs = json.getLong("startMs"), endMs = json.getLong("endMs"),
         fromAnalyzer = json.getString("origin") == "ANALYZER", status = json.getString("status"), winner = json.optStringOrNull("winner"),
-        scoreAfter = json.optJSONObject("scoreAfter")?.let { SetPoint(it.getInt("set"), it.getInt("home"), it.getInt("away")) },
+        scoreAfter = json.optJSONObject("scoreAfter")?.let { SetPoint(it.getInt("set"), it.getInt("home"), it.getInt("away"), it.getInt("match")) },
     )
 
     /** The report of a match, or null when the match has no analysis job. */
@@ -235,12 +264,8 @@ class ApiClient(
         val analyzer = json.getJSONObject("analyzer")
         val rallies = json.getJSONObject("rallies")
         val score = json.getJSONObject("score")
-        val setsWon = score.getJSONObject("setsWon")
         val teams = json.getJSONObject("teams")
         val unattributed = json.getJSONObject("unattributed")
-        // A null stays null: an unknown number never becomes 0 on the way to the screen.
-        fun value(team: JSONObject, name: String) = team.getJSONObject(name).let { StatValue(if (it.isNull("value")) null else it.getInt("value"), it.getString("status")) }
-        fun team(side: String) = teams.getJSONObject(side).let { TeamStats(value(it, "points"), value(it, "attackPoints"), value(it, "blockPoints"), value(it, "aces"), value(it, "opponentErrors")) }
         return MatchReport(
             jobId = json.getString("jobId"), analyzerId = analyzer.getString("id"), analyzerKind = analyzer.getString("kind"),
             mock = json.getBoolean("mock"), verificationStatus = json.getString("verificationStatus"),
@@ -248,30 +273,18 @@ class ApiClient(
             ralliesVerified = rallies.getInt("verified"), ralliesRejected = rallies.getInt("rejected"),
             ralliesUnresolved = rallies.getInt("unresolved"), ralliesOpen = rallies.getInt("open"),
             scoreStatus = score.getString("status"),
-            setsWonHome = if (setsWon.isNull("home")) null else setsWon.getInt("home"),
-            setsWonAway = if (setsWon.isNull("away")) null else setsWon.getInt("away"),
-            sets = score.getJSONArray("sets").objects().map(::parseSet),
-            scoreStoppedAtRally = if (score.isNull("stoppedAtRally")) null else score.getInt("stoppedAtRally"),
+            matches = score.getJSONArray("matches").objects().map(::parsePart),
+            scoreStoppedAtRally = score.intOrNull("stoppedAtRally"),
+            unplacedRallies = score.getInt("unplacedRallies"),
             ralliesMayBeMissing = json.optBoolean("ralliesMayBeMissing", false),
             listConfirmed = json.optJSONObject("rallyList")?.optBoolean("confirmed", false) ?: false,
             corrections = json.optJSONObject("rallyList")?.optInt("corrections", 0) ?: 0,
             ralliesUserCreated = rallies.optInt("userCreated", 0),
-            home = team("home"), away = team("away"),
-            players = json.getJSONArray("players").objects().map {
-                PlayerLine(it.getString("side") == "HOME", it.getInt("jersey"), it.getInt("points"), it.getInt("attackPoints"), it.getInt("blockPoints"), it.getInt("aces"))
-            },
-            unattributedHome = if (unattributed.isNull("home")) null else unattributed.getInt("home"),
-            unattributedAway = if (unattributed.isNull("away")) null else unattributed.getInt("away"),
+            home = parseTeam(teams.getJSONObject("home")), away = parseTeam(teams.getJSONObject("away")),
+            players = parsePlayers(json.getJSONArray("players")),
+            unattributedHome = unattributed.intOrNull("home"), unattributedAway = unattributed.intOrNull("away"),
             coverage = json.getJSONArray("coverage").objects().map { Coverage(it.getString("metricId"), it.getInt("eligibleN"), it.getInt("verifiedN")) },
-            // A server before 0.6 names its fixed rule without setsToWin; its deciding set tells it.
-            rules = json.optJSONObject("rules")?.let { rules ->
-                runCatching {
-                    MatchRules(
-                        if (rules.has("setsToWin")) rules.getInt("setsToWin") else (rules.getInt("decidingSetNumber") + 1) / 2,
-                        rules.getInt("setTarget"), rules.getInt("decidingSetTarget"),
-                    )
-                }.getOrNull()
-            },
+            rules = json.optJSONObject("rules")?.let { rules -> runCatching { parseRules(rules) }.getOrNull() },
         )
     }
 

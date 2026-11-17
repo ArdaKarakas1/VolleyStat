@@ -198,8 +198,8 @@ class MatchRulesScreenTest {
         show { MatchRulesScreen(MatchRules.FIVB, onSave = {}, onBack = {}) }
         compose.onNodeWithText(text(R.string.rule_intro)).assertIsDisplayed()
         assertTrue(shown(text(R.string.rule_later)))
-        // The server keeps counting after a team has won, and the screen says so where the user picks the sets.
-        assertTrue(shown(text(R.string.rule_no_match_end)))
+        // A match ends when a team has won its sets and play after it starts a new match: the screen says so where the user picks the sets.
+        assertTrue(shown(text(R.string.rule_match_end)))
         assertFalse(shown(text(R.string.rule_keeps_answers)))
         assertFalse(shown(text(R.string.rule_drops_confirmation)))
     }

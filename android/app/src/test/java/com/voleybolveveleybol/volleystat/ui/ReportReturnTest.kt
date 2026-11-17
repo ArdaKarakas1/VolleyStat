@@ -38,6 +38,8 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList
+import com.voleybolveveleybol.volleystat.model.SetScore
+import com.voleybolveveleybol.volleystat.partJson
 
 private const val HOME_TEAM = "Dönüş Ev"
 private const val AWAY_TEAM = "Dönüş Misafir"
@@ -69,8 +71,8 @@ class ReportReturnTest {
     private val report = JSONObject().put("jobId", "j1").put("analyzer", JSONObject().put("id", "demo").put("kind", "MOCK")).put("mock", true)
         .put("verificationStatus", "PARTIALLY_VERIFIED").put("ralliesMayBeMissing", true)
         .put("rallies", JSONObject().put("proposed", 2).put("verified", 1).put("rejected", 0).put("unresolved", 0).put("open", 1))
-        .put("score", JSONObject().put("status", "PARTIAL").put("setsWon", JSONObject().put("home", 0).put("away", 0))
-            .put("sets", JSONArray(listOf(JSONObject().put("number", 1).put("home", 1).put("away", 0).put("complete", false)))).put("stoppedAtRally", 2))
+        .put("score", JSONObject().put("status", "PARTIAL").put("stoppedAtRally", 2).put("unplacedRallies", 1)
+            .put("matches", JSONArray(listOf(partJson(listOf(SetScore(1, 1, 0, false)), kind = "STOPPED")))))
         .put("teams", JSONObject().put("home", team(1)).put("away", team(0)))
         .put("players", JSONArray()).put("unattributed", JSONObject().put("home", 1).put("away", 0))
         .put("coverage", JSONArray(listOf(JSONObject().put("metricId", "RALLY_WINNER").put("eligibleN", 2).put("observedN", 1).put("verifiedN", 1).put("status", "PARTIAL"))))
@@ -132,6 +134,8 @@ class ReportReturnTest {
         app.onNodeWithText(text(R.string.action_open_report)).performClick()
 
         waitFor(text(R.string.report_review_video))
+        // The report from before stands on the screen while the app reads it again, so the test waits for the read.
+        app.waitUntil(5_000) { requests.count { it == "GET /matches/server-1/report" } >= 2 }
         assertEquals("the report is read again when the user comes back to it", 2, requests.count { it == "GET /matches/server-1/report" })
         app.runOnUiThread { app.activity.onBackPressedDispatcher.onBackPressed() }
         app.waitForIdle()

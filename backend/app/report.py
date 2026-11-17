@@ -5,8 +5,13 @@ A number is reported only when it was counted. What was not measured is null wit
 and a count that can still grow is PARTIAL.
 
 The team points and the set score answer different questions. The points count every verified
-rally of the match. The set score needs the rallies in order, so it ends at the first rally
+rally of the video. The set score needs the rallies in order, so it ends at the first rally
 without a winner: whoever won that rally decides where every later point belongs.
+
+One video may hold several matches (ADR-0118). A match ends when a team wins the sets the rule
+asks for (FIVB 6.3.1), and the next rally opens a new match with the same rule. The count splits
+the video into parts: every finished match, then the sets after the last finished match, which
+finish no match. Each part carries its own statistics; the video keeps the total.
 
 An analyzer misses rallies, and nothing here can know how many. The user can add, split, merge
 and move rallies, and can then confirm that the list holds every rally of the video. Until that
@@ -34,9 +39,8 @@ class MatchRules:
     """The rule the user chose for a match. The server counts the sets of its rallies with it.
 
     The deciding set is set number 2 * sets_to_win - 1 and ends at `deciding_set_target`; every
-    other set ends at `set_target`, and every set needs a lead of WIN_BY points. No rule ends the
-    match: amateur and training matches often play a fixed number of sets, so rallies keep opening
-    sets, and a set after the deciding one is played to `set_target` again.
+    other set ends at `set_target`, and every set needs a lead of WIN_BY points. A match ends when
+    a team has won `sets_to_win` sets; the next rally opens a new match of the same rule.
     """
     sets_to_win: int = 3
     set_target: int = 25
@@ -84,55 +88,71 @@ def _coverage(metric: str, eligible: int, observed: int, verified: int) -> dict[
     return {"metricId": metric, "eligibleN": eligible, "observedN": observed, "verifiedN": verified, "status": status}
 
 
-def _score(numbered: Sequence[tuple[int, Mapping[str, Any]]], may_be_missing: bool, *, rules: MatchRules,
-           after: dict[int, dict[str, int]] | None = None) -> dict[str, Any]:
-    """Count sets over (sequence number, rally) pairs in match order with `rules`, up to the first rally without a winner.
+# The kinds of the parts of a video. MATCH: a team won the sets the rule asks for. AFTER_MATCH:
+# sets after the last finished match that finish no match. UNFINISHED: the same, in a video in
+# which no match finished. STOPPED: the part the count was in when it met a rally without a
+# winner; it may still become a match, and the count can not tell.
+MATCH, AFTER_MATCH, UNFINISHED, STOPPED = "MATCH", "AFTER_MATCH", "UNFINISHED", "STOPPED"
+PART_KINDS = (MATCH, AFTER_MATCH, UNFINISHED, STOPPED)
 
-    `after`, when given, receives the score of the running set after each counted rally.
+
+def _walk(numbered: Sequence[tuple[int, Mapping[str, Any]]], rules: MatchRules,
+          after: dict[int, dict[str, int]] | None = None) -> tuple[list[dict[str, Any]], int | None]:
+    """Split (sequence number, rally) pairs in match order into parts, up to the first rally without a winner.
+
+    Returns the parts, each with its rallies under "_rallies", and the sequence number of that
+    first rally (None when the count reached the end). `after`, when given, receives the score of
+    the running set after each counted rally.
     """
-    sets: list[dict[str, Any]] = []
-    won = {HOME: 0, AWAY: 0}
+    parts: list[dict[str, Any]] = []
+    part: dict[str, Any] | None = None
     current: dict[str, Any] | None = None
     stopped_at = None
     for sequence, rally in numbered:
         if rally["status"] != "VERIFIED":
             stopped_at = sequence
             break
+        if part is None:
+            part = {"number": len(parts) + 1, "kind": None, "winner": None, "setsWon": {"home": 0, "away": 0},
+                    "sets": [], "firstRally": sequence, "lastRally": sequence, "_rallies": []}
+            parts.append(part)
         if current is None:
-            current = {"number": len(sets) + 1, "home": 0, "away": 0, "complete": False}
-        current[rally["winner"].lower()] += 1
+            current = {"number": len(part["sets"]) + 1, "home": 0, "away": 0, "complete": False}
+            part["sets"].append(current)
+        winner = rally["winner"]
+        current[winner.lower()] += 1
+        part["lastRally"] = sequence
+        part["_rallies"].append(rally)
         if after is not None:
-            after[sequence] = {"set": current["number"], "home": current["home"], "away": current["away"]}
+            after[sequence] = {"match": part["number"], "set": current["number"], "home": current["home"], "away": current["away"]}
         target = rules.target(current["number"])
-        lead = abs(current["home"] - current["away"])
-        if max(current["home"], current["away"]) >= target and lead >= WIN_BY:
+        if max(current["home"], current["away"]) >= target and abs(current["home"] - current["away"]) >= WIN_BY:
             current["complete"] = True
-            won[rally["winner"]] += 1
-            sets.append(current)
             current = None
-    if current is not None:
-        sets.append(current)
-    if not any(rally["status"] == "VERIFIED" for _, rally in numbered):
-        return {"status": "UNKNOWN", "setsWon": {"home": None, "away": None}, "sets": [], "stoppedAtRally": stopped_at}
-    return {
-        "status": "MEASURED" if stopped_at is None and not may_be_missing else "PARTIAL",
-        # Only finished sets count, so under PARTIAL these are lower bounds.
-        "setsWon": {"home": won[HOME], "away": won[AWAY]},
-        "sets": sets,
-        "stoppedAtRally": stopped_at,
-    }
+            part["setsWon"][winner.lower()] += 1
+            if part["setsWon"][winner.lower()] == rules.sets_to_win:
+                part["kind"], part["winner"] = MATCH, winner
+                part = None
+    if part is not None:
+        finished = any(entry["kind"] == MATCH for entry in parts)
+        part["kind"] = STOPPED if stopped_at is not None else AFTER_MATCH if finished else UNFINISHED
+    return parts, stopped_at
+
+
+def _public(part: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in part.items() if not key.startswith("_")}
 
 
 def running_score(rallies: Sequence[Mapping[str, Any]], *, rules: MatchRules
                   ) -> tuple[list[dict[str, Any]], dict[int, dict[str, int]]]:
-    """The sets of a rally list counted with `rules`, and the score of the running set after each counted rally by sequence number.
+    """The parts of a rally list counted with `rules`, and the score of the running set after each counted rally by sequence number.
 
-    The same walk as the score of the report: a rejected rally has no entry, and neither has the
-    first rally without a winner nor any rally after it.
+    The same walk as the score of the report, without the statistics of each part: a rejected
+    rally has no entry, and neither has the first rally without a winner nor any rally after it.
     """
     after: dict[int, dict[str, int]] = {}
-    sets = _score(_numbered(rallies), True, rules=rules, after=after)["sets"]
-    return sets, after
+    parts, _ = _walk(_numbered(rallies), rules, after)
+    return [_public(part) for part in parts], after
 
 
 def _numbered(rallies: Sequence[Mapping[str, Any]]) -> list[tuple[int, Mapping[str, Any]]]:
@@ -140,6 +160,44 @@ def _numbered(rallies: Sequence[Mapping[str, Any]]) -> list[tuple[int, Mapping[s
     # It keeps its sequence number, which is what the client knows the rally by.
     return [(rally.get("sequence", position), rally) for position, rally in enumerate(rallies, start=1)
             if rally["status"] != "REJECTED"]
+
+
+def _statistics(verified: Sequence[Mapping[str, Any]], complete: bool
+                ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, int | None]]:
+    """Team values, player rows and unattributed points of verified rallies.
+
+    `complete` says that these rallies are every rally of what they describe; only then is a
+    count MEASURED. A player row needs a scoring action and a jersey the user chose.
+    """
+    players: dict[tuple[int, int], dict[str, Any]] = {}
+    for rally in verified:
+        field = SCORING_FIELDS.get(rally["terminal_action"])
+        if field is None or rally["scorer_jersey"] is None:
+            continue
+        key = (SIDES.index(rally["winner"]), rally["scorer_jersey"])
+        entry = players.setdefault(key, {
+            "side": rally["winner"], "jersey": rally["scorer_jersey"],
+            "points": 0, "attackPoints": 0, "blockPoints": 0, "aces": 0,
+        })
+        entry["points"] += 1
+        entry[field] += 1
+
+    teams: dict[str, Any] = {}
+    unattributed: dict[str, int | None] = {}
+    for side in SIDES:
+        points = [rally for rally in verified if rally["winner"] == side]
+        actions_complete = complete and all(rally["terminal_action"] in ACTION_FIELDS for rally in points)
+        if verified:
+            # One verified rally is enough for both sides: a side that won none of them has counted 0 points.
+            team = {"points": {"value": len(points), "status": "MEASURED" if complete else "PARTIAL"}}
+            unattributed[side.lower()] = len(points) - sum(entry["points"] for entry in players.values() if entry["side"] == side)
+        else:
+            team = {"points": dict(UNKNOWN_VALUE)}
+            unattributed[side.lower()] = None
+        for action, field in ACTION_FIELDS.items():
+            team[field] = _value(sum(rally["terminal_action"] == action for rally in points), actions_complete)
+        teams[side.lower()] = team
+    return teams, [players[key] for key in sorted(players)], unattributed
 
 
 def build_report(rallies: Sequence[Mapping[str, Any]], *, rules: MatchRules, rallies_may_be_missing: bool = False,
@@ -174,37 +232,16 @@ def build_report(rallies: Sequence[Mapping[str, Any]], *, rules: MatchRules, ral
     else:
         verification = "PARTIALLY_VERIFIED"
 
-    players: dict[tuple[int, int], dict[str, Any]] = {}
-    for rally in verified:
-        field = SCORING_FIELDS.get(rally["terminal_action"])
-        if field is None or rally["scorer_jersey"] is None:
-            continue
-        key = (SIDES.index(rally["winner"]), rally["scorer_jersey"])
-        entry = players.setdefault(key, {
-            "side": rally["winner"], "jersey": rally["scorer_jersey"],
-            "points": 0, "attackPoints": 0, "blockPoints": 0, "aces": 0,
-        })
-        entry["points"] += 1
-        entry[field] += 1
-
-    teams: dict[str, Any] = {}
-    unattributed: dict[str, int | None] = {}
-    for side in SIDES:
-        points = [rally for rally in verified if rally["winner"] == side]
-        actions_complete = winners_complete and all(rally["terminal_action"] in ACTION_FIELDS for rally in points)
-        if verified:
-            # One verified rally is enough for both sides: a side that won none of them has counted 0 points.
-            team = {"points": {"value": len(points), "status": "MEASURED" if winners_complete else "PARTIAL"}}
-            unattributed[side.lower()] = len(points) - sum(entry["points"] for entry in players.values() if entry["side"] == side)
-        else:
-            team = {"points": dict(UNKNOWN_VALUE)}
-            unattributed[side.lower()] = None
-        for action, field in ACTION_FIELDS.items():
-            team[field] = _value(sum(rally["terminal_action"] == action for rally in points), actions_complete)
-        teams[side.lower()] = team
+    teams, players, unattributed = _statistics(verified, winners_complete)
+    parts, stopped_at = _walk(numbered, rules)
+    for part in parts:
+        # A part is complete when the list is and the count did not stop inside it.
+        part_teams, part_players, part_unattributed = _statistics(
+            part.pop("_rallies"), not rallies_may_be_missing and part["kind"] != STOPPED)
+        part.update(teams=part_teams, players=part_players, unattributed=part_unattributed)
 
     with_action = [rally for rally in verified if rally["terminal_action"] in ACTION_FIELDS]
-    with_scorer = sum(entry["points"] for entry in players.values())
+    with_scorer = sum(entry["points"] for entry in players)
     # A rally that is known to have ended on an opponent error has no scorer to find.
     scorer_eligible = len(eligible) - sum(rally["terminal_action"] == "OPPONENT_ERROR" for rally in verified)
     # A model proposal that nobody reviewed yet is observed but not verified.
@@ -221,9 +258,16 @@ def build_report(rallies: Sequence[Mapping[str, Any]], *, rules: MatchRules, ral
         },
         "ralliesMayBeMissing": rallies_may_be_missing,
         "rules": rules.payload(),
-        "score": _score(numbered, rallies_may_be_missing, rules=rules),
+        "score": {
+            "status": "UNKNOWN" if not verified else "MEASURED" if stopped_at is None and not rallies_may_be_missing else "PARTIAL",
+            "matches": parts,
+            "stoppedAtRally": stopped_at,
+            # The rallies from the first one without a winner to the end: no part holds them,
+            # while the video totals still count the verified ones among them.
+            "unplacedRallies": 0 if stopped_at is None else sum(sequence >= stopped_at for sequence, _ in numbered),
+        },
         "teams": teams,
-        "players": [players[key] for key in sorted(players)],
+        "players": players,
         "unattributed": unattributed,
         "coverage": [
             _coverage("RALLY_WINNER", len(eligible), len(verified) + proposed_only, len(verified)),

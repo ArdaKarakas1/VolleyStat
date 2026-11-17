@@ -12,7 +12,7 @@ import pytest
 
 from app import report as report_module
 from app.analyzers.base import AnalyzerInfo, MODEL, RallyProposal
-from tests.helpers import ScriptedAnalyzer, card_of, decide, ready_video, request_job, reviewed_job, run_pending, serve
+from tests.helpers import ScriptedAnalyzer, card_of, decide, one_match, ready_video, request_job, reviewed_job, run_pending, serve, without_statistics
 from tests.test_api import create_match
 
 # The tests of the pure function count with the FIVB rule unless they name another one.
@@ -40,8 +40,12 @@ def partial(value):
     return {"value": value, "status": "PARTIAL"}
 
 
-def score(rallies, rules=FIVB):
+def full_score(rallies, rules=FIVB):
     return report_module.build_report(rallies, rules=rules)["score"]
+
+
+def score(rallies, rules=FIVB):
+    return one_match(full_score(rallies, rules))
 
 
 def set_line(number, home, away, complete=True):
@@ -71,7 +75,7 @@ def test_unreviewed_rallies_give_a_draft_with_unknown_values_and_no_zero():
     assert report["verificationStatus"] == "DRAFT"
     assert report["rallies"] == {"proposed": 3, "total": 3, "userCreated": 0, "verified": 0, "rejected": 0, "unresolved": 0, "open": 3}
     # The score walk stops at the first rally: it has no winner yet.
-    assert report["score"] == {"status": "UNKNOWN", "setsWon": {"home": None, "away": None}, "sets": [], "stoppedAtRally": 1}
+    assert report["score"] == {"status": "UNKNOWN", "matches": [], "stoppedAtRally": 1, "unplacedRallies": 3}
     for side in ("home", "away"):
         assert report["teams"][side] == {field: UNKNOWN_VALUE for field in TEAM_FIELDS}
     assert report["players"] == []
@@ -104,7 +108,7 @@ def test_a_model_proposal_alone_scores_nothing():
     proposed = {**OPEN, "proposed_winner": HOME}
     report = build_report([proposed, proposed])
     assert report["verificationStatus"] == "DRAFT"
-    assert report["score"]["status"] == "UNKNOWN" and report["score"]["sets"] == []
+    assert report["score"]["status"] == "UNKNOWN" and report["score"]["matches"] == []
     assert report["teams"]["home"]["points"] == UNKNOWN_VALUE
     # The proposal is visible as "observed", never as "verified".
     assert coverage([proposed, proposed], "RALLY_WINNER") == {
@@ -163,32 +167,38 @@ def test_the_fifth_set_also_needs_a_two_point_lead():
     assert result["setsWon"] == {"home": 2, "away": 3}
 
 
-def test_three_won_sets_do_not_end_the_match_and_further_rallies_open_the_next_set():
-    # Training matches often play a fixed number of sets, so a 3-0 lead closes nothing.
-    result = score([won(AWAY)] * 75 + [won(HOME)] * 4)
-    assert result == {"status": "MEASURED", "setsWon": {"home": 0, "away": 3}, "stoppedAtRally": None,
-                      "sets": [set_line(1, 0, 25), set_line(2, 0, 25), set_line(3, 0, 25), set_line(4, 4, 0, complete=False)]}
+def test_three_won_sets_end_the_match_and_further_rallies_open_the_next_match():
+    # FIVB 6.3.1: the team that wins three sets wins the match. Play after it starts a new match.
+    result = full_score([won(AWAY)] * 75 + [won(HOME)] * 4)
+    assert [(match["kind"], match["winner"], match["setsWon"]) for match in result["matches"]] == [
+        ("MATCH", AWAY, {"home": 0, "away": 3}), ("AFTER_MATCH", None, {"home": 0, "away": 0})]
+    assert result["matches"][0]["sets"] == [set_line(1, 0, 25), set_line(2, 0, 25), set_line(3, 0, 25)]
+    assert result["matches"][1]["sets"] == [set_line(1, 4, 0, complete=False)]
+    assert (result["status"], result["stoppedAtRally"], result["unplacedRallies"]) == ("MEASURED", None, 0)
 
 
-def test_a_fourth_set_after_three_to_nil_is_scored_and_agrees_with_the_team_points():
+def test_each_match_has_its_own_points_and_the_video_keeps_the_total():
     report = build_report([won(HOME)] * 75 + [won(AWAY)] * 25)
-    assert report["score"] == {"status": "MEASURED", "setsWon": {"home": 3, "away": 1}, "stoppedAtRally": None,
-                               "sets": [set_line(1, 25, 0), set_line(2, 25, 0), set_line(3, 25, 0), set_line(4, 0, 25)]}
-    for side in ("home", "away"):
-        assert report["teams"][side]["points"] == measured(sum(entry[side] for entry in report["score"]["sets"]))
+    first, after = report["score"]["matches"]
+    assert first["sets"] == [set_line(1, 25, 0), set_line(2, 25, 0), set_line(3, 25, 0)]
+    assert after["kind"] == "AFTER_MATCH" and after["sets"] == [set_line(1, 0, 25)]
+    for match in (first, after):
+        for side in ("home", "away"):
+            assert match["teams"][side]["points"] == measured(sum(entry[side] for entry in match["sets"]))
+    assert report["teams"]["home"]["points"] == measured(75) and report["teams"]["away"]["points"] == measured(25)
 
 
-def test_a_set_after_the_fifth_is_played_to_25_again():
+def test_the_sixth_set_is_the_first_set_of_the_next_match():
     five_sets = [won(HOME)] * 25 + [won(AWAY)] * 25 + [won(HOME)] * 25 + [won(AWAY)] * 25 + [won(HOME)] * 15
     assert score(five_sets)["setsWon"] == {"home": 3, "away": 2}
-    # 15 points close the fifth set only.
-    assert score(five_sets + [won(AWAY)] * 15)["sets"][5] == set_line(6, 0, 15, complete=False)
-    sixth = score(five_sets + [won(AWAY)] * 25)
-    assert sixth["sets"][5] == set_line(6, 0, 25) and sixth["setsWon"] == {"home": 3, "away": 3}
-    # A sixth set tied at 24 also needs the two-point lead.
+    # 15 points close only the deciding set of a match: the next match starts at set 1, played to 25.
+    result = full_score(five_sets + [won(AWAY)] * 15)
+    assert result["matches"][1]["sets"] == [set_line(1, 0, 15, complete=False)]
+    result = full_score(five_sets + [won(AWAY)] * 25)
+    assert result["matches"][1]["sets"] == [set_line(1, 0, 25)] and result["matches"][1]["setsWon"] == {"home": 0, "away": 1}
     tied = five_sets + [won(HOME)] * 24 + [won(AWAY)] * 24 + [won(AWAY)]
-    assert score(tied)["sets"][5] == set_line(6, 24, 25, complete=False)
-    assert score(tied + [won(AWAY)])["sets"][5] == set_line(6, 24, 26)
+    assert full_score(tied)["matches"][1]["sets"] == [set_line(1, 24, 25, complete=False)]
+    assert full_score(tied + [won(AWAY)])["matches"][1]["sets"] == [set_line(1, 24, 26)]
 
 
 @pytest.mark.parametrize("undecided", [OPEN, UNSURE])
@@ -211,8 +221,8 @@ def test_one_unsure_answer_never_produces_a_set_line_beyond_the_rules():
     rallies = one_set * 3
     rallies[2] = UNSURE
     report = build_report(rallies)
-    assert report["score"] == {"status": "PARTIAL", "setsWon": {"home": 0, "away": 0},
-                               "sets": [set_line(1, 2, 0, complete=False)], "stoppedAtRally": 3}
+    assert one_match(report["score"]) == {"status": "PARTIAL", "setsWon": {"home": 0, "away": 0},
+                                          "sets": [set_line(1, 2, 0, complete=False)], "stoppedAtRally": 3}
     # The team totals still count every verified rally of the match.
     assert report["teams"]["home"]["points"] == partial(74) and report["teams"]["away"]["points"] == partial(60)
 
@@ -228,6 +238,8 @@ def test_an_undecided_rally_right_after_a_finished_set_makes_the_score_partial()
     # The second set has no counted point, so it gets no line.
     assert result == {"status": "PARTIAL", "setsWon": {"home": 1, "away": 0},
                       "sets": [{"number": 1, "home": 25, "away": 0, "complete": True}], "stoppedAtRally": 26}
+    # The match may still be won after the stop, so its part is stopped and not unfinished.
+    assert full_score([won(HOME)] * 25 + [OPEN])["matches"][0]["kind"] == "STOPPED"
 
 
 def test_review_in_progress_shows_the_counted_points_of_the_open_set():
@@ -324,32 +336,32 @@ def test_the_deciding_set_needs_a_two_point_lead_under_every_rule(rules):
 
 
 @pytest.mark.parametrize("rules", [MatchRules(2, 21, 15), FIVB, MatchRules(2, 15, 21)], ids=["2-21-15", "fivb", "2-15-21"])
-def test_a_set_after_the_deciding_set_is_played_to_the_set_target_again(rules):
+def test_the_deciding_set_ends_the_match_and_the_next_set_opens_a_new_one(rules):
     played = []
     for number in range(1, rules.deciding_set_number):
         played += [won(HOME if number % 2 else AWAY)] * rules.set_target
     played += [won(HOME)] * rules.deciding_set_target
-    result = score(played, rules)
-    assert result["sets"][-1] == set_line(rules.deciding_set_number, rules.deciding_set_target, 0)
-    assert result["setsWon"] == {"home": rules.sets_to_win, "away": rules.sets_to_win - 1}
-    after = rules.deciding_set_number + 1
+    result = full_score(played, rules)
+    assert len(result["matches"]) == 1 and result["matches"][0]["kind"] == "MATCH" and result["matches"][0]["winner"] == HOME
+    assert result["matches"][0]["sets"][-1] == set_line(rules.deciding_set_number, rules.deciding_set_target, 0)
+    assert result["matches"][0]["setsWon"] == {"home": rules.sets_to_win, "away": rules.sets_to_win - 1}
     shorter = min(rules.set_target, rules.deciding_set_target)
     if shorter < rules.set_target:
-        # The deciding target closes the deciding set only.
-        assert score(played + [won(AWAY)] * shorter, rules)["sets"][-1] == set_line(after, 0, shorter, complete=False)
-    later = score(played + [won(AWAY)] * rules.set_target, rules)
-    assert later["sets"][-1] == set_line(after, 0, rules.set_target)
-    assert later["setsWon"] == {"home": rules.sets_to_win, "away": rules.sets_to_win}
+        # The deciding target closes the deciding set only: the next match opens at set 1.
+        later = full_score(played + [won(AWAY)] * shorter, rules)
+        assert later["matches"][1]["sets"] == [set_line(1, 0, shorter, complete=False)]
+    later = full_score(played + [won(AWAY)] * rules.set_target, rules)
+    assert later["matches"][1]["sets"] == [set_line(1, 0, rules.set_target)]
+    assert later["matches"][1]["kind"] == "AFTER_MATCH" and later["matches"][1]["setsWon"] == {"home": 0, "away": 1}
 
 
-def test_won_sets_never_end_the_match_under_any_rule():
-    # Best of three at 2-0, and the teams play on: the third set is still the deciding set.
+def test_a_best_of_three_ends_at_two_sets_and_the_third_set_starts_the_next_match():
     rallies = sets_of(((AWAY, 20), (HOME, 25)), ((AWAY, 18), (HOME, 25)), ((HOME, 21), (AWAY, 25)))
-    assert score(rallies, BEST_OF_THREE) == {
-        "status": "MEASURED", "setsWon": {"home": 3, "away": 1}, "stoppedAtRally": None,
-        "sets": [set_line(1, 25, 20), set_line(2, 25, 18), set_line(3, 15, 0), set_line(4, 6, 25)]}
-    # With every set to 25 the same rallies give the sets the teams played.
-    assert score(rallies, MatchRules(2, 25, 25))["sets"] == [set_line(1, 25, 20), set_line(2, 25, 18), set_line(3, 21, 25)]
+    result = full_score(rallies, BEST_OF_THREE)
+    assert [(match["kind"], match["winner"], match["sets"]) for match in result["matches"]] == [
+        ("MATCH", HOME, [set_line(1, 25, 20), set_line(2, 25, 18)]), ("AFTER_MATCH", None, [set_line(1, 21, 25)])]
+    # With every set to 25 the same rallies give the same sets.
+    assert full_score(rallies, MatchRules(2, 25, 25))["matches"] == result["matches"]
 
 
 def _set_ends_by_the_rule(entry, target):
@@ -358,41 +370,219 @@ def _set_ends_by_the_rule(entry, target):
 
 
 @pytest.mark.parametrize("rules", OFFERED, ids=lambda r: f"{r.sets_to_win}-{r.set_target}-{r.deciding_set_target}")
-def test_every_offered_rule_closes_each_set_exactly_when_the_rule_says(rules):
+def test_every_offered_rule_closes_each_set_and_each_match_exactly_when_the_rule_says(rules):
     draw = random.Random(f"{rules.sets_to_win}-{rules.set_target}-{rules.deciding_set_target}")
-    rallies = [NOT_A_RALLY if draw.random() < 0.05 else won(draw.choice((HOME, AWAY))) for _ in range(400)]
-    result = score(rallies, rules)
-    sets = result["sets"]
-    assert result["status"] == "MEASURED" and len(sets) >= 3
-    for position, entry in enumerate(sets):
-        target = rules.deciding_set_target if entry["number"] == rules.deciding_set_number else rules.set_target
-        assert entry["number"] == position + 1
-        if entry["complete"]:
-            assert _set_ends_by_the_rule(entry, target), entry
+    rallies = [NOT_A_RALLY if draw.random() < 0.05 else won(draw.choice((HOME, AWAY))) for _ in range(800)]
+    result = full_score(rallies, rules)
+    matches = result["matches"]
+    assert result["status"] == "MEASURED" and len(matches) >= 2
+    for index, match in enumerate(matches):
+        sets = match["sets"]
+        last = index == len(matches) - 1
+        assert match["number"] == index + 1
+        for position, entry in enumerate(sets):
+            target = rules.deciding_set_target if entry["number"] == rules.deciding_set_number else rules.set_target
+            assert entry["number"] == position + 1
+            if entry["complete"]:
+                assert _set_ends_by_the_rule(entry, target), entry
+            else:
+                # Only the last set of the last part may be open, and an open set has not met the rule.
+                assert last and position == len(sets) - 1 and not _set_ends_by_the_rule(entry, target), entry
+        for side in ("home", "away"):
+            assert match["setsWon"][side] == sum(entry["complete"] and entry[side] > entry["away" if side == "home" else "home"]
+                                                  for entry in sets)
+        # A match ends on the set that gives one team the sets it needs, and on no other.
+        if match["kind"] == "MATCH":
+            assert max(match["setsWon"].values()) == rules.sets_to_win and sets[-1]["complete"]
+            assert match["winner"] == (HOME if match["setsWon"]["home"] == rules.sets_to_win else AWAY)
         else:
-            # Only the last set may be open, and an open set has not met the rule.
-            assert position == len(sets) - 1 and not _set_ends_by_the_rule(entry, target), entry
+            assert last and match["kind"] == "AFTER_MATCH" and max(match["setsWon"].values()) < rules.sets_to_win
     for side in ("home", "away"):
-        assert result["setsWon"][side] == sum(entry["complete"] and entry[side] > entry["away" if side == "home" else "home"]
-                                               for entry in sets)
-        assert sum(entry[side] for entry in sets) == sum(rally["winner"] == side.upper() for rally in rallies)
+        assert sum(entry[side] for match in matches for entry in match["sets"]) == sum(
+            rally["winner"] == side.upper() for rally in rallies)
 
 
 def test_the_running_score_and_the_report_count_with_the_same_rule():
     rules = MatchRules(2, 21, 15)
     rallies = [{**rally, "sequence": position} for position, rally in
                enumerate(sets_of(((AWAY, 19), (HOME, 21)), ((HOME, 10), (AWAY, 21)), ((HOME, 9),)), start=1)]
-    sets, after = report_module.running_score(rallies, rules=rules)
-    assert sets == report_module.build_report(rallies, rules=rules, rallies_may_be_missing=True)["score"]["sets"]
-    assert sets == [set_line(1, 21, 19), set_line(2, 10, 21), set_line(3, 9, 0, complete=False)]
-    assert after[40] == {"set": 1, "home": 21, "away": 19} and after[41] == {"set": 2, "home": 1, "away": 0}
-    assert after[len(rallies)] == {"set": 3, "home": 9, "away": 0}
+    matches, after = report_module.running_score(rallies, rules=rules)
+    reported = report_module.build_report(rallies, rules=rules, rallies_may_be_missing=True)["score"]["matches"]
+    assert matches == without_statistics(reported)
+    assert matches[0]["sets"] == [set_line(1, 21, 19), set_line(2, 10, 21), set_line(3, 9, 0, complete=False)]
+    assert after[40] == {"match": 1, "set": 1, "home": 21, "away": 19} and after[41] == {"match": 1, "set": 2, "home": 1, "away": 0}
+    assert after[len(rallies)] == {"match": 1, "set": 3, "home": 9, "away": 0}
+
+
+@pytest.mark.parametrize("rules", OFFERED, ids=lambda r: f"{r.sets_to_win}-{r.set_target}-{r.deciding_set_target}")
+def test_the_running_score_and_the_report_split_several_matches_alike(rules):
+    wins = rules.sets_to_win
+    rallies = [{**rally, "sequence": position} for position, rally in enumerate(
+        match_of(wins, wins - 1, rules=rules) + [NOT_A_RALLY] + match_of(0, wins, rules=rules) + [won(HOME)] * 3, start=1)]
+    matches, after = report_module.running_score(rallies, rules=rules)
+    reported = report_module.build_report(rallies, rules=rules)["score"]["matches"]
+    assert matches == without_statistics(reported)
+    assert [(match["number"], match["kind"]) for match in matches] == [(1, "MATCH"), (2, "MATCH"), (3, "AFTER_MATCH")]
+    # The first rally of each part opens set 1 of its own match.
+    for match in matches:
+        first = match["firstRally"]
+        assert after[first]["match"] == match["number"] and after[first]["set"] == 1
+        assert max(after[first]["home"], after[first]["away"]) == 1
+    # Every counted rally carries the number of the part whose rallies hold it.
+    by_number = {match["number"]: match for match in matches}
+    counted = [rally["sequence"] for rally in rallies if rally["status"] == "VERIFIED"]
+    assert sorted(after) == counted
+    for sequence, point in after.items():
+        assert by_number[point["match"]]["firstRally"] <= sequence <= by_number[point["match"]]["lastRally"]
+    assert after[counted[-1]] == {"match": 3, "set": 1, "home": 3, "away": 0}
+
+
+def test_a_stop_on_the_first_rally_of_a_set_inside_a_later_match_stops_that_match():
+    # Match 1 ends 3-0. Match 2 stands at 1-2 in sets when the count meets an unsure rally,
+    # and match 2 may still end 3-2, so its part is stopped and its statistics are not measured.
+    rallies = match_of(3, 0) + [won(AWAY)] * 25 + [won(HOME)] * 25 + [won(AWAY)] * 25 + [UNSURE] + [won(HOME)] * 5
+    report = build_report(rallies)
+    assert parts(report["score"]) == [("MATCH", HOME, (3, 0)), ("STOPPED", None, (1, 2))]
+    assert (report["score"]["stoppedAtRally"], report["score"]["unplacedRallies"]) == (151, 6)
+    match, stopped = report["score"]["matches"]
+    assert match["teams"]["home"]["points"] == measured(75)
+    assert stopped["teams"]["home"]["points"] == partial(25) and stopped["teams"]["away"]["points"] == partial(50)
+    # A count that stops on the first rally of a match without a finished one stops it as well.
+    assert parts(full_score([won(HOME)] * 25 + [won(AWAY)] * 25 + [OPEN])) == [("STOPPED", None, (1, 1))]
 
 
 def test_a_rule_touches_only_the_set_score_and_the_rules():
     rallies = sets_of(((AWAY, 15), (HOME, 21)), ((HOME, 19), (AWAY, 21))) + [won(HOME, "ACE", 7), UNSURE, NOT_A_RALLY]
     fivb, other = (report_module.build_report(rallies, rules=rules) for rules in (FIVB, TO_21))
     assert {key for key in fivb if fivb[key] != other[key]} == {"rules", "score"}
+
+
+# --- several matches in one video -------------------------------------------------------------
+
+def match_of(home_sets, away_sets, *, winner_last=None, rules=FIVB):
+    """Rallies of one match that ends home_sets to away_sets, every set won to the rule's target.
+
+    The sets alternate while both sides still need sets; the side named in `winner_last` (by
+    default the one with more sets) wins the last set.
+    """
+    order = []
+    home, away = home_sets, away_sets
+    last = winner_last or (HOME if home_sets > away_sets else AWAY)
+    if last == HOME:
+        home -= 1
+    else:
+        away -= 1
+    while home or away:
+        if home >= away and home:
+            order.append(HOME); home -= 1
+        else:
+            order.append(AWAY); away -= 1
+    order.append(last)
+    rallies = []
+    for number, side in enumerate(order, start=1):
+        rallies += [won(side)] * rules.target(number)
+    return rallies
+
+
+def parts(result):
+    return [(match["kind"], match["winner"], (match["setsWon"]["home"], match["setsWon"]["away"])) for match in result["matches"]]
+
+
+def test_two_matches_in_one_video_are_two_matches():
+    # The owner's example: 3-2, then five more sets that end 2-3.
+    result = full_score(match_of(3, 2) + match_of(2, 3))
+    assert parts(result) == [("MATCH", HOME, (3, 2)), ("MATCH", AWAY, (2, 3))]
+    assert [match["number"] for match in result["matches"]] == [1, 2]
+    # Each match counts its own sets from 1, and its fifth set is played to 15.
+    assert [entry["number"] for entry in result["matches"][1]["sets"]] == [1, 2, 3, 4, 5]
+    assert result["matches"][1]["sets"][-1] == set_line(5, 0, 15)
+
+
+def test_sets_after_the_last_finished_match_are_the_after_match_part():
+    # 3-2, then two sets that end 1-1.
+    result = full_score(match_of(3, 2) + [won(HOME)] * 25 + [won(AWAY)] * 25)
+    assert parts(result) == [("MATCH", HOME, (3, 2)), ("AFTER_MATCH", None, (1, 1))]
+    # 3-2, 3-1, then one set won 0-1: two matches and an after-match part.
+    result = full_score(match_of(3, 2) + match_of(3, 1) + [won(AWAY)] * 25)
+    assert parts(result) == [("MATCH", HOME, (3, 2)), ("MATCH", HOME, (3, 1)), ("AFTER_MATCH", None, (0, 1))]
+
+
+def test_a_video_in_which_no_match_finished_holds_an_unfinished_match():
+    result = full_score([won(HOME)] * 25 + [won(AWAY)] * 25 + [won(HOME)] * 25 + [won(AWAY)] * 3)
+    assert parts(result) == [("UNFINISHED", None, (2, 1))]
+    assert result["matches"][0]["sets"][-1] == set_line(4, 0, 3, complete=False)
+
+
+def test_a_match_that_ends_on_the_last_rally_leaves_no_empty_part():
+    result = full_score(match_of(3, 1))
+    assert parts(result) == [("MATCH", HOME, (3, 1))]
+    assert (result["matches"][0]["firstRally"], result["matches"][0]["lastRally"]) == (1, 100)
+
+
+def test_each_part_names_its_first_and_last_rally_by_sequence_number():
+    rallies = match_of(3, 0) + [NOT_A_RALLY] + [won(AWAY)] * 3
+    result = full_score(rallies)
+    assert [(match["firstRally"], match["lastRally"]) for match in result["matches"]] == [(1, 75), (77, 79)]
+
+
+def test_a_part_cut_by_the_first_undecided_rally_is_stopped_and_not_an_after_match_part():
+    # Match 2 may still finish after rally 101: the count does not know.
+    rallies = match_of(3, 1) + [won(AWAY)] * 10 + [UNSURE] + [won(AWAY)] * 50
+    result = full_score(rallies)
+    assert parts(result) == [("MATCH", HOME, (3, 1)), ("STOPPED", None, (0, 0))]
+    assert (result["status"], result["stoppedAtRally"], result["unplacedRallies"]) == ("PARTIAL", 111, 51)
+    # Without any finished match the cut part is stopped too.
+    assert parts(full_score([won(HOME)] * 10 + [OPEN]))[0][0] == "STOPPED"
+
+
+def test_a_count_that_stops_on_the_first_rally_of_a_new_match_opens_no_part():
+    result = full_score(match_of(3, 0) + [OPEN] + [won(HOME)] * 5)
+    assert parts(result) == [("MATCH", HOME, (3, 0))]
+    assert (result["status"], result["stoppedAtRally"], result["unplacedRallies"]) == ("PARTIAL", 76, 6)
+
+
+def test_each_part_carries_its_own_team_and_player_statistics():
+    # Sets 25-0, 0-25, 25-0 and 25-0 end the match 3-1; four rallies follow it.
+    rallies = ([won(HOME, "ATTACK", 7)] * 25 + [won(AWAY, "BLOCK", 3)] * 25 + [won(HOME, "ACE", 7)] * 25
+               + [won(HOME, "OPPONENT_ERROR")] * 25 + [won(AWAY, "ATTACK", 9)] * 4)
+    report = build_report(rallies)
+    match, after = report["score"]["matches"]
+    assert (match["kind"], match["setsWon"], after["kind"]) == ("MATCH", {"home": 3, "away": 1}, "AFTER_MATCH")
+    assert match["teams"]["home"] == {"points": measured(75), "attackPoints": measured(25), "blockPoints": measured(0),
+                                      "aces": measured(25), "opponentErrors": measured(25)}
+    assert match["players"] == [{"side": "HOME", "jersey": 7, "points": 50, "attackPoints": 25, "blockPoints": 0, "aces": 25},
+                                {"side": "AWAY", "jersey": 3, "points": 25, "attackPoints": 0, "blockPoints": 25, "aces": 0}]
+    assert match["unattributed"] == {"home": 25, "away": 0}
+    assert after["teams"]["away"]["points"] == measured(4) and after["teams"]["home"]["points"] == measured(0)
+    assert after["players"] == [{"side": "AWAY", "jersey": 9, "points": 4, "attackPoints": 4, "blockPoints": 0, "aces": 0}]
+    # The video keeps the total of every part.
+    assert report["teams"]["home"]["points"] == measured(75) and report["teams"]["away"]["points"] == measured(29)
+    assert [entry["points"] for entry in report["players"]] == [50, 25, 4]
+
+
+def test_a_stopped_part_and_the_rallies_after_the_stop_are_never_measured():
+    rallies = [won(HOME, "ATTACK", 7)] * 75 + [won(AWAY)] * 3 + [UNSURE] + [won(AWAY, "ATTACK", 9)] * 2
+    report = build_report(rallies)
+    match, stopped = report["score"]["matches"]
+    assert match["teams"]["home"]["points"] == measured(75)
+    assert stopped["kind"] == "STOPPED" and stopped["teams"]["away"]["points"] == partial(3)
+    # Rally 79 and the two after it belong to no part; the video total still counts the verified ones.
+    assert report["score"]["unplacedRallies"] == 3
+    assert report["teams"]["away"]["points"] == partial(5)
+
+
+def test_the_parts_and_the_video_add_up_on_random_videos():
+    draw = random.Random("parts")
+    for rules in OFFERED:
+        rallies = [NOT_A_RALLY if draw.random() < 0.03 else won(draw.choice((HOME, AWAY)), draw.choice(("ATTACK", "BLOCK", "ACE", None)), draw.choice((1, 7, None)))
+                   for _ in range(300)]
+        report = report_module.build_report(rallies, rules=rules)
+        matches = report["score"]["matches"]
+        assert all(match["kind"] == "MATCH" for match in matches[:-1])
+        for side in ("home", "away"):
+            assert sum(match["teams"][side]["points"]["value"] for match in matches) == report["teams"][side]["points"]["value"]
+            assert sum(match["unattributed"][side] for match in matches) == report["unattributed"][side]
+        assert sum(entry["points"] for match in matches for entry in match["players"]) == sum(entry["points"] for entry in report["players"])
 
 
 # --- rejected rallies ------------------------------------------------------------------------
@@ -402,19 +592,24 @@ def test_a_rejected_rally_takes_part_in_nothing():
     report = build_report(rallies)
     assert report["rallies"] == {"proposed": 26, "total": 26, "userCreated": 0, "verified": 25, "rejected": 1, "unresolved": 0, "open": 0}
     # It is not an undecided rally either: the set closes across it.
-    assert report["score"] == {"status": "MEASURED", "setsWon": {"home": 1, "away": 0},
-                               "sets": [{"number": 1, "home": 25, "away": 0, "complete": True}], "stoppedAtRally": None}
+    assert one_match(report["score"]) == {"status": "MEASURED", "setsWon": {"home": 1, "away": 0},
+                                          "sets": [{"number": 1, "home": 25, "away": 0, "complete": True}], "stoppedAtRally": None}
     assert report["verificationStatus"] == "VERIFIED"
     assert report["teams"]["home"]["points"] == measured(25)
     assert [entry["eligibleN"] for entry in report["coverage"]] == [25, 25, 25]
-    assert report == build_report([rally for rally in rallies if rally is not NOT_A_RALLY]) | {"rallies": report["rallies"]}
+    without = build_report([rally for rally in rallies if rally is not NOT_A_RALLY])
+    # The parts name their rallies by sequence number, and the rejected rally keeps its number.
+    assert (report["score"]["matches"][0]["firstRally"], report["score"]["matches"][0]["lastRally"]) == (1, 26)
+    for part in report["score"]["matches"] + without["score"]["matches"]:
+        part.pop("lastRally")
+    assert report == without | {"rallies": report["rallies"]}
 
 
 def test_only_rejected_rallies_leave_every_value_unknown():
     report = build_report([NOT_A_RALLY, NOT_A_RALLY])
     # No open card and no unresolved rally: the review is finished, and it found no rally.
     assert report["verificationStatus"] == "VERIFIED"
-    assert report["score"] == {"status": "UNKNOWN", "setsWon": {"home": None, "away": None}, "sets": [], "stoppedAtRally": None}
+    assert report["score"] == {"status": "UNKNOWN", "matches": [], "stoppedAtRally": None, "unplacedRallies": 0}
     assert report["teams"]["home"] == {field: UNKNOWN_VALUE for field in TEAM_FIELDS}
     assert report["unattributed"] == {"home": None, "away": None}
     assert [(entry["eligibleN"], entry["status"]) for entry in report["coverage"]] == [(0, "UNKNOWN")] * 3
@@ -502,7 +697,8 @@ SCENARIOS = {
 def test_unknown_is_always_null_and_a_number_is_always_counted(name):
     report = build_report(SCENARIOS[name])
     found = list(value_objects(report))
-    assert len(found) == 10  # five fields for each side
+    # Five fields for each side, for the video and for each part of it.
+    assert len(found) == 10 * (1 + len(report["score"]["matches"]))
     for item in found:
         if item["status"] == "UNKNOWN":
             assert item["value"] is None
@@ -519,9 +715,9 @@ def test_unknown_is_always_null_and_a_number_is_always_counted(name):
             # A lower bound of a kind of point is only shown when something was counted for it.
             assert team[field]["status"] != "PARTIAL" or team[field]["value"] > 0
     if report["score"]["status"] == "UNKNOWN":
-        assert report["score"]["setsWon"] == {"home": None, "away": None} and report["score"]["sets"] == []
+        assert report["score"]["matches"] == []
     else:
-        assert all(isinstance(count, int) for count in report["score"]["setsWon"].values())
+        assert all(isinstance(count, int) for match in report["score"]["matches"] for count in match["setsWon"].values())
 
 
 # --- players and unattributed points ---------------------------------------------------------
@@ -602,8 +798,9 @@ def test_the_example_of_the_contract_is_reproduced():
     report = build_report(rallies)
     assert report["verificationStatus"] == "PARTIALLY_VERIFIED"
     assert report["rallies"] == {"proposed": 18, "total": 18, "userCreated": 0, "verified": 7, "rejected": 1, "unresolved": 0, "open": 10}
-    assert report["score"] == {"status": "PARTIAL", "setsWon": {"home": 0, "away": 0},
-                               "sets": [{"number": 1, "home": 4, "away": 3, "complete": False}], "stoppedAtRally": 9}
+    assert one_match(report["score"]) == {"status": "PARTIAL", "setsWon": {"home": 0, "away": 0},
+                                          "sets": [{"number": 1, "home": 4, "away": 3, "complete": False}], "stoppedAtRally": 9}
+    assert report["score"]["matches"][0]["kind"] == "STOPPED" and report["score"]["unplacedRallies"] == 10
     assert report["teams"]["home"] == {"points": partial(4), "attackPoints": partial(2), "blockPoints": UNKNOWN_VALUE,
                                        "aces": UNKNOWN_VALUE, "opponentErrors": UNKNOWN_VALUE}
     assert report["players"] == [{"side": "HOME", "jersey": 7, "points": 2, "attackPoints": 2, "blockPoints": 0, "aces": 0}]
@@ -631,7 +828,10 @@ def test_nothing_is_measured_while_the_analyzer_may_have_missed_rallies():
     cautious = build_report(rallies, rallies_may_be_missing=True)
     assert cautious["ralliesMayBeMissing"] is True
     assert cautious["verificationStatus"] == "VERIFIED"
-    assert cautious["score"] == {**exact["score"], "status": "PARTIAL"}
+    assert one_match(cautious["score"]) == {**one_match(exact["score"]), "status": "PARTIAL"}
+    # A rally the analyzer missed could move a set or a match boundary: no part of the video is MEASURED.
+    assert exact["score"]["matches"][0]["teams"]["home"]["points"] == measured(2)
+    assert cautious["score"]["matches"][0]["teams"]["home"]["points"] == partial(2)
     assert cautious["teams"]["home"] == {"points": partial(2), "attackPoints": partial(1), "blockPoints": partial(1),
                                          # A lower bound of zero says nothing and is not printed as a number.
                                          "aces": UNKNOWN_VALUE, "opponentErrors": UNKNOWN_VALUE}
@@ -716,8 +916,8 @@ def test_report_route_names_its_job_and_follows_the_decisions(storage, make_clip
         assert report["players"] == [{"side": "HOME", "jersey": 11, "points": 1, "attackPoints": 0, "blockPoints": 1, "aces": 0}]
         assert report["teams"]["home"]["points"] == partial(1) and report["teams"]["away"]["points"] == partial(0)
         # Rally 2 was rejected and is skipped; rally 3 is the first one without a winner.
-        assert report["score"] == {"status": "PARTIAL", "setsWon": {"home": 0, "away": 0},
-                                   "sets": [set_line(1, 1, 0, complete=False)], "stoppedAtRally": 3}
+        assert one_match(report["score"]) == {"status": "PARTIAL", "setsWon": {"home": 0, "away": 0},
+                                              "sets": [set_line(1, 1, 0, complete=False)], "stoppedAtRally": 3}
 
 
 def test_a_model_proposal_reaches_the_report_only_as_observed(storage, make_clip):
@@ -730,7 +930,7 @@ def test_a_model_proposal_reaches_the_report_only_as_observed(storage, make_clip
         assert report["verificationStatus"] == "DRAFT"
         # Not even a measured model is trusted to have found every rally: only the user's confirmation closes the list.
         assert report["ralliesMayBeMissing"] is True
-        assert report["score"] == {"status": "UNKNOWN", "setsWon": {"home": None, "away": None}, "sets": [], "stoppedAtRally": 1}
+        assert report["score"] == {"status": "UNKNOWN", "matches": [], "stoppedAtRally": 1, "unplacedRallies": 2}
         assert report["teams"]["home"]["points"] == UNKNOWN_VALUE
         assert report["coverage"][0] == {"metricId": "RALLY_WINNER", "eligibleN": 2, "observedN": 1, "verifiedN": 0, "status": "UNKNOWN"}
 

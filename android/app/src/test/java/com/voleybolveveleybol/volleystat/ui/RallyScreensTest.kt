@@ -71,6 +71,8 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import com.voleybolveveleybol.volleystat.part
+import com.voleybolveveleybol.volleystat.model.MatchPart
 
 /**
  * The rally list and the range editor, one state at a time. A stand-in holds the place of the
@@ -104,7 +106,7 @@ class RallyScreensTest {
             rally(3, 30_000, 41_000, Rally.VERIFIED, "AWAY", SetPoint(1, 1, 1), fromAnalyzer = false),
             rally(4, 48_000, 56_000),
         ),
-        version = 7, confirmed = false, videoDurationMs = 60_000, sets = listOf(SetScore(1, 1, 1, false)),
+        version = 7, confirmed = false, videoDurationMs = 60_000, matches = listOf(part(SetScore(1, 1, 1, false))),
     )
 
     /** Every rally has an answer. The second set stands at 3 - 1 and is not over. */
@@ -115,7 +117,7 @@ class RallyScreensTest {
             rally(3, 30_000, 41_000, Rally.VERIFIED, "AWAY", SetPoint(2, 2, 1)),
             rally(4, 48_000, 56_000, Rally.VERIFIED, "HOME", SetPoint(2, 3, 1)),
         ),
-        version = 7, confirmed = false, videoDurationMs = 60_000, sets = listOf(SetScore(1, 25, 21, true), SetScore(2, 3, 1, false)),
+        version = 7, confirmed = false, videoDurationMs = 60_000, matches = listOf(part(SetScore(1, 25, 21, true), SetScore(2, 3, 1, false))),
     )
 
     private fun state(list: RallyList?, mock: Boolean = false, load: RalliesLoad = RalliesLoad.READY, problem: CorrectionProblem? = null, overlaps: Int? = null, correcting: Boolean = false) =
@@ -954,8 +956,70 @@ class RallyScreensTest {
         assertEquals(0, taps.ruleChanges)
     }
 
+    /** A best of three that home wins with one rally per set (a rule of one point is enough for a picture), then one rally after it. */
+    private val severalParts = RallyList(
+        listOf(
+            rally(1, 2_000, 9_000, Rally.VERIFIED, "HOME", SetPoint(1, 25, 20, match = 1)),
+            rally(2, 15_000, 24_000, Rally.VERIFIED, "HOME", SetPoint(2, 25, 18, match = 1)),
+            rally(3, 30_000, 41_000, Rally.VERIFIED, "AWAY", SetPoint(1, 0, 1, match = 2)),
+        ),
+        version = 7, confirmed = false, videoDurationMs = 60_000,
+        matches = listOf(
+            part(SetScore(1, 25, 20, true), SetScore(2, 25, 18, true), kind = MatchPart.MATCH, winner = "HOME", firstRally = 1, lastRally = 2),
+            part(SetScore(1, 0, 1, false), number = 2, kind = MatchPart.AFTER_MATCH, firstRally = 3, lastRally = 3),
+        ),
+    )
+
+    @Test fun aListOfSeveralPartsNamesEachPartAndCountsItsSetsFromOne() {
+        list(state(severalParts))
+        reach(text(R.string.part_match, 1))
+        compose.onNodeWithText(text(R.string.part_match, 1)).assertIsDisplayed()
+        reach(text(R.string.part_after_match))
+        compose.onNodeWithText(text(R.string.part_after_match)).assertIsDisplayed()
+        // Set 1 appears once in each part: the sets of the after-match part count from 1 again.
+        reach(text(R.string.part_after_match))
+        assertEquals(2, compose.onAllNodesWithText(text(R.string.rallies_set_header, 1)).fetchSemanticsNodes().size)
+    }
+
+    @Test fun aCountThatNamesTheSameSetTwiceStillOpensTheList() {
+        // No server count does this. The list still opens and shows both headers instead of stopping the app.
+        val repeated = severalParts.copy(rallies = severalParts.rallies.take(2) + rally(3, 30_000, 41_000, Rally.VERIFIED, "HOME", SetPoint(1, 26, 20, match = 1)))
+        list(state(repeated))
+        reach(text(R.string.rallies_set_header, 2))
+        assertEquals(2, compose.onAllNodesWithText(text(R.string.rallies_set_header, 1)).fetchSemanticsNodes().size)
+    }
+
+    @Test fun aCountThatReturnsToAnEarlierPartStillOpensTheList() {
+        // No server count does this either: the parts go 1, 2, 1, 2. Each return names its part again.
+        val back = severalParts.copy(rallies = listOf(
+            rally(1, 2_000, 9_000, Rally.VERIFIED, "HOME", SetPoint(1, 1, 0, match = 1)),
+            rally(2, 15_000, 24_000, Rally.VERIFIED, "AWAY", SetPoint(1, 0, 1, match = 2)),
+            rally(3, 30_000, 41_000, Rally.VERIFIED, "HOME", SetPoint(2, 1, 0, match = 1)),
+            rally(4, 48_000, 56_000, Rally.VERIFIED, "AWAY", SetPoint(1, 0, 2, match = 2)),
+        ))
+        list(state(back))
+        // The last rally: both starts of the after-match part stand on the screen with it.
+        reach(text(R.string.rally_score_after, 0, 2))
+        assertEquals(2, compose.onAllNodesWithText(text(R.string.part_after_match)).fetchSemanticsNodes().size)
+    }
+
+    @Test fun aListOfOnePartNamesNoPart() {
+        list(state(decided))
+        assertFalse(shown(text(R.string.part_match, 1)))
+        assertFalse(shown(text(R.string.part_unfinished)))
+    }
+
+    @Test fun theScoreCheckShowsTheSetsOfEachPartUnderItsName() {
+        list(state(severalParts))
+        compose.onNodeWithText(text(R.string.action_check_score)).performScrollTo().performClick()
+        compose.onNodeWithText("${text(R.string.part_match, 1)}: 2 - 0").assertIsDisplayed()
+        compose.onNodeWithText("${text(R.string.part_after_match)}: 0 - 0").assertIsDisplayed()
+        assertEquals(2, compose.onAllNodesWithText(text(R.string.score_check_set, 1, 25, 20)).fetchSemanticsNodes().size +
+            compose.onAllNodesWithText(text(R.string.score_check_set_open, 1, 0, 1)).fetchSemanticsNodes().size)
+    }
+
     @Test fun theScoreCheckNamesTheRuleOfTheListItShows() {
-        val counted = decided.copy(rules = toTwentyOne, sets = listOf(SetScore(1, 21, 18, true), SetScore(2, 3, 1, false)))
+        val counted = decided.copy(rules = toTwentyOne, matches = listOf(part(SetScore(1, 21, 18, true), SetScore(2, 3, 1, false))))
         list(state(counted))
         compose.onNodeWithText(text(R.string.action_check_score)).performScrollTo().performClick()
         compose.onNodeWithText(text(R.string.score_check_rule, text(R.string.rule_counting, 21, 3, 15))).assertIsDisplayed()

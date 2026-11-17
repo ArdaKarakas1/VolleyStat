@@ -13,6 +13,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -70,6 +71,14 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import com.voleybolveveleybol.volleystat.part
+import com.voleybolveveleybol.volleystat.model.PlayerLine
+import com.voleybolveveleybol.volleystat.model.MatchPart
+import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.test.filter
+import org.junit.Assert.assertFalse
+import androidx.compose.ui.test.isHeading
 
 /**
  * What single screens say in the states an independent review found wrong in version 0.4.0:
@@ -156,12 +165,160 @@ class ScreenStatesTest {
     private fun report(scoreStatus: String) = MatchReport(
         "j1", "motion-baseline", "BASELINE", mock = false, verificationStatus = "PARTIALLY_VERIFIED",
         ralliesProposed = 40, ralliesVerified = 30, ralliesRejected = 0, ralliesUnresolved = 0, ralliesOpen = 10,
-        scoreStatus = scoreStatus, setsWonHome = 1, setsWonAway = 0, sets = listOf(SetScore(1, 25, 21, true)),
+        scoreStatus = scoreStatus, matches = listOf(part(SetScore(1, 25, 21, true))),
         ralliesMayBeMissing = scoreStatus == "PARTIAL",
         home = TeamStats(StatValue(28, "PARTIAL"), StatValue(null, "UNKNOWN"), StatValue(null, "UNKNOWN"), StatValue(null, "UNKNOWN"), StatValue(null, "UNKNOWN")),
         away = TeamStats(StatValue(25, "PARTIAL"), StatValue(null, "UNKNOWN"), StatValue(null, "UNKNOWN"), StatValue(null, "UNKNOWN"), StatValue(null, "UNKNOWN")),
         players = emptyList(), unattributedHome = 28, unattributedAway = 25, coverage = listOf(Coverage("RALLY_WINNER", 40, 30)),
     )
+
+    private fun counted(points: Int) = TeamStats(
+        StatValue(points, StatValue.MEASURED), StatValue(0, StatValue.MEASURED), StatValue(0, StatValue.MEASURED), StatValue(0, StatValue.MEASURED), StatValue(0, StatValue.MEASURED))
+
+    /** Two matches, 3-0 to home and 0-3 to away, then one set that finishes no match. Every number is invented. */
+    private val twoMatches = report("MEASURED").copy(
+        verificationStatus = "VERIFIED", ralliesMayBeMissing = false,
+        home = counted(161), away = counted(147), players = listOf(PlayerLine(true, 7, 20, 20, 0, 0), PlayerLine(false, 9, 6, 6, 0, 0)),
+        unattributedHome = 141, unattributedAway = 141,
+        matches = listOf(
+            part(SetScore(1, 25, 20, true), SetScore(2, 25, 18, true), SetScore(3, 25, 10, true), kind = MatchPart.MATCH, winner = "HOME")
+                .copy(home = counted(75), away = counted(48), players = listOf(PlayerLine(true, 7, 20, 20, 0, 0)), unattributedHome = 55, unattributedAway = 48),
+            part(SetScore(1, 18, 25, true), SetScore(2, 20, 25, true), SetScore(3, 23, 25, true), number = 2, kind = MatchPart.MATCH, winner = "AWAY")
+                .copy(home = counted(61), away = counted(75), players = listOf(PlayerLine(false, 9, 6, 6, 0, 0)), unattributedHome = 61, unattributedAway = 69),
+            part(SetScore(1, 25, 24, false), number = 3, kind = MatchPart.AFTER_MATCH)
+                .copy(home = counted(25), away = counted(24), unattributedHome = 25, unattributedAway = 24),
+        ),
+    )
+
+    /** Home wins two matches and away one, then the count stops in a fourth part. Every number is invented. */
+    private val stoppedAfterThreeMatches = report("PARTIAL").copy(
+        matches = listOf(
+            part(SetScore(1, 25, 20, true), SetScore(2, 25, 18, true), SetScore(3, 25, 10, true), kind = MatchPart.MATCH, winner = "HOME"),
+            part(SetScore(1, 18, 25, true), SetScore(2, 20, 25, true), SetScore(3, 23, 25, true), number = 2, kind = MatchPart.MATCH, winner = "AWAY"),
+            part(SetScore(1, 25, 21, true), SetScore(2, 25, 19, true), SetScore(3, 25, 17, true), number = 3, kind = MatchPart.MATCH, winner = "HOME"),
+            part(SetScore(1, 25, 22, true), SetScore(2, 24, 23, false), number = 4, kind = MatchPart.STOPPED),
+        ),
+    )
+
+    @Test fun whileTheScoreIsALowerBoundEachPartCarriesThePlusAndTheStoppedPartKeepsItsName() {
+        show { ReportScreen(match, ReportLoad.READY, stoppedAfterThreeMatches, {}, {}, {}, {}, {}) }
+        // Each side keeps its own count of matches won.
+        compose.onNodeWithText("2+ - 1+").assertIsDisplayed()
+        compose.onNodeWithContentDescription(text(R.string.report_matches_at_least, 2, 1)).assertIsDisplayed()
+        // The sets won of every part are a lower bound as well, and a screen reader says so.
+        assertEquals(2, compose.onAllNodesWithText("3+ - 0+").fetchSemanticsNodes().size)
+        compose.onNodeWithText("0+ - 3+").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("1+ - 0+").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithContentDescription(text(R.string.report_score_at_least, 1, 0)).assertIsDisplayed()
+        // The part the count stopped in may still become a match: it is never named an after-match part.
+        compose.onAllNodesWithText(text(R.string.part_stopped)).filter(isHeading()).onFirst().performScrollTo().assertIsDisplayed()
+        assertFalse(shown(text(R.string.part_after_match)))
+        compose.onNodeWithText(text(R.string.report_part_stopped_note)).performScrollTo().assertIsDisplayed()
+        assertFalse(shown(text(R.string.report_part_after_match_note)))
+        // The open set is spoken as open, not only marked with a sign.
+        val spoken = text(R.string.report_part_sets, "25-22, " + text(R.string.report_set_open, 2) + ": 24-23")
+        compose.onNodeWithContentDescription(spoken).performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun onAConfirmedListOnlyThePartTheCountStoppedInCarriesThePlus() {
+        // The list is confirmed and the count stopped in the fourth part: the three matches before it are final.
+        show { ReportScreen(match, ReportLoad.READY, stoppedAfterThreeMatches.copy(ralliesMayBeMissing = false, listConfirmed = true), {}, {}, {}, {}, {}) }
+        assertEquals(2, compose.onAllNodesWithText("3 - 0").fetchSemanticsNodes().size)
+        compose.onNodeWithText("0 - 3").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("1+ - 0+").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithContentDescription(text(R.string.report_score_at_least, 1, 0)).assertIsDisplayed()
+        // The stopped part may still become a match, so the matches won are a lower bound as well.
+        compose.onNodeWithText("2+ - 1+").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun aVideoOfSeveralMatchesShowsTheMatchesWonAndEachMatchWithItsSets() {
+        show { ReportScreen(match, ReportLoad.READY, twoMatches, {}, {}, {}, {}, {}) }
+        compose.onNodeWithText("1 - 1").assertIsDisplayed()
+        // A measured count is final: no part carries the plus.
+        compose.onNodeWithText("3 - 0").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("0 - 3").performScrollTo().assertIsDisplayed()
+        assertFalse(shown("+ -"))
+        compose.onNodeWithText(text(R.string.report_matches_won)).assertIsDisplayed()
+        // The sets of each part stand on the matches card, not in the header.
+        compose.onNodeWithText(text(R.string.report_part_sets, "25-20, 25-18, 25-10")).performScrollTo().assertIsDisplayed()
+        assertEquals(0, compose.onAllNodesWithText("25-20").fetchSemanticsNodes().size)
+        // Each name stands once as the heading of its row, and once more as a choice of the statistics below.
+        listOf(text(R.string.part_match, 1), text(R.string.part_match, 2), text(R.string.part_after_match)).forEach {
+            compose.onAllNodesWithText(it).filter(isHeading()).onFirst().performScrollTo().assertIsDisplayed()
+            assertEquals(2, compose.onAllNodesWithText(it).fetchSemanticsNodes().size)
+        }
+        compose.onNodeWithText(text(R.string.report_part_sets, "25-24…")).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithContentDescription(text(R.string.report_part_sets, text(R.string.report_set_open, 1) + ": 25-24")).assertIsDisplayed()
+        // Sets that all ended need no words beyond their scores.
+        assertEquals(0, compose.onAllNodesWithContentDescription(text(R.string.report_part_sets, "25-20, 25-18, 25-10")).fetchSemanticsNodes().size)
+        compose.onNodeWithText(text(R.string.report_part_after_match_note)).performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun theTeamStatisticsFollowThePartTheUserChooses() {
+        show { ReportScreen(match, ReportLoad.READY, twoMatches, {}, {}, {}, {}, {}) }
+        // The whole video first: its totals, not a match's.
+        compose.onNodeWithText("161").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("147").performScrollTo().assertIsDisplayed()
+        assertEquals(0, compose.onAllNodesWithText("61").fetchSemanticsNodes().size)
+        compose.onAllNodesWithText(text(R.string.part_match, 2)).filter(hasClickAction()).onFirst().performScrollTo().performClick()
+        compose.onNodeWithText("61").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("75").performScrollTo().assertIsDisplayed()
+        assertEquals(0, compose.onAllNodesWithText("161").fetchSemanticsNodes().size)
+        assertEquals(0, compose.onAllNodesWithText("147").fetchSemanticsNodes().size)
+    }
+
+    @Test fun aRecountThatDropsTheChosenPartShowsTheWholeVideoAgain() {
+        var shownReport by mutableStateOf(twoMatches)
+        show { ReportScreen(match, ReportLoad.READY, shownReport, {}, {}, {}, {}, {}) }
+        compose.onAllNodesWithText(text(R.string.part_after_match)).filter(hasClickAction()).onFirst().performScrollTo().performClick()
+        compose.onNodeWithText("24").performScrollTo().assertIsDisplayed()
+        // The new count has two parts: the third choice is gone, and the choice and the numbers return to the whole video.
+        shownReport = twoMatches.copy(matches = twoMatches.matches.take(2))
+        compose.waitForIdle()
+        compose.onNodeWithText("161").performScrollTo().assertIsDisplayed()
+        compose.onAllNodesWithText(text(R.string.report_scope_video)).filter(hasClickAction()).onFirst().assertIsSelected()
+        assertFalse(shown(text(R.string.part_after_match)))
+    }
+
+    @Test fun eachSideOfAPartKeepsItsOwnPointsWithoutAPlayer() {
+        show { PlayersScreen(match, twoMatches, emptyList(), emptyList()) {} }
+        compose.onAllNodesWithText(text(R.string.part_match, 2)).filter(hasClickAction()).onFirst().performClick()
+        compose.onNodeWithText(text(R.string.players_unattributed)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("61").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(match.awayTeam).performClick()
+        compose.onNodeWithText("69").performScrollTo().assertIsDisplayed()
+        assertFalse(shown("61"))
+    }
+
+    @Test fun aReportTheAppCanNotReadSaysTheServerIsOutdatedAndOffersNoRetry() {
+        show { ReportScreen(match, ReportLoad.OUTDATED, null, {}, {}, {}, {}, {}) }
+        compose.onNodeWithText(text(R.string.report_outdated_server)).assertIsDisplayed()
+        assertFalse(shown(text(R.string.action_retry)))
+        assertFalse(shown(text(R.string.report_unavailable_title)))
+    }
+
+    @Test fun thePlayersOfAReportTheAppCanNotReadSayTheServerIsOutdated() {
+        show { PlayersScreen(match, null, emptyList(), emptyList(), load = ReportLoad.OUTDATED) {} }
+        compose.onNodeWithText(text(R.string.report_outdated_server)).assertIsDisplayed()
+        assertFalse(shown(text(R.string.action_retry)))
+    }
+
+    @Test fun aSinglePartKeepsTheSetsInTheHeaderAndNeedsNoChoice() {
+        show { ReportScreen(match, ReportLoad.READY, report("PARTIAL"), {}, {}, {}, {}, {}) }
+        assertFalse(shown(text(R.string.report_matches_won)))
+        assertFalse(shown(text(R.string.report_scope_label)))
+        assertFalse(shown(text(R.string.report_matches)))
+    }
+
+    @Test fun thePlayersTableFollowsThePartTheUserChooses() {
+        show { PlayersScreen(match, twoMatches, emptyList(), emptyList()) {} }
+        compose.onNodeWithText(text(R.string.review_jersey, 7)).assertIsDisplayed()
+        compose.onAllNodesWithText(text(R.string.part_match, 2)).filter(hasClickAction()).onFirst().performClick()
+        // Match 2 holds no home player: only the away player of match 2 scored a jersey point.
+        assertFalse(shown(text(R.string.review_jersey, 7)))
+        compose.onAllNodesWithText(text(R.string.part_match, 1)).filter(hasClickAction()).onFirst().performClick()
+        compose.onNodeWithText(text(R.string.review_jersey, 7)).assertIsDisplayed()
+    }
 
     @Test fun setsWonCarryThePlusSignWhileTheyAreALowerBound() {
         show { ReportScreen(match, ReportLoad.READY, report("PARTIAL"), {}, {}, {}, {}, {}) }
@@ -472,14 +629,14 @@ class ScreenStatesTest {
     @Test fun theReportNamesTheRuleTheServerCountedWith() {
         show { ReportScreen(match, ReportLoad.READY, report("PARTIAL").copy(rules = MatchRules(2, 21, 15)), {}, {}, {}, {}, {}) }
         compose.onNodeWithText(text(R.string.report_rules, text(R.string.rule_counting, 21, 3, 15))).performScrollTo().assertIsDisplayed()
-        // The score above can hold a set played after a team had won, and the report says why.
-        compose.onNodeWithText(text(R.string.rule_no_match_end)).performScrollTo().assertIsDisplayed()
+        // The report says where a match ends and that play after it starts a new match.
+        compose.onNodeWithText(text(R.string.rule_match_end)).performScrollTo().assertIsDisplayed()
     }
 
     @Test fun aReportWithoutARuleLeavesTheRuleLineOut() {
         show { ReportScreen(match, ReportLoad.READY, report("PARTIAL"), {}, {}, {}, {}, {}) }
         // "Skor kuralı:" with nothing after it would name no rule; the line is left out instead.
         assertEquals(false, shown(text(R.string.report_rules, "").trim()))
-        assertEquals(false, shown(text(R.string.rule_no_match_end)))
+        assertEquals(false, shown(text(R.string.rule_match_end)))
     }
 }
