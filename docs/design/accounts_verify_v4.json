@@ -1,0 +1,201 @@
+{
+ "design": "design_v4.md",
+ "checked_on": "2026-11-17",
+ "inputs": [
+  "design_v4.md before this pass (design_v4_before_verify.md)",
+  "FIVB Voleybol Oyun Kuralları 2025-2028 (Turkish): 4.1.1, 7.3.1, 7.3.3, 19.1.1, 19.3.1.3",
+  "code at b2ce9b2 in /home/user/vs-mm (same tree as 7f18839)",
+  "verify_v4/captain_seat_probe.py"
+ ],
+ "points": [
+  {
+   "id": "F1",
+   "lens": "fidelity",
+   "severity": "high",
+   "outcome": "fixed",
+   "note": "Holds: cancel checked only for a video, and video deletion is allowed at any time, so delete-video-then-cancel let the 30-day sweep erase match_results. Cancel now needs no video and no side result (409 MATCH_HAS_CONTENT, RESULT_CONFIRMED, checked first); D1m and item 27 reworded; organiser removal after a confirmation keeps the person's confirmed line (open_remove_counted, via the V4-S3 snapshot); test added to test_open_match_results.py."
+  },
+  {
+   "id": "F2",
+   "lens": "fidelity",
+   "severity": "high",
+   "outcome": "fixed",
+   "note": "Holds: version 0 was computed live and its confirmation, self-removal, read rule, both-teams members and the other team's view were undefined. Confirm and self-removal on version 0 now write the default as rows (version 1) first; only stored rows count and grant access; a member of both teams is in neither default; the other team sees an unsaved default without entries or counts; the open-match proposal follows the same rule (a confirmation of it answers JERSEY_MISSING and writes nothing). Tests in test_rosters.py and test_open_match_results.py."
+  },
+  {
+   "id": "F3",
+   "lens": "fidelity",
+   "severity": "medium",
+   "outcome": "fixed",
+   "note": "Holds: the organiser role moves, so 'Maçı açan kişi' became false. Every open-match text and rule 7 now say 'Maçı yöneten kişi' (34 occurrences), the pop-up 'Maçı yöneten · %1$s', delete_account_body 'Yönettiğin açık maçlar'. upload_quota_open says 'Açık maçlara yüklediğin videolar' instead of the proposed 'Yönettiğin', because V4-Q1 now counts bytes on the uploader."
+  },
+  {
+   "id": "F4",
+   "lens": "fidelity",
+   "severity": "medium",
+   "outcome": "fixed",
+   "note": "Holds. FULL texts now speak of the event ('Bu maç doldu ...'); the organiser's (and captain's) card picks its text from the seats left now (open_closed_full_free / invite_closed_full_free) with a fixed precedence (cancelled, no organiser, day passed, upload exists, then reason); matchDayPassed shows link_expired_played for every reason except CANCELLED, PLAYED and ORGANISER_GONE; the resume record stores playedOn so join_gone_open and join_reopen_link_open have played-day variants."
+  },
+  {
+   "id": "F5",
+   "lens": "fidelity",
+   "severity": "medium",
+   "outcome": "fixed",
+   "note": "Holds: a saved roster may leave a player without an entry. open_waiting_roster now shows only to a player with an entry (or while the split was never saved); new open_not_on_roster: 'Bu maçın kayıtlı kadrosunda adın yok. Kadroda adı olmayan oyuncu bu maçtan istatistik almaz.'"
+  },
+  {
+   "id": "F6",
+   "lens": "fidelity",
+   "severity": "medium",
+   "outcome": "fixed",
+   "note": "Holds. playedOn can no longer change once the match day began or an upload row or side result exists (409 OPEN_MATCH_PLAYED, DAY_STARTED or HAS_UPLOAD), with a test. Of the two options the design rewords 5.8.3, D1l and item 26: joining stays open until the first upload or the end of the match day, and the first upload closes the link (V4-S2)."
+  },
+  {
+   "id": "F7",
+   "lens": "fidelity",
+   "severity": "low",
+   "outcome": "fixed",
+   "note": "Holds: the next person only gets an offer. queue_rule's second sentence is now 'Sunucu as yerini sıradaki kişiye as yeri olarak, yedek yerini yedek yeri olarak ayırır.'"
+  },
+  {
+   "id": "F8",
+   "lens": "fidelity",
+   "severity": "low",
+   "outcome": "fixed",
+   "note": "Holds: nothing excluded cancelled matches. ORGANISED and JOINED (and the holder limit in 2.1, 2.4, 2.10) now count only matches that are not cancelled; join_open_limit and open_limit_organised say 'İptal olmamış'; test in test_open_matches.py that cancelling frees a slot."
+  },
+  {
+   "id": "F9",
+   "lens": "fidelity",
+   "severity": "low",
+   "outcome": "fixed",
+   "note": "Holds: 5.8.10/8.7 contradicted 5.8.4/9.2. Chose the first option: DELETE after a confirmed result is allowed once nobody but the organiser holds a seat or a line of the confirmed roster; 5.8.4, 5.8.10, 8.7, 9.2 and open_delete_refused say so; tested."
+  },
+  {
+   "id": "F10",
+   "lens": "fidelity",
+   "severity": "low",
+   "outcome": "fixed",
+   "note": "Holds. Added register_gate_any keyed on health accounts.openMatchSignup LINK. open_need_account no longer points to a team invite; it uses R10's wording (ask the organiser, who asks the operator for a sign-up code), which is true under V4-S1, instead of the proposed 'bu maça şimdilik katılamazsın'."
+  },
+  {
+   "id": "V4-S1",
+   "lens": "security",
+   "severity": "high",
+   "outcome": "fixed",
+   "note": "Holds: an invite registers accounts that never join, and removed ex-members keep accounts. While VOLLEYSTAT_TEAMS=operator, creating an open match and T1/T8 on its pool need a current team membership or a SIGNUP_CODE/CAPTAIN_CODE account (403 OPEN_MATCH_MEMBERS_ONLY, new T8d inside the transaction); GET /v1/me reports openMatches.allowed; 0.4, 5.8.3, 11.3 and item 23 corrected; open_need_account rewritten; tests for the Reddet account and the removed ex-member."
+  },
+  {
+   "id": "V4-P1",
+   "lens": "security",
+   "severity": "high",
+   "outcome": "fixed",
+   "note": "Holds. TEAM_DEFAULT lists only members whose joined_at date (UTC+3) is on or before played_on; it becomes stored rows at the record's first upload, at the end of the match day, at a version-0 confirmation or at a version-0 self-removal; content access and statistics read only stored rows and the confirmed roster; test for a post-match joiner (403 on the video, missing from the default, no line)."
+  },
+  {
+   "id": "V4-S2",
+   "lens": "security",
+   "severity": "high",
+   "outcome": "fixed",
+   "note": "Holds on all three paths. playedOn is fixed once the day began or an upload row exists; the record's first initiate_upload closes the live link (new reason PLAYED, attempts MATCH_PLAYED, with texts); one guard (cancelled, day passed, upload row, sibling) stands in front of POST …/link and removal with renewLink=true, which answers 409 and changes nothing; tests for a date move after the match, a join after the upload on the match day and renewLink on a cancelled match."
+  },
+  {
+   "id": "V4-S3",
+   "lens": "security",
+   "severity": "medium",
+   "outcome": "fixed",
+   "note": "Holds. Took the snapshot fix, for team sides and open matches alike: match_roster_confirmed holds the confirmed roster; statistics read only it; a later save, removal or seat move shows changedSinceConfirmed and keeps it counting; an organiser's removal keeps the person's line; only the person's own leave removes it at once. A new confirmation still replaces it, so D1m, item 27 (new item 31) and 16.2 now say the organiser changes counted lines only by confirming anew."
+  },
+  {
+   "id": "V4-Q1",
+   "lens": "security",
+   "severity": "medium",
+   "outcome": "fixed",
+   "note": "Holds. Open-match bytes count on the uploader (new uploads.started_by) and never move on a transfer; per-account limit follows signup_via, 8 GiB with an operator code and 4 GiB through a link (not the proposed 2 GiB: one full-quality game at FHD needs more, Record.kt line 309; recorded as owner number item 4); separate server pools of 40 GiB personal and 60 GiB open match; no upload with fewer than 2 players (409 OPEN_MATCH_TOO_SMALL); tests for 20 personal and 15 open-match link accounts and a transfer loop."
+  },
+  {
+   "id": "V4-C1",
+   "lens": "security",
+   "severity": "medium",
+   "outcome": "fixed",
+   "note": "Holds. The transfer is now an offer (POST …/organiser) that the player accepts or declines (…/organiser/accept, …/decline), refused at the recipient's ORGANISED limit, with 409 UPLOAD_IN_PROGRESS and with REVIEW_IN_PROGRESS (R9). Account deletion aborts the user's unfinished uploads and, instead of appointing a player, leaves the open match without an organiser (organiser_user_id nullable, ON DELETE SET NULL, link reason ORGANISER_GONE with texts, sweep deletes it once no player and no confirmed line remains)."
+  },
+  {
+   "id": "V4-C2",
+   "lens": "security",
+   "severity": "low",
+   "outcome": "fixed",
+   "note": "Holds; verify_v4/captain_seat_probe.py reproduced settle's assertion failure. Creation checks the captain's seat against the counts (422 SEATS_INVALID, CAPTAIN_SEAT); memberships.seat lost its default and both seat columns got CHECK (seat IN ('STARTER','SUBSTITUTE')); creation with 'Ben de oynuyorum' checks the JOINED limit; tests in test_seats.py and test_open_matches.py."
+  },
+  {
+   "id": "R1",
+   "lens": "volleyball",
+   "severity": "high",
+   "outcome": "fixed",
+   "note": "Holds: VolleyStatApp.kt line 218 builds scorerRoster from local state.teams (line 156) and Review.kt 224-236 shows only those jerseys. The review chain and PlayersScreen of a server match now read GET …/roster; the first upload stores both sides' rows so jerseys exist; review_no_roster_server and review_no_roster_open with a button to the editor; walk 2 saves jerseys (from suggestions) before the review; B8 test that a SCORER answer reaches a COUNTED line."
+  },
+  {
+   "id": "R2",
+   "lens": "volleyball",
+   "severity": "high",
+   "outcome": "fixed",
+   "note": "Holds: the proposal was recomputed from current players. Instead of freezing it when Taraflar opens (a GET must not write), each player's proposed_side is stored at the join (fewer of that seat type, A on a tie, which equals A/B alternation) and never moves; players see sides only after a save; the review opens only after a saved split and shows three names under each side; TeamBadge takes the side name as content description; test that a leave before the first save moves nobody."
+  },
+  {
+   "id": "R3",
+   "lens": "volleyball",
+   "severity": "medium",
+   "outcome": "fixed",
+   "note": "Holds. Same fix as V4-P1 plus: NOT_A_TEAM_MEMBER accepts a person who already holds a stored row of the side; the X/Y jersey-7 example is in 6.3; tests for the X/Y case and a post-match joiner. The freeze covers the end of the match day and the record's first upload (both sides)."
+  },
+  {
+   "id": "R4",
+   "lens": "volleyball",
+   "severity": "medium",
+   "outcome": "fixed",
+   "note": "Holds: MATCH_DATE_PAST and OPEN_MATCH_PLAYED leave no route after the match day. Added open match siblings: PUT /v1/open-matches/{newId} {siblingOf} by the organiser at any time, copying details, players with seat types, suggested jerseys, proposed sides and the saved split; no link, no join; at most 3; outside the limits; own video, roster confirmation and result. New owner decision item 28 records that a past-dated open match without a link is not offered (default)."
+  },
+  {
+   "id": "R5",
+   "lens": "volleyball",
+   "severity": "medium",
+   "outcome": "fixed",
+   "note": "Holds: strings.xml line 470 players_col_serve = 'As'. Renamed to 'S. ası' with content description 'Servis ası'; statistics screens use 'Servis ası'; B9 string test that no ace label is the bare 'As'."
+  },
+  {
+   "id": "R6",
+   "lens": "volleyball",
+   "severity": "medium",
+   "outcome": "fixed",
+   "note": "Holds: rule 7.3.3 ends '(Liberolar hariç)', 19.1.1 allows two liberos, 19.3.1.3 forbids a libero's serve and block. Quote corrected in 2.3 and 13.2; LIBERO added to match_rosters.role (and the confirmed snapshot) only, at most 2 per side (TOO_MANY_LIBEROS), counted in the 12 and not in the 6 starters; asLibero; roster_too_many and stats_roles updated; review_libero_warning; owner decision item 30 with the two-role alternative."
+  },
+  {
+   "id": "R7",
+   "lens": "volleyball",
+   "severity": "medium",
+   "outcome": "fixed",
+   "note": "Holds: privacy_open_match showed only on open/new. Added 'Maça katılan herkes diğer oyuncuların görünen adını ve maçın videosunu görür.' to open_share_text and open_share_text_code, privacy_open_match on open/{id} for players, and rewrote 5.8.8 to say where the text shows."
+  },
+  {
+   "id": "R8",
+   "lens": "volleyball",
+   "severity": "low",
+   "outcome": "fixed",
+   "note": "Holds. B6c's content cell now names match_sides (with roster_version and roster_confirmed_version), match_rosters (role with LIBERO, nullable jersey, per-side jersey index), matches.status OPEN_MATCH and start_time, open_match_players.proposed_side and GET /v1/matches with scope=open only, with their migration test; B7 adds team side rows and scope=team; B8 adds confirmation, the confirmed roster and TEAM_DEFAULT."
+  },
+  {
+   "id": "R9",
+   "lens": "volleyball",
+   "severity": "low",
+   "outcome": "fixed",
+   "note": "Holds. Transfers of captaincy and of the organiser role are refused with 409 REVIEW_IN_PROGRESS while a live video has no job or an unconfirmed newest job (and UPLOAD_IN_PROGRESS during an upload); account deletion deletes the user's team videos that have no job with a confirmed list and delete_account_body says so; open matches no longer get an automatic organiser (V4-C1); open_transfer_body corrected; tests for both routes."
+  },
+  {
+   "id": "R10",
+   "lens": "volleyball",
+   "severity": "low",
+   "outcome": "fixed",
+   "note": "Holds: joining a team for an account takes a team seat. open_need_account now ends 'Hesabın yoksa maçı yöneten kişiye yazabilirsin. Maçı yöneten kişi Voleybol Ve Veleybol'dan senin için bir kayıt kodu isteyebilir.' (an operator sign-up code passes V4-S1); item 23's cost updated."
+  }
+ ]
+}
