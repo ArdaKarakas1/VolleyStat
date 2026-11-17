@@ -933,10 +933,15 @@ class AppViewModelAccountTest {
         val blocker = File(files, "accounts/user-ali").apply { parentFile!!.mkdirs(); writeText("") }
         val vm = viewModel()
         vm.loginAndWait("ali")
+        // The move waits for the view model's store lock. Held here, it keeps each attempt on its way during the taps:
+        // otherwise a disk that fails at once can end the move before withContext suspends, and the test sees it over.
+        val storeLock = AppViewModel::class.java.getDeclaredField("storeLock").apply { isAccessible = true }.get(vm)!!
         repeat(2) { attempt ->
-            vm.answerLegacy(move = true)
-            assertTrue("attempt $attempt is on its way", vm.state.value.account.legacyMoving)
-            vm.answerLegacy(move = false)
+            synchronized(storeLock) {
+                vm.answerLegacy(move = true)
+                assertTrue("attempt $attempt is on its way", vm.state.value.account.legacyMoving)
+                vm.answerLegacy(move = false)
+            }
             await("attempt $attempt") { !vm.state.value.account.legacyMoving }
             assertTrue(vm.state.value.saveFailed)
             assertNotNull("the question stays", vm.state.value.account.legacy)

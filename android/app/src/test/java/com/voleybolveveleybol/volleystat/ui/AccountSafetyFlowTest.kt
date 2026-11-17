@@ -103,7 +103,7 @@ class AccountSafetyFlowTest {
 
         button(R.string.action_delete_from_phone).performScrollTo().performClick()
         dialogButton(R.string.action_delete_from_phone).performClick()
-        waitFor(text(R.string.phone_data_deleted))
+        waitFor(text(R.string.phone_data_deleted, user.username))
         assertFalse(folder.exists())
         assertFalse(shown(offer))
     }

@@ -109,9 +109,12 @@ class DeviceTokenStore(private val file: File, private val cipher: SessionCipher
 }
 
 /**
- * The JSON sealed in [file]. A file that is missing, damaged, cut short or sealed with a key the
- * phone no longer has reads as empty. Any other failure (a busy keystore, a read error) is tried
- * once more and then thrown, so the caller leaves the file as it was.
+ * The JSON sealed in [file]. A file that is missing or damaged reads as empty: a tag that does not
+ * match (a changed file, or one sealed with a key the phone no longer has), another format, a cut
+ * short file, or sealed text that is no JSON. Any other failure (a keystore error that may pass, a
+ * read error) is tried once more and then thrown, so the caller leaves the file as it was (review
+ * finding S4). AndroidKeyStore throws IllegalBlockSizeException, InvalidKeyException and other
+ * GeneralSecurityExceptions for errors that pass, so none of those counts as damage.
  */
 private fun readSealed(file: File, cipher: SessionCipher): JSONObject {
     if (!file.isFile) return JSONObject()
@@ -119,53 +122,101 @@ private fun readSealed(file: File, cipher: SessionCipher): JSONObject {
     while (true) {
         try {
             return JSONObject(String(cipher.open(file.readBytes()), Charsets.UTF_8))
+        } catch (damaged: javax.crypto.AEADBadTagException) {
+            return JSONObject()
+        } catch (damaged: SealedFileDamaged) {
+            return JSONObject()
         } catch (damaged: org.json.JSONException) {
             return JSONObject()
         } catch (error: Exception) {
-            val unreadable = error is java.security.GeneralSecurityException && error !is java.security.KeyStoreException
-            if (unreadable) return JSONObject()
             if (++tries == 2) throw error
         }
     }
 }
 
 /**
- * deletions.bin: the accounts whose deletion got no answer and whose session then left the phone
- * (review findings S1 and F1), newest first, as (user id, username). The login screen offers to
- * delete each one's data until the user answers or the account logs in again. The list outlives
- * the process, so the folder of an account the server may have deleted never drops out of reach.
- * It names accounts, so it is sealed like session.bin.
+ * The accounts whose deletion got no answer and whose session then left the phone (review findings
+ * S1 and F1), newest first, as (user id, username). The login screen offers to delete each one's
+ * data until the user answers or the account logs in again. The list outlives the process, so the
+ * folder of an account the server may have deleted never drops out of reach.
+ *
+ * [ids] (deletions.ids) alone says which accounts are in doubt. It is plain JSON and holds only user
+ * ids, which already stand in plain text as the names of the account folders (accounts/<id>/), so it
+ * adds no personal data, and it never depends on the keystore. [file] (deletions.bin) keeps each
+ * one's username for the text of the offer, sealed like session.bin. A username that can not be read
+ * (a new keystore key, a damaged file, a keystore that fails now) leaves its account in doubt
+ * without a name, and the offer then names no account.
  */
-class DeletionDoubtStore(private val file: File, private val cipher: SessionCipher) {
+class DeletionDoubtStore(
+    private val file: File,
+    private val cipher: SessionCipher,
+    private val ids: File = File(file.parentFile, "${file.nameWithoutExtension}.ids"),
+) {
 
-    /** The accounts in doubt. A file the phone can not open now gives none and stays as it is. */
-    fun load(): List<Pair<String, String>> = runCatching { read() }.getOrDefault(emptyList())
-
-    /** Puts [userId] first. Throws, and leaves the file as it was, when the phone can not open the file now. */
+    /** The accounts in doubt with the usernames the phone can read now. */
     @Synchronized
-    fun add(userId: String, username: String) = write(listOf(userId to username) + read().filterNot { it.first == userId })
+    fun load(): List<Pair<String, String?>> {
+        val names = runCatching { readNames() }.getOrNull()
+        return runCatching { held(names) }.getOrDefault(emptyList()).map { it to names?.get(it) }
+    }
 
-    /** Throws, and leaves the file as it was, when the phone can not open the file now. */
+    /** Puts [userId] first. Throws when the phone can not write the list; the username waits for a keystore that can seal it. */
+    @Synchronized
+    fun add(userId: String, username: String?) {
+        val names = runCatching { readNames() }.getOrNull()
+        val next = listOf(userId) + held(names).filterNot { it == userId }
+        writeIds(next)
+        if (names != null && username != null) runCatching { writeNames(next, names + (userId to username)) }
+    }
+
+    /** Throws when the phone can not write the list. A username the keystore can not open now stays sealed, unread. */
     @Synchronized
     fun remove(userId: String) {
-        val held = read()
-        if (held.any { it.first == userId }) write(held.filterNot { it.first == userId })
-    }
-
-    private fun read(): List<Pair<String, String>> {
-        val accounts = readSealed(file, cipher).optJSONArray("accounts") ?: return emptyList()
-        return (0 until accounts.length()).mapNotNull { index ->
-            accounts.optJSONObject(index)?.let { it.optString("userId") to it.optString("username") }?.takeIf { it.first.isNotEmpty() }
+        val names = runCatching { readNames() }.getOrNull()
+        val held = held(names)
+        if (userId !in held) return
+        val next = held - userId
+        if (next.isEmpty()) {
+            file.delete()
+            ids.delete()
+            return
         }
+        writeIds(next)
+        if (names != null) runCatching { writeNames(next, names) }
     }
 
-    private fun write(accounts: List<Pair<String, String>>) {
-        if (accounts.isEmpty()) {
+    /**
+     * The ids in deletions.ids. A phone of the first round of this slice kept the list in deletions.bin
+     * only; its order counts until the first write of the plain list, and while the keystore can not
+     * open it, this throws so that no write replaces it.
+     */
+    private fun held(names: Map<String, String>?): List<String> {
+        if (ids.isFile) {
+            val accounts = runCatching { JSONObject(ids.readText()).optJSONArray("accounts") }.getOrNull() ?: return emptyList()
+            return (0 until accounts.length()).map { accounts.optString(it) }.filter { it.isNotEmpty() }.distinct()
+        }
+        check(names != null || !file.isFile) { "The keystore can not open the list of the accounts in doubt now" }
+        return names?.keys?.toList().orEmpty()
+    }
+
+    /** The usernames in deletions.bin, in its order. Throws when the keystore can not open it now. */
+    private fun readNames(): Map<String, String> {
+        val accounts = readSealed(file, cipher).optJSONArray("accounts") ?: return emptyMap()
+        return (0 until accounts.length()).mapNotNull { index ->
+            accounts.optJSONObject(index)?.let { it.optString("userId") to it.optString("username") }?.takeIf { it.first.isNotEmpty() && it.second.isNotEmpty() }
+        }.toMap(LinkedHashMap())
+    }
+
+    private fun writeIds(accounts: List<String>) =
+        replaceAtomically(ids, JSONObject().put("version", 1).put("accounts", org.json.JSONArray(accounts)).toString().toByteArray(Charsets.UTF_8))
+
+    private fun writeNames(accounts: List<String>, names: Map<String, String>) {
+        val known = accounts.mapNotNull { id -> names[id]?.let { JSONObject().put("userId", id).put("username", it) } }
+        if (known.isEmpty()) {
             file.delete()
             return
         }
-        val json = JSONObject().put("accounts", org.json.JSONArray(accounts.map { (id, name) -> JSONObject().put("userId", id).put("username", name) }))
-        replaceAtomically(file, cipher.seal(json.toString().toByteArray(Charsets.UTF_8)))
+        replaceAtomically(file, cipher.seal(JSONObject().put("accounts", org.json.JSONArray(known)).toString().toByteArray(Charsets.UTF_8)))
     }
 }
 

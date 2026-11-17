@@ -64,7 +64,10 @@ class AccountSafetyTest {
         server.start()
     }
 
-    @After fun stop() = server.shutdown()
+    @After fun stop() {
+        server.shutdown()
+        TestApplication.cipher = PlainSessionCipher
+    }
 
     private fun on(request: String, answer: (RecordedRequest) -> MockResponse) { script[request] = answer }
     private fun ok(json: JSONObject) = MockResponse().setResponseCode(200).setHeader("Content-Type", "application/json").setBody(json.toString())
@@ -148,6 +151,7 @@ class AccountSafetyTest {
         assertEquals("another account's token stays", "device-2", deviceTokens().tokenFor("baska"))
         assertNull(vm.state.value.account.unconfirmedDeletion)
         assertEquals(AccountChange.PHONE_DATA_DELETED, vm.state.value.account.confirmed)
+        assertEquals("the confirmation names whose data went", UnconfirmedDeletion(user.userId, user.username), vm.state.value.account.deletedFromPhone)
         assertEquals("the phone asked the server nothing for it", 3, seen.size)
     }
 
@@ -243,6 +247,57 @@ class AccountSafetyTest {
         assertNull(vm.state.value.account.unconfirmedDeletion)
     }
 
+    // ----- the checker's finding on the mark: a refusal the server gives before it acts leaves no doubt behind -----
+
+    private fun marked() = SessionStore(File(files, "session.bin"), PlainSessionCipher).load()!!.deletionUnanswered
+
+    /** The server ends the session, and the profile reads the account. */
+    private fun AppViewModel.endTheSession() {
+        on("GET /me") { refuse(401, "AUTH_REQUIRED") }
+        refreshAccount()
+        await("the end of the session") { state.value.account.user == null }
+    }
+
+    @Test fun aDeletionTheServerRefusesBeforeItActsLeavesNoMarkAndALaterEndIsAnOrdinaryOne() {
+        seedAccountWithData()
+        listOf(422 to "VALIDATION_ERROR", 404 to "NOT_FOUND", 400 to "BAD_REQUEST").forEach { (status, code) ->
+            on("POST /me/delete") { refuse(status, code) }
+            val vm = viewModel()
+            // A password of more than 1024 characters gets a 422 before the server looks at the session.
+            vm.deleteAccount("x".repeat(1100))
+            await("the refusal $status") { !vm.state.value.account.busy && vm.state.value.account.problem != null }
+            assertFalse("$status: the server touched nothing", marked())
+        }
+        val vm = viewModel()
+        vm.endTheSession()
+        assertNull("no false text about a deletion", vm.state.value.account.unconfirmedDeletion)
+        assertTrue(vm.state.value.account.sessionEnded)
+        assertTrue(File(folder, "volleystat.json").exists())
+    }
+
+    @Test fun aRefusalBeforeTheServerActsKeepsTheMarkOfAnEarlierLostAnswer() {
+        seedAccountWithData()
+        val vm = viewModel()
+        vm.deleteAndLoseTheAnswer()
+        on("POST /me/delete") { refuse(422, "VALIDATION_ERROR") }
+        vm.deleteAccount("x".repeat(1100))
+        await("the refusal") { !vm.state.value.account.busy && seen.size == 2 }
+        assertTrue("the first deletion may still have happened", marked())
+        vm.endTheSession()
+        assertEquals(UnconfirmedDeletion(user.userId, user.username), vm.state.value.account.unconfirmedDeletion)
+    }
+
+    @Test fun aServerErrorThatSaysNothingKeepsTheMark() {
+        seedAccountWithData()
+        on("POST /me/delete") { refuse(500, "INTERNAL") }
+        val vm = viewModel()
+        vm.deleteAccount(password)
+        await("the error") { !vm.state.value.account.busy && seen.isNotEmpty() }
+        assertTrue("a 500 may come after the deletion", marked())
+        vm.endTheSession()
+        assertEquals(UnconfirmedDeletion(user.userId, user.username), vm.state.value.account.unconfirmedDeletion)
+    }
+
     // ----- review finding F1: the offer outlives the process, so no account's folder is ever out of reach -----
 
     /** Loses the answer of a deletion, then repeats it: the server no longer knows the session, and the login with the same password fails. */
@@ -312,10 +367,12 @@ class AccountSafetyTest {
         restarted.deleteUnconfirmedAccountData()
         assertFalse(veliFolder.exists())
         assertEquals("the earlier doubt is still offered", UnconfirmedDeletion(user.userId, user.username), restarted.state.value.account.unconfirmedDeletion)
+        assertEquals("the confirmation names Veli, not every account of the phone", UnconfirmedDeletion("user-veli", "veli"), restarted.state.value.account.deletedFromPhone)
         assertTrue(recording.exists())
         restarted.deleteUnconfirmedAccountData()
         assertFalse(folder.exists())
         assertNull(restarted.state.value.account.unconfirmedDeletion)
+        assertEquals(UnconfirmedDeletion(user.userId, user.username), restarted.state.value.account.deletedFromPhone)
     }
 
     @Test fun aKeptDoubtWhoseIdNamesNoFolderIsNeverOffered() {
@@ -339,6 +396,175 @@ class AccountSafetyTest {
         await("the logout") { vm.state.value.account.user == null && !vm.state.value.account.busy }
         assertNull(vm.state.value.account.unconfirmedDeletion)
         assertNull(viewModel().state.value.account.unconfirmedDeletion)
+    }
+
+    // ----- the checker's regression of S3 and F1: a new keystore key or a damaged deletions.bin loses no doubt -----
+
+    @Test fun aDoubtOutlivesANewKeystoreKeyAndIsOfferedWithoutItsUsername() {
+        val cipher = ReplaceableKeyCipher()
+        TestApplication.cipher = cipher
+        TestAccounts.device(context, TestAccounts.SIGNED_IN_PHONE)
+        on("POST /auth/login") { signedInAs(JSONObject(seen.last().body).getString("username"), "token-${seen.size}") }
+        on("POST /auth/logout") { MockResponse().setResponseCode(204) }
+        val vm = viewModel()
+
+        // Veli uses the phone and logs out: his folder is in no doubt, and no screen may offer to delete it.
+        vm.loginAs("veli")
+        vm.addTeam("Veli'nin Takımı")
+        vm.logout()
+        await("Veli's logout") { vm.state.value.account.user == null && !vm.state.value.account.busy }
+        // Ali's deletion loses its answer, and the repeat finds the account gone.
+        vm.loginAs("ali")
+        vm.addTeam("Ali'nin Takımı")
+        on("POST /me/delete") { lost() }
+        vm.deleteAccount(password)
+        await("the lost answer") { !vm.state.value.account.busy && vm.state.value.account.problem == AuthProblem.Unreachable }
+        on("POST /me/delete") { refuse(401, "AUTH_REQUIRED") }
+        on("POST /auth/login") { refuse(401, "LOGIN_FAILED") }
+        vm.deleteAccount(password)
+        await("the offer") { vm.state.value.account.unconfirmedDeletion != null && !vm.state.value.account.busy }
+        assertEquals(UnconfirmedDeletion("user-ali", "ali"), vm.state.value.account.unconfirmedDeletion)
+
+        // The keystore replaces its key: nothing sealed with the old one can be read any more.
+        cipher.replaceKey()
+        val restarted = viewModel()
+        assertEquals("the offer stays, without the username", UnconfirmedDeletion("user-ali", null), restarted.state.value.account.unconfirmedDeletion)
+        val ali = File(files, "accounts/user-ali")
+        val veli = File(files, "accounts/user-veli")
+        assertTrue(File(ali, "volleystat.json").exists())
+        assertFalse("deletions.ids names no username", File(files, "deletions.ids").readText().contains("\"ali\""))
+
+        restarted.deleteUnconfirmedAccountData()
+        assertFalse(ali.exists())
+        assertEquals(UnconfirmedDeletion("user-ali", null), restarted.state.value.account.deletedFromPhone)
+        assertTrue("the folder of an account in no doubt stays", File(veli, "volleystat.json").exists())
+        assertNull(restarted.state.value.account.unconfirmedDeletion)
+        assertNull(viewModel().state.value.account.unconfirmedDeletion)
+    }
+
+    @Test fun aDamagedFileOfUsernamesStillOffersTheAccountWithoutItsUsername() {
+        seedAccountWithData()
+        viewModel().deleteUntilTheOfferShows()
+        File(files, "deletions.bin").writeBytes(byteArrayOf(1, 2, 3))
+        val restarted = viewModel()
+        assertEquals(UnconfirmedDeletion(user.userId, null), restarted.state.value.account.unconfirmedDeletion)
+        restarted.deleteUnconfirmedAccountData()
+        assertFalse(folder.exists())
+        assertNull(restarted.state.value.account.unconfirmedDeletion)
+        assertNull(viewModel().state.value.account.unconfirmedDeletion)
+    }
+
+    // ----- the guards the checker's mutants S1h, S1i, S1j and F1f showed untested -----
+
+    @Test fun aLogoutWithoutTheServersAnswerLeavesTheOffer() {
+        seedAccountWithData()
+        val vm = viewModel()
+        vm.deleteAndLoseTheAnswer()
+        // The user lets the session go although the server did not answer: only a 204 would show that the account is still there.
+        on("POST /auth/logout") { lost() }
+        vm.logout(evenWithoutAnswer = true)
+        await("the logout") { vm.state.value.account.user == null && !vm.state.value.account.busy }
+        assertEquals(UnconfirmedDeletion(user.userId, user.username), vm.state.value.account.unconfirmedDeletion)
+        assertTrue(File(folder, "volleystat.json").exists())
+    }
+
+    @Test fun aLogoutThatMeetsAnEndedSessionLeavesTheOffer() {
+        seedAccountWithData()
+        val vm = viewModel()
+        vm.deleteAndLoseTheAnswer()
+        on("POST /auth/logout") { refuse(401, "AUTH_REQUIRED") }
+        vm.logout()
+        await("the logout") { vm.state.value.account.user == null && !vm.state.value.account.busy }
+        assertEquals(UnconfirmedDeletion(user.userId, user.username), vm.state.value.account.unconfirmedDeletion)
+    }
+
+    @Test fun aLogoutTheServerConfirmsShowsTheAccountIsStillThere() {
+        seedAccountWithData()
+        val vm = viewModel()
+        vm.deleteAndLoseTheAnswer()
+        on("POST /auth/logout") { MockResponse().setResponseCode(204) }
+        vm.logout()
+        await("the logout") { vm.state.value.account.user == null && !vm.state.value.account.busy }
+        assertNull(vm.state.value.account.unconfirmedDeletion)
+        assertNull(viewModel().state.value.account.unconfirmedDeletion)
+    }
+
+    @Test fun aLoginDuringTheRepeatThatFindsAnotherAccountNeitherSignsItInNorDeletesIt() {
+        seedAccountWithData()
+        // The phone also keeps the folder of the account that the username names now.
+        TestAccounts.space(context, "user-other").store.save(StoredState(teams = listOf(Team("t2", "Başka Takım"))))
+        val vm = viewModel()
+        vm.deleteAndLoseTheAnswer()
+
+        // The server deleted the account, and someone opened a new account with the same username and password since.
+        on("POST /me/delete") { request -> if (request.getHeader("Authorization") == "Bearer token-other") MockResponse().setResponseCode(204) else refuse(401, "AUTH_REQUIRED") }
+        on("POST /auth/login") {
+            ok(
+                JSONObject().put("user", userJson().put("id", "user-other").put("displayName", "Başka")).put("deviceToken", "device-other")
+                    .put("session", JSONObject().put("token", "token-other").put("expiresAt", "2026-12-17T10:00:00Z"))
+            )
+        }
+        on("POST /auth/logout") { MockResponse().setResponseCode(204) }
+        vm.deleteAccount(password)
+        await("the end of the session") { vm.state.value.account.user == null && !vm.state.value.account.busy }
+
+        assertEquals(listOf("POST /me/delete", "POST /me/delete", "POST /auth/login", "POST /auth/logout"), seen.map { it.key })
+        assertEquals("the other account's new session is closed again", "Bearer token-other", seen.last().authorization)
+        assertFalse("no deletion goes out with the other account's session", seen.any { it.key == "POST /me/delete" && it.authorization == "Bearer token-other" })
+        assertNull(vm.state.value.account.user)
+        assertFalse(File(files, "session.bin").exists())
+        assertNull(vm.state.value.account.confirmed)
+        assertEquals("the account whose deletion is in doubt is offered", UnconfirmedDeletion(user.userId, user.username), vm.state.value.account.unconfirmedDeletion)
+        assertTrue("the other account's folder stays", File(files, "accounts/user-other/volleystat.json").exists())
+        assertTrue(File(folder, "volleystat.json").exists())
+        assertEquals("the other account's device token never reaches the phone", "device-1", deviceTokens().tokenFor(user.username))
+    }
+
+    @Test fun theOfferWaitsWhileALoginIsOnItsWay() {
+        seedAccountWithData()
+        val vm = viewModel()
+        vm.deleteUntilTheOfferShows()
+        val held = java.util.concurrent.CountDownLatch(1)
+        on("POST /auth/login") {
+            held.await(10, java.util.concurrent.TimeUnit.SECONDS)
+            signedIn("fresh-token")
+        }
+        // The account is still there: its password was changed on another phone, and this is the new one.
+        vm.login(user.username, "yeni şifre 67890")
+        assertTrue(vm.state.value.account.busy)
+        vm.deleteUnconfirmedAccountData()
+        assertTrue("a login on its way may be this account's", File(folder, "volleystat.json").exists())
+        assertEquals(UnconfirmedDeletion(user.userId, user.username), vm.state.value.account.unconfirmedDeletion)
+        held.countDown()
+        await("the login") { vm.state.value.account.user != null && !vm.state.value.account.busy }
+        assertEquals(listOf("A Takımı"), vm.state.value.teams.map { it.name })
+        assertNull(vm.state.value.account.unconfirmedDeletion)
+    }
+
+    /**
+     * Seals nothing, as [PlainSessionCipher], and notes what the disk held each time the accounts in
+     * doubt were sealed: whether session.bin was still there, and whether deletions.ids already
+     * named the account. A process that ends at that moment leaves exactly that behind.
+     */
+    private class WitnessCipher(private val session: File, private val ids: File, private val userId: String) : com.voleybolveveleybol.volleystat.data.SessionCipher {
+        val seen = CopyOnWriteArrayList<Pair<Boolean, Boolean>>()
+        override fun seal(plain: ByteArray): ByteArray {
+            if (runCatching { JSONObject(String(plain)).has("accounts") }.getOrDefault(false)) {
+                seen += session.exists() to (ids.isFile && ids.readText().contains(userId))
+            }
+            return plain.copyOf()
+        }
+        override fun open(sealed: ByteArray): ByteArray = sealed.copyOf()
+    }
+
+    @Test fun theDoubtReachesTheDiskBeforeTheSessionLeavesIt() {
+        val witness = WitnessCipher(File(files, "session.bin"), File(files, "deletions.ids"), user.userId)
+        TestApplication.cipher = witness
+        seedAccountWithData()
+        viewModel().deleteUntilTheOfferShows()
+        assertEquals("the session and the plain list were both on the disk when the doubt was sealed", listOf(true to true), witness.seen)
+        assertFalse(File(files, "session.bin").exists())
+        assertEquals(UnconfirmedDeletion(user.userId, user.username), viewModel().state.value.account.unconfirmedDeletion)
     }
 
     // ----- review finding S2: the question about the data of app 0.7 belongs to the account that was asked -----

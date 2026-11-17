@@ -66,6 +66,8 @@ class RallyListFlowTest {
     private val server = MockWebServer()
     private val requests = CopyOnWriteArrayList<String>()
     private val bodies = CopyOnWriteArrayList<JSONObject>()
+    /** The Authorization header of every read of the video, as the players send it. */
+    private val videoReads = CopyOnWriteArrayList<String>()
     private val control = FakeControl()
 
     // What the stand-in server holds. Three rallies; the tests decide who has a winner.
@@ -164,6 +166,10 @@ class RallyListFlowTest {
                     requests += "${request.method} $path"
                     val body = if (request.method == "POST" || request.method == "PUT") JSONObject(request.body.readUtf8()).also { bodies += it } else JSONObject()
                     return when ("${request.method} $path") {
+                        "GET /videos/video-1/content" -> {
+                            videoReads += request.getHeader("Authorization") ?: "none"
+                            MockResponse().setResponseCode(200).setHeader("Content-Type", "video/mp4").setBody(okio.Buffer().write(ByteArray(64)))
+                        }
                         "GET /matches/server-1/report" -> ok(report())
                         "GET /videos/video-1/analyses/latest" -> ok(job())
                         "GET /analyses/j1/rallies" -> {
@@ -345,6 +351,35 @@ class RallyListFlowTest {
             assertEquals(video, url)
             assertEquals(session, headers)
         }
+    }
+
+    // The checker's mutant N04d: the app's own players, the defaults of VolleyStatApp, read with the session's header too.
+
+    private fun startWithTheAppsOwnPlayers() {
+        ViewModelProvider(app.activity)[AppViewModel::class.java].baseUrlOverride = server.url("/v1").toString()
+        app.setContent { VolleyStatTheme { VolleyStatApp() } }
+        app.onAllNodesWithText("$HOME_TEAM - $AWAY_TEAM", substring = true).onFirst().performClick()
+        waitFor(text(R.string.rallies_title))
+        app.onNodeWithText(text(R.string.rallies_title)).performScrollTo().performClick()
+        waitFor(text(R.string.rallies_count, 3))
+    }
+
+    @Test fun theAppsOwnRangeEditorReadsTheVideoWithTheSessionInAHeader() {
+        startWithTheAppsOwnPlayers()
+        app.onNodeWithText("00:15 · 9 sn").performClick()
+        waitFor(text(R.string.action_choose_winner))
+        idleUntil("the editor's player reads the video") { videoReads.isNotEmpty() }
+        assertEquals(setOf("Bearer ${TestAccounts.SESSION.token}"), videoReads.toSet())
+    }
+
+    @Test fun theAppsOwnReviewClipReadsTheVideoWithTheSessionInAHeader() {
+        // Rally 2 has no answer yet, so the list offers the review.
+        winners = listOf("HOME", null, "HOME")
+        startWithTheAppsOwnPlayers()
+        tap(R.string.action_go_review)
+        waitFor(text(R.string.review_position, 2, 3))
+        idleUntil("the clip's player reads the video") { videoReads.isNotEmpty() }
+        assertEquals(setOf("Bearer ${TestAccounts.SESSION.token}"), videoReads.toSet())
     }
 
     @Test fun theReportOpenedFromAReviewAboveTheListIsTheOneReportThereIs() {

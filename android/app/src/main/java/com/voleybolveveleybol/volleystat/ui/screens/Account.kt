@@ -400,7 +400,11 @@ fun LoginScreen(
         when {
             account.sessionEnded -> Notice(stringResource(R.string.session_ended), Tone.CAUTION, Modifier.announced())
             account.confirmed == AccountChange.DELETED -> Notice(stringResource(R.string.account_deleted), Tone.POSITIVE, Modifier.announced())
-            account.confirmed == AccountChange.PHONE_DATA_DELETED -> Notice(stringResource(R.string.phone_data_deleted), Tone.POSITIVE, Modifier.announced())
+            account.confirmed == AccountChange.PHONE_DATA_DELETED -> {
+                val name = account.deletedFromPhone?.username
+                val done = if (name != null) stringResource(R.string.phone_data_deleted, name) else stringResource(R.string.phone_data_deleted_unnamed)
+                Notice(done, Tone.POSITIVE, Modifier.announced())
+            }
         }
         Text(stringResource(R.string.login_intro), style = MaterialTheme.typography.bodyMedium)
         if (!serverConfigured) Notice(stringResource(R.string.server_none), Tone.NEUTRAL)
@@ -413,13 +417,17 @@ fun LoginScreen(
 /**
  * A deletion whose answer was lost, after its session left the phone (review finding S1). The text
  * says what the app does not know. Telefondan Sil asks once more and then deletes only the phone's
- * data of that account; the server is not asked.
+ * data of that account; the server is not asked. An account whose username the phone can no longer
+ * read is named as such.
  */
 @Composable
 private fun UnconfirmedDeletionCard(doubt: UnconfirmedDeletion, enabled: Boolean, onDelete: () -> Unit) {
     var confirming by rememberSaveable { mutableStateOf(false) }
     val label = stringResource(R.string.action_delete_from_phone)
-    Notice(stringResource(R.string.deletion_unconfirmed, doubt.username, label), Tone.CAUTION, Modifier.announced())
+    val name = doubt.username
+    val offer = if (name != null) stringResource(R.string.deletion_unconfirmed, name, label) else stringResource(R.string.deletion_unconfirmed_unnamed, label)
+    val body = if (name != null) stringResource(R.string.delete_from_phone_body, name) else stringResource(R.string.delete_from_phone_body_unnamed)
+    Notice(offer, Tone.CAUTION, Modifier.announced())
     TextButton(
         onClick = { confirming = true }, enabled = enabled,
         modifier = Modifier.fillMaxWidth().heightIn(min = Dimens.touchTarget),
@@ -429,7 +437,7 @@ private fun UnconfirmedDeletionCard(doubt: UnconfirmedDeletion, enabled: Boolean
         AlertDialog(
             onDismissRequest = { confirming = false },
             title = { Text(stringResource(R.string.delete_from_phone_title)) },
-            text = { Text(stringResource(R.string.delete_from_phone_body, doubt.username), style = MaterialTheme.typography.bodyMedium) },
+            text = { Text(body, style = MaterialTheme.typography.bodyMedium) },
             confirmButton = {
                 TextButton(
                     onClick = { confirming = false; onDelete() }, enabled = enabled,

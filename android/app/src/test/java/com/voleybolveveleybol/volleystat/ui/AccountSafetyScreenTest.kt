@@ -95,9 +95,41 @@ class AccountSafetyScreenTest {
         compose.onNode(hasClickAction() and hasText(button) and hasAnyAncestor(isDialog())).performClick()
         assertEquals(1, deletions)
 
-        account = AccountUi(confirmed = AccountChange.PHONE_DATA_DELETED)
-        compose.onNodeWithText(text(R.string.phone_data_deleted)).assertIsDisplayed()
+        // The confirmation names the account whose data went: another account of the phone keeps its own (checker's finding).
+        account = AccountUi(confirmed = AccountChange.PHONE_DATA_DELETED, deletedFromPhone = doubt)
+        compose.onNodeWithText("Uygulama ali hesabının bu telefondaki maç kayıtlarını, kadrolarını ve kamerayla çektiğin videoları sildi.").assertIsDisplayed()
+        assertEquals("Uygulama ali hesabının bu telefondaki maç kayıtlarını, kadrolarını ve kamerayla çektiğin videoları sildi.", text(R.string.phone_data_deleted, "ali"))
         assertFalse(shown(text(R.string.deletion_unconfirmed, "ali", button)))
+    }
+
+    @Test fun anAccountWhoseUsernameThePhoneCanNoLongerReadIsOfferedWithoutAName() {
+        // A new keystore key or a damaged deletions.bin: the phone still knows the account's folder, not its name.
+        val unnamed = UnconfirmedDeletion("user-ali", null)
+        var account by mutableStateOf(AccountUi(unconfirmedDeletion = unnamed))
+        var deletions = 0
+        show { LoginScreen(account, onLogin = { _, _ -> }, onCreateAccount = {}, onDeletePhoneData = { deletions++ }) }
+
+        val button = text(R.string.action_delete_from_phone)
+        val offer = "Uygulama bir hesabı silme isteğinin yanıtını alamadı ve sunucunun hesabı silip silmediğini bilmiyor. " +
+            "Uygulama bu hesabın kullanıcı adını da okuyamadı. Sunucu hesabı silmediyse giriş yapınca maçlarını yeniden görürsün. " +
+            "Sunucu hesabı sildiyse bu telefondaki verilerini Telefondan Sil düğmesiyle silebilirsin."
+        assertEquals(offer, text(R.string.deletion_unconfirmed_unnamed, button))
+        compose.onNodeWithText(offer).assertIsDisplayed()
+        assertFalse("no missing name stands in a text", shown("null"))
+
+        compose.onNode(hasClickAction() and hasText(button) and !hasAnyAncestor(isDialog())).performScrollTo().performClick()
+        val body = "Uygulama kullanıcı adını okuyamadığı hesabın bu telefondaki maç kayıtlarını, kadrolarını ve kamerayla çektiğin videoları siler. " +
+            "Galeriden seçtiğin videolar galeride kalır. Uygulama bunun için sunucuya hiçbir istek göndermez."
+        assertEquals(body, text(R.string.delete_from_phone_body_unnamed))
+        compose.onNodeWithText(body).assertIsDisplayed()
+        compose.onNode(hasClickAction() and hasText(button) and hasAnyAncestor(isDialog())).performClick()
+        assertEquals(1, deletions)
+
+        account = AccountUi(confirmed = AccountChange.PHONE_DATA_DELETED, deletedFromPhone = unnamed)
+        val done = "Uygulama kullanıcı adını okuyamadığı hesabın bu telefondaki maç kayıtlarını, kadrolarını ve kamerayla çektiğin videoları sildi."
+        assertEquals(done, text(R.string.phone_data_deleted_unnamed))
+        compose.onNodeWithText(done).assertIsDisplayed()
+        assertFalse(shown("null"))
     }
 
     // Review finding S5: while someone is signed in, the server choice stays as it is.

@@ -131,6 +131,75 @@ class DeviceTokenStoreTest {
         assertEquals("device-veli", DeviceTokenStore(file, cipher).tokenFor("veli"))
     }
 
+    // Review finding S4, second round: only a file that is really damaged reads as empty. AndroidKeyStore throws
+    // IllegalBlockSizeException from doFinal for a keystore error that is not a bad tag, and other
+    // GeneralSecurityExceptions for errors that pass.
+
+    private val passing = listOf<() -> Exception>(
+        { java.security.GeneralSecurityException("transient") },
+        { javax.crypto.IllegalBlockSizeException("Keystore operation failed") },
+        { java.security.InvalidKeyException("Keystore operation failed") },
+        { java.security.UnrecoverableKeyException("Failed to obtain information about key") },
+        { java.security.InvalidAlgorithmParameterException("Keystore operation failed") },
+        { java.security.ProviderException("Keystore operation failed") },
+    )
+
+    @Test fun aFailureThatIsNoDamageIsTriedAgainAndBothTokensAreKept() {
+        passing.forEach { error ->
+            file.delete()
+            DeviceTokenStore(file, cipher).remember("ali", "device-ali")
+            DeviceTokenStore(file, FlakyCipher(cipher, failures = 1, error = error)).remember("veli", "device-veli")
+            val name = error().javaClass.simpleName
+            assertEquals(name, "device-ali", DeviceTokenStore(file, cipher).tokenFor("ali"))
+            assertEquals(name, "device-veli", DeviceTokenStore(file, cipher).tokenFor("veli"))
+        }
+    }
+
+    @Test fun aFailureThatIsNoDamageAndStaysLeavesTheFileAsItIsAndThrows() {
+        passing.forEach { error ->
+            file.delete()
+            DeviceTokenStore(file, cipher).remember("ali", "device-ali")
+            val before = file.readBytes()
+            val flaky = FlakyCipher(cipher, failures = 2, error = error)
+            val name = error().javaClass.simpleName
+            assertTrue(name, runCatching { DeviceTokenStore(file, flaky).remember("veli", "device-veli") }.isFailure)
+            flaky.failures = 2
+            assertTrue(name, runCatching { DeviceTokenStore(file, flaky).forget("ali") }.isFailure)
+            org.junit.Assert.assertArrayEquals(name, before, file.readBytes())
+            assertEquals(name, "device-ali", DeviceTokenStore(file, cipher).tokenFor("ali"))
+        }
+    }
+
+    @Test fun aChangedTagAnotherFormatACutShortFileAndSealedTextThatIsNoJsonAreDamage() {
+        val damage = linkedMapOf<String, (ByteArray) -> ByteArray>(
+            "changed tag" to { bytes -> bytes.copyOf().also { it[it.size - 3] = (it[it.size - 3].toInt() xor 1).toByte() } },
+            "another format" to { bytes -> bytes.copyOf().also { it[0] = 9 } },
+            "another nonce length" to { bytes -> bytes.copyOf().also { it[1] = 16 } },
+            "cut short" to { bytes -> bytes.copyOf(20) },
+            "no JSON" to { _ -> cipher.seal("kein json".toByteArray()) },
+        )
+        damage.forEach { (what, change) ->
+            file.delete()
+            DeviceTokenStore(file, cipher).remember("ali", "device-ali")
+            file.writeBytes(change(file.readBytes()))
+            val store = DeviceTokenStore(file, cipher)
+            assertNull(what, store.tokenFor("ali"))
+            store.remember("veli", "device-veli")
+            assertEquals(what, "device-veli", DeviceTokenStore(file, cipher).tokenFor("veli"))
+        }
+    }
+
+    @Test fun theCipherNamesItsOwnFormatAndLengthChecksAsDamage() {
+        val sealed = cipher.seal("{}".toByteArray())
+        listOf(byteArrayOf(9) + sealed.copyOfRange(1, sealed.size), sealed.copyOf(20), byteArrayOf(1, 16) + sealed.copyOfRange(2, sealed.size), byteArrayOf(1)).forEach { blob ->
+            try {
+                cipher.open(blob)
+                org.junit.Assert.fail("a damaged blob does not open")
+            } catch (expected: SealedFileDamaged) {
+            }
+        }
+    }
+
     // Review finding F1: deletions.bin, the accounts whose deletion is in doubt, sealed and kept like device.bin.
 
     @Test fun theAccountsInDoubtAreKeptNewestFirstSealedAndOneLeavesWithoutTheOthers() {
@@ -148,16 +217,81 @@ class DeviceTokenStoreTest {
         assertFalse("nothing left, no file", file.exists())
     }
 
-    @Test fun aKeystoreThatCanNotOpenTheDoubtsNowKeepsThemAll() {
+    // The checker's regression of S3 and F1: the accounts in doubt never hang on the keystore. deletions.ids names
+    // them in plain text (a user id is already the plain name of the account's folder); deletions.bin keeps only
+    // their usernames, sealed.
+
+    private val ids get() = File(folder.root, "device.ids")
+
+    @Test fun theAccountsInDoubtOutliveANewKeyAndAreKeptWithoutTheirUsernames() {
+        DeletionDoubtStore(file, cipher).apply {
+            add("u-1", "ali")
+            add("u-2", "veli")
+        }
+        assertEquals("the plain list names only the folders", listOf("u-2", "u-1"), org.json.JSONObject(ids.readText()).getJSONArray("accounts").let { a -> (0 until a.length()).map(a::getString) })
+        assertFalse(ids.readText().contains("ali") || ids.readText().contains("veli"))
+
+        // The keystore lost its key: the usernames can no longer be read, the accounts in doubt still can.
+        val newKey = KeyGenerator.getInstance("AES").apply { init(256) }.generateKey().let { key -> AesGcmCipher { key } }
+        val store = DeletionDoubtStore(file, newKey)
+        assertEquals(listOf("u-2" to null, "u-1" to null), store.load())
+        store.add("u-3", "ayse")
+        assertEquals(listOf("u-3" to "ayse", "u-2" to null, "u-1" to null), DeletionDoubtStore(file, newKey).load())
+        store.remove("u-2")
+        assertEquals(listOf("u-3" to "ayse", "u-1" to null), DeletionDoubtStore(file, newKey).load())
+        store.remove("u-3")
+        store.remove("u-1")
+        assertFalse("nothing left, no file", ids.exists() || file.exists())
+    }
+
+    @Test fun aDamagedFileOfUsernamesKeepsEveryAccountInDoubt() {
+        DeletionDoubtStore(file, cipher).add("u-1", "ali")
+        file.writeBytes(ByteArray(30) { 7 })
+        assertEquals(listOf("u-1" to null), DeletionDoubtStore(file, cipher).load())
+        file.delete()
+        assertEquals(listOf("u-1" to null), DeletionDoubtStore(file, cipher).load())
+    }
+
+    @Test fun aKeystoreThatCanNotOpenTheUsernamesNowKeepsEveryDoubtAndLeavesTheSealedFileAsItIs() {
         DeletionDoubtStore(file, cipher).add("user-ali", "ali")
+        val sealed = file.readBytes()
         val flaky = FlakyCipher(cipher, failures = 2) { java.security.KeyStoreException("busy") }
         val store = DeletionDoubtStore(file, flaky)
-        assertTrue(runCatching { store.add("user-veli", "veli") }.isFailure)
+        // Veli's doubt is kept although his username can not be sealed now, and Ali's username stays sealed.
+        store.add("user-veli", "veli")
+        org.junit.Assert.assertArrayEquals(sealed, file.readBytes())
+        assertEquals(listOf("user-veli" to null, "user-ali" to "ali"), DeletionDoubtStore(file, cipher).load())
         flaky.failures = 2
-        assertTrue(runCatching { store.remove("user-ali") }.isFailure)
+        assertEquals("a load that can not open the file gives the accounts without their usernames", listOf("user-veli" to null, "user-ali" to null), store.load())
+        // A doubt that ends leaves the list even while the keystore can not open the usernames.
         flaky.failures = 2
-        assertEquals("a load that can not open the file gives nothing now", emptyList<Pair<String, String>>(), store.load())
-        assertEquals(listOf("user-ali" to "ali"), DeletionDoubtStore(file, cipher).load())
+        store.remove("user-ali")
+        assertEquals(listOf("user-veli" to null), DeletionDoubtStore(file, cipher).load())
+        org.junit.Assert.assertArrayEquals(sealed, file.readBytes())
+    }
+
+    @Test fun theListOfAPhoneThatKeptOnlyTheSealedFileIsStillRead() {
+        // A phone of the first round kept the accounts in doubt in deletions.bin only.
+        val accounts = org.json.JSONArray(listOf(org.json.JSONObject().put("userId", "u-2").put("username", "veli"), org.json.JSONObject().put("userId", "u-1").put("username", "ali")))
+        file.writeBytes(cipher.seal(org.json.JSONObject().put("accounts", accounts).toString().toByteArray()))
+        val store = DeletionDoubtStore(file, cipher)
+        assertEquals(listOf("u-2" to "veli", "u-1" to "ali"), store.load())
+        store.add("u-3", "ayse")
+        assertEquals(listOf("u-3" to "ayse", "u-2" to "veli", "u-1" to "ali"), DeletionDoubtStore(file, cipher).load())
+        assertTrue(ids.exists())
+    }
+
+    @Test fun theListOfAPhoneThatKeptOnlyTheSealedFileIsNotReplacedWhileTheKeystoreCanNotOpenIt() {
+        val accounts = org.json.JSONArray(listOf(org.json.JSONObject().put("userId", "u-1").put("username", "ali")))
+        file.writeBytes(cipher.seal(org.json.JSONObject().put("accounts", accounts).toString().toByteArray()))
+        val sealed = file.readBytes()
+        val flaky = FlakyCipher(cipher, failures = 2) { java.security.KeyStoreException("busy") }
+        assertTrue(runCatching { DeletionDoubtStore(file, flaky).add("u-2", "veli") }.isFailure)
+        flaky.failures = 2
+        assertTrue(runCatching { DeletionDoubtStore(file, flaky).remove("u-1") }.isFailure)
+        org.junit.Assert.assertArrayEquals(sealed, file.readBytes())
+        assertFalse(ids.exists())
+        assertEquals(listOf("u-1" to "ali"), DeletionDoubtStore(file, cipher).load())
     }
 
     private fun sha256Hex(text: String) =

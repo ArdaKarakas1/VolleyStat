@@ -404,7 +404,13 @@ class ScreenshotTest {
         shot("14_giris_silme_belirsiz", content = login(doubt))
         shot("14_giris_silme_belirsiz_koyu", dark = true, content = login(doubt))
         shotOn("kucuk_buyuk_yazi_14_giris_silme_belirsiz", "+w320dp-h568dp-port", fontScale = 1.5f, content = login(doubt))
-        shot("14_giris_telefondan_silindi", content = login(AccountUi(confirmed = com.voleybolveveleybol.volleystat.AccountChange.PHONE_DATA_DELETED)))
+        val deleted = com.voleybolveveleybol.volleystat.AccountChange.PHONE_DATA_DELETED
+        shot("14_giris_telefondan_silindi", content = login(AccountUi(confirmed = deleted, deletedFromPhone = doubt.unconfirmedDeletion)))
+        // The same when the phone can no longer read the username (a new keystore key, a damaged deletions.bin).
+        val unnamed = com.voleybolveveleybol.volleystat.UnconfirmedDeletion("user-1", null)
+        shot("14_giris_silme_belirsiz_adsiz", content = login(AccountUi(unconfirmedDeletion = unnamed)))
+        shotOn("kucuk_buyuk_yazi_14_giris_silme_belirsiz_adsiz", "+w320dp-h568dp-port", fontScale = 1.5f, content = login(AccountUi(unconfirmedDeletion = unnamed)))
+        shot("14_giris_telefondan_silindi_adsiz", content = login(AccountUi(confirmed = deleted, deletedFromPhone = unnamed)))
         shotOn("kucuk_buyuk_yazi_14_giris", "+w320dp-h568dp-port", fontScale = 1.5f, content = login(AccountUi(problem = AuthProblem.TooManyAttempts(AttemptScope.DEVICE, 120))))
         shot("15_hesap_olustur", content = register())
         shot("15_hesap_olustur_koyu", dark = true, content = register())

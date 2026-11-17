@@ -4,6 +4,7 @@ import android.security.keystore.KeyGenParameterSpec
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.fail
@@ -36,19 +37,52 @@ import javax.crypto.spec.SecretKeySpec
 /** What the stand-in keystore holds and how it misbehaves. Each test starts it afresh. */
 private object Keystore {
     val entries = HashMap<String, SecretKey>()
-    /** Aliases whose key the keystore can no longer read (a corrupted key blob after an update, say). */
+    /**
+     * Aliases whose key the keystore reports as corrupted, as Keystore2's getKey does: an
+     * UnrecoverableKeyException whose cause is the keystore's own VALUE_CORRUPTED.
+     */
     val unreadable = HashSet<String>()
     /** The next this many reads of a key fail with this exception, as a busy keystore does. */
     var busyReads = 0
     var busyError: () -> Exception = { KeyStoreException("Keystore is busy") }
+    /** What the next reads of a key throw, one each. */
+    val readFailures = ArrayDeque<() -> Exception>()
+    /** What the next inits of the cipher throw, one each, as AndroidKeyStore's Cipher.init does. */
+    val initFailures = ArrayDeque<() -> Exception>()
     var deletes = 0
     var generated = 0
 
     fun reset() {
         entries.clear(); unreadable.clear(); busyReads = 0; deletes = 0; generated = 0
+        readFailures.clear(); initFailures.clear()
         busyError = { KeyStoreException("Keystore is busy") }
     }
 }
+
+/**
+ * The exception the keystore service gives the framework, made by the framework's own class
+ * (Robolectric runs the real android.security.KeyStoreException). [code] is the keystore's internal
+ * code: a ResponseCode of Keystore2, or a negative KeyMint error.
+ */
+internal fun keystoreError(code: Int): Exception =
+    Class.forName("android.security.KeyStoreException").getConstructor(Int::class.java, String::class.java).newInstance(code, "keystore code $code") as Exception
+
+/** Keystore2's ResponseCode and KeyMint's ErrorCode, as android.system.keystore2 and the KeyMint HAL define them. */
+internal object KeystoreCode {
+    const val SYSTEM_ERROR = 4
+    const val KEY_NOT_FOUND = 7
+    const val VALUE_CORRUPTED = 8
+    const val BACKEND_BUSY = 18
+    const val OPERATION_BUSY = 19
+    const val INVALID_KEY_BLOB = -33
+}
+
+/** What Keystore2's getKey throws for every keystore error but KEY_NOT_FOUND and KEY_PERMANENTLY_INVALIDATED. */
+internal fun failedKeyRead(code: Int): Exception =
+    UnrecoverableKeyException("Failed to obtain information about key").apply { initCause(keystoreError(code)) }
+
+/** What AndroidKeyStore's Cipher.init throws for a keystore error of the operation. */
+internal fun failedCipherInit(code: Int): Exception = java.security.InvalidKeyException("Keystore operation failed", keystoreError(code))
 
 class StandInKeyStoreSpi : KeyStoreSpi() {
     override fun engineGetKey(alias: String, password: CharArray?): Key? {
@@ -56,7 +90,8 @@ class StandInKeyStoreSpi : KeyStoreSpi() {
             Keystore.busyReads--
             throw Keystore.busyError()
         }
-        if (alias in Keystore.unreadable) throw UnrecoverableKeyException("Failed to obtain information about key")
+        Keystore.readFailures.removeFirstOrNull()?.let { throw it() }
+        if (alias in Keystore.unreadable) throw failedKeyRead(KeystoreCode.VALUE_CORRUPTED)
         return Keystore.entries[alias]
     }
     override fun engineDeleteEntry(alias: String) {
@@ -86,7 +121,39 @@ class StandInKeyGeneratorSpi : KeyGeneratorSpi() {
     override fun engineInit(params: AlgorithmParameterSpec?, random: SecureRandom?) { alias = (params as KeyGenParameterSpec).keystoreAlias }
     override fun engineInit(keysize: Int, random: SecureRandom?) {}
     override fun engineGenerateKey(): SecretKey =
-        SecretKeySpec(ByteArray(32).also { SecureRandom().nextBytes(it) }, "AES").also { Keystore.entries[alias!!] = it; Keystore.generated++ }
+        StandInKey(ByteArray(32).also { SecureRandom().nextBytes(it) }).also { Keystore.entries[alias!!] = it; Keystore.generated++ }
+}
+
+/**
+ * A key that never leaves the stand-in keystore, as an AndroidKeyStore key never does: it has no
+ * encoding, so only [StandInCipherSpi] can use it, and a failure there is not hidden by another provider.
+ */
+class StandInKey(val bytes: ByteArray) : SecretKey {
+    override fun getAlgorithm() = "AES"
+    override fun getFormat(): String? = null
+    override fun getEncoded(): ByteArray? = null
+}
+
+/** AES/GCM of the JVM, except that an init first throws what [Keystore.initFailures] holds. */
+class StandInCipherSpi : javax.crypto.CipherSpi() {
+    private val inner = javax.crypto.Cipher.getInstance(AesGcmCipher.TRANSFORMATION, "SunJCE")
+    private fun failIfAsked() {
+        Keystore.initFailures.removeFirstOrNull()?.let { throw it() }
+    }
+    private fun usable(key: Key): Key = (key as? StandInKey)?.let { SecretKeySpec(it.bytes, "AES") } ?: key
+    override fun engineSetMode(mode: String?) {}
+    override fun engineSetPadding(padding: String?) {}
+    override fun engineGetBlockSize() = inner.blockSize
+    override fun engineGetOutputSize(inputLen: Int) = inner.getOutputSize(inputLen)
+    override fun engineGetIV(): ByteArray? = inner.iv
+    override fun engineGetParameters(): java.security.AlgorithmParameters? = inner.parameters
+    override fun engineInit(opmode: Int, key: Key, random: SecureRandom?) { failIfAsked(); inner.init(opmode, usable(key), random) }
+    override fun engineInit(opmode: Int, key: Key, params: AlgorithmParameterSpec?, random: SecureRandom?) { failIfAsked(); inner.init(opmode, usable(key), params, random) }
+    override fun engineInit(opmode: Int, key: Key, params: java.security.AlgorithmParameters?, random: SecureRandom?) { failIfAsked(); inner.init(opmode, usable(key), params, random) }
+    override fun engineUpdate(input: ByteArray?, inputOffset: Int, inputLen: Int): ByteArray? = inner.update(input, inputOffset, inputLen)
+    override fun engineUpdate(input: ByteArray?, inputOffset: Int, inputLen: Int, output: ByteArray?, outputOffset: Int) = inner.update(input, inputOffset, inputLen, output, outputOffset)
+    override fun engineDoFinal(input: ByteArray?, inputOffset: Int, inputLen: Int): ByteArray = inner.doFinal(input, inputOffset, inputLen)
+    override fun engineDoFinal(input: ByteArray?, inputOffset: Int, inputLen: Int, output: ByteArray?, outputOffset: Int) = inner.doFinal(input, inputOffset, inputLen, output, outputOffset)
 }
 
 /** A JCA provider named like Android's, so [KeystoreSessionCipher] runs its own code against it on the JVM. */
@@ -94,13 +161,14 @@ class StandInKeystoreProvider : java.security.Provider("AndroidKeyStore", 1.0, "
     init {
         put("KeyStore.AndroidKeyStore", StandInKeyStoreSpi::class.java.name)
         put("KeyGenerator.AES", StandInKeyGeneratorSpi::class.java.name)
+        put("Cipher.${AesGcmCipher.TRANSFORMATION}", StandInCipherSpi::class.java.name)
     }
 }
 
 /**
- * The keystore key that seals session.bin and device.bin (review finding S3). A key the keystore
- * can no longer use is replaced once, so the phone can keep a session again; a keystore that is
- * only busy keeps its key.
+ * The keystore key that seals session.bin, device.bin and deletions.bin (review finding S3). A key
+ * the keystore reports as lost for good is replaced once, so the phone can keep a session again.
+ * Any other keystore error keeps the key: the call is tried once more and otherwise fails alone.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
@@ -137,13 +205,82 @@ class KeystoreSessionCipherTest {
         assertEquals(2, Keystore.generated)
     }
 
-    @Test fun aKeyTheCipherRefusesIsReplacedOnceAndTheSealSucceeds() {
-        // A key that the cipher refuses at init (InvalidKeyException), as a key that the keystore made unusable.
-        Keystore.entries[alias] = SecretKeySpec(ByteArray(5), "AES")
-        val sealed = KeystoreSessionCipher().seal("yeni".toByteArray())
-        assertArrayEquals("yeni".toByteArray(), KeystoreSessionCipher().open(sealed))
-        assertEquals(1, Keystore.deletes)
+    @Test fun aKeyTheCipherRefusesForGoodIsReplacedOnceAndTheSealSucceeds() {
+        // The cipher refuses the key at init as AndroidKeyStore does when KeyMint can no longer use its blob, when the
+        // key is gone, or when the keystore invalidated it.
+        listOf(
+            { failedCipherInit(KeystoreCode.INVALID_KEY_BLOB) },
+            { failedCipherInit(KeystoreCode.KEY_NOT_FOUND) },
+            { failedCipherInit(KeystoreCode.VALUE_CORRUPTED) },
+            { android.security.keystore.KeyPermanentlyInvalidatedException("Key permanently invalidated") },
+        ).forEachIndexed { index, refusal ->
+            KeystoreSessionCipher().seal("eski".toByteArray())
+            Keystore.initFailures += refusal
+            val sealed = KeystoreSessionCipher().seal("yeni".toByteArray())
+            assertArrayEquals("yeni".toByteArray(), KeystoreSessionCipher().open(sealed))
+            assertEquals(refusal().toString(), index + 1, Keystore.deletes)
+            assertEquals(refusal().toString(), index + 2, Keystore.generated)
+        }
+    }
+
+    // The checker's regression of S3: Keystore2's getKey turns every keystore error but KEY_NOT_FOUND into an
+    // UnrecoverableKeyException, and Cipher.init turns every error of the operation into an InvalidKeyException.
+    // One error that passes must not cost the key, and with it the session, the device tokens and the doubts.
+
+    private val passing = listOf(KeystoreCode.SYSTEM_ERROR, KeystoreCode.BACKEND_BUSY, KeystoreCode.OPERATION_BUSY)
+
+    private fun sealedFiles(): Triple<File, File, File> {
+        val files = Triple(File(folder.root, "session.bin"), File(folder.root, "device.bin"), File(folder.root, "deletions.bin"))
+        SessionStore(files.first, KeystoreSessionCipher()).save(session)
+        DeviceTokenStore(files.second, KeystoreSessionCipher()).remember("ali", "device-ali")
+        DeletionDoubtStore(files.third, KeystoreSessionCipher()).add("user-veli", "veli")
+        return files
+    }
+
+    private fun assertReadable(files: Triple<File, File, File>) {
+        assertEquals(session, SessionStore(files.first, KeystoreSessionCipher()).load())
+        assertEquals("device-ali", DeviceTokenStore(files.second, KeystoreSessionCipher()).tokenFor("ali"))
+        assertEquals(listOf("user-veli" to "veli"), DeletionDoubtStore(files.third, KeystoreSessionCipher()).load())
+    }
+
+    @Test fun aKeystoreErrorThatPassesWhileReadingTheKeyKeepsTheKeyAndTheOldFiles() {
+        val files = sealedFiles()
+        passing.forEach { code ->
+            // The framework does not call these errors transient, so isTransientFailure() can not tell them from a lost key.
+            assertFalse((keystoreError(code) as android.security.KeyStoreException).isTransientFailure)
+            Keystore.readFailures += { failedKeyRead(code) }
+            assertEquals("one failed read is tried again with the same key", session, SessionStore(files.first, KeystoreSessionCipher()).load())
+            Keystore.readFailures += { failedKeyRead(code) }
+            Keystore.readFailures += { failedKeyRead(code) }
+            try {
+                KeystoreSessionCipher().seal("sonra".toByteArray())
+                fail("two failed reads fail this call")
+            } catch (expected: UnrecoverableKeyException) {
+            }
+            assertReadable(files)
+        }
+        // A read that fails without a cause shows nothing either.
+        Keystore.readFailures += { UnrecoverableKeyException("Failed to obtain information about key") }
+        assertReadable(files)
+        assertEquals("the key stays", 0, Keystore.deletes)
         assertEquals(1, Keystore.generated)
+    }
+
+    @Test fun aKeystoreErrorThatPassesWhenTheCipherStartsKeepsTheKeyAndTheOldFiles() {
+        val files = sealedFiles()
+        passing.forEach { code ->
+            Keystore.initFailures += { failedCipherInit(code) }
+            assertReadable(files)
+            Keystore.initFailures += { failedCipherInit(code) }
+            Keystore.initFailures += { failedCipherInit(code) }
+            try {
+                KeystoreSessionCipher().seal("sonra".toByteArray())
+                fail("two failed inits fail this call")
+            } catch (expected: java.security.InvalidKeyException) {
+            }
+            assertReadable(files)
+        }
+        assertEquals("the key stays", 0, Keystore.deletes)
     }
 
     @Test fun aBusyKeystoreKeepsItsKeyAndTheSecondTrySucceeds() {

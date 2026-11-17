@@ -107,9 +107,11 @@ enum class AccountChange { DISPLAY_NAME, PASSWORD, DELETED, PHONE_DATA_DELETED }
  * that the account is still there (review finding S1). The server may have deleted it, so its
  * folder may be one that no login can reach again. The login screen offers to delete that folder
  * and the account's device token; nothing goes before the user says so. The offer is kept in
- * deletions.bin until the user answers it or the account logs in again, through any restart (F1).
+ * deletions.ids until the user answers it or the account logs in again, through any restart (F1),
+ * and through a new keystore key. [username] is null when the phone can not read it now (the sealed
+ * deletions.bin, a new key or a damaged file): the offer then names no account.
  */
-data class UnconfirmedDeletion(val userId: String, val username: String)
+data class UnconfirmedDeletion(val userId: String, val username: String?)
 
 /** The question of the first login about the data app 0.7 kept for its one user (design 10.3). */
 data class LegacyQuestion(val titles: List<String>, val teams: Int, val recordings: Int, val draft: Boolean)
@@ -138,6 +140,8 @@ data class AccountUi(
     val confirmed: AccountChange? = null,
     /** The account whose phone data the login screen offers to delete. A login of that account withdraws the offer. */
     val unconfirmedDeletion: UnconfirmedDeletion? = null,
+    /** The account whose phone data the app deleted, for the text of [AccountChange.PHONE_DATA_DELETED]: the other accounts keep theirs. */
+    val deletedFromPhone: UnconfirmedDeletion? = null,
     /**
      * The phone could not seal the session at login (the keystore failed). The session lives in
      * memory only, so the next start asks for the password; Home says so. A later save that works clears it.
@@ -262,7 +266,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         /**
          * The refusals of POST /me/delete that the server gives only after it found the session
          * (backend/app/accounts.py, delete_account): the account was still there. A 422 comes
-         * before that check, so it shows nothing.
+         * before that check, so it shows nothing; it and every other 4xx but 401 put the mark back
+         * to what it was before the request.
          */
         private val ANSWERS_OF_A_LIVE_SESSION = setOf("PASSWORD_WRONG", "TOO_MANY_ATTEMPTS", "SERVER_BUSY")
     }
@@ -1163,7 +1168,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         } catch (error: ApiException) {
             when {
                 error.code != "AUTH_REQUIRED" -> {
-                    if (error.code in ANSWERS_OF_A_LIVE_SESSION) markDeletion(sent, unanswered = false)
+                    when {
+                        // The server found the session and refused: the account is still there.
+                        error.code in ANSWERS_OF_A_LIVE_SESSION -> markDeletion(sent, unanswered = false)
+                        // A refusal that comes before the server acts on the account (a 422 for a password of more than
+                        // 1024 characters, say) says nothing about this deletion. The mark is what it was before it.
+                        error.status in 400..499 -> markDeletion(sent, unanswered = earlier)
+                        // A 5xx may come after the deletion: the mark stays, as for a missing answer.
+                    }
                     throw error
                 }
                 // The server ended the session before this deletion, and no earlier deletion is in doubt.
@@ -1233,10 +1245,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         runCatching { folders.delete(doubt.userId) }
         // A folder that is still there keeps the offer, so the user can try again.
         if (runCatching { folders.of(doubt.userId).root.exists() }.getOrDefault(true)) return@synchronized
-        runCatching { deviceTokens.forget(doubt.username) }
+        // Without its username the phone can not name the device token. Its own device.bin then went with the old key.
+        doubt.username?.let { name -> runCatching { deviceTokens.forget(name) } }
         dropDoubt(doubt.userId)
         // The next account in doubt, if any, takes its place on the login screen.
-        _state.update { it.copy(account = it.account.copy(unconfirmedDeletion = inDoubt.firstOrNull(), confirmed = AccountChange.PHONE_DATA_DELETED)) }
+        _state.update {
+            it.copy(account = it.account.copy(unconfirmedDeletion = inDoubt.firstOrNull(), confirmed = AccountChange.PHONE_DATA_DELETED, deletedFromPhone = doubt))
+        }
     }
 
     /**

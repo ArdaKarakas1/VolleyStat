@@ -596,11 +596,17 @@
     <!-- A deletion got no answer, and the session then left the phone without a sign that the account is still there.
          %1$s is the username, %2$s the label of action_delete_from_phone. -->
     <string name="deletion_unconfirmed">Uygulama %1$s hesabını silme isteğinin yanıtını alamadı ve sunucunun hesabı silip silmediğini bilmiyor. Sunucu hesabı silmediyse giriş yapınca maçlarını yeniden görürsün. Sunucu hesabı sildiyse bu telefondaki verilerini %2$s düğmesiyle silebilirsin.</string>
+    <!-- The same offer when the phone can no longer read the username (a new keystore key, a damaged deletions.bin).
+         %1$s is the label of action_delete_from_phone. -->
+    <string name="deletion_unconfirmed_unnamed">Uygulama bir hesabı silme isteğinin yanıtını alamadı ve sunucunun hesabı silip silmediğini bilmiyor. Uygulama bu hesabın kullanıcı adını da okuyamadı. Sunucu hesabı silmediyse giriş yapınca maçlarını yeniden görürsün. Sunucu hesabı sildiyse bu telefondaki verilerini %1$s düğmesiyle silebilirsin.</string>
     <string name="action_delete_from_phone">Telefondan Sil</string>
     <string name="delete_from_phone_title">Bu telefondaki verileri silmek istiyor musun?</string>
     <!-- %1$s is the username. -->
     <string name="delete_from_phone_body">Uygulama %1$s hesabının bu telefondaki maç kayıtlarını, kadrolarını ve kamerayla çektiğin videoları siler. Galeriden seçtiğin videolar galeride kalır. Uygulama bunun için sunucuya hiçbir istek göndermez.</string>
-    <string name="phone_data_deleted">Uygulama bu telefondaki maç kayıtlarını, kadroları ve kamerayla çektiğin videoları sildi.</string>
+    <string name="delete_from_phone_body_unnamed">Uygulama kullanıcı adını okuyamadığı hesabın bu telefondaki maç kayıtlarını, kadrolarını ve kamerayla çektiğin videoları siler. Galeriden seçtiğin videolar galeride kalır. Uygulama bunun için sunucuya hiçbir istek göndermez.</string>
+    <!-- %1$s is the username of the account whose data went. Another account of the phone keeps its own. -->
+    <string name="phone_data_deleted">Uygulama %1$s hesabının bu telefondaki maç kayıtlarını, kadrolarını ve kamerayla çektiğin videoları sildi.</string>
+    <string name="phone_data_deleted_unnamed">Uygulama kullanıcı adını okuyamadığı hesabın bu telefondaki maç kayıtlarını, kadrolarını ve kamerayla çektiğin videoları sildi.</string>
     <!-- The keystore could not seal session.bin at login: the session lives in memory until the app ends. -->
     <string name="session_not_kept">Uygulama oturumunu bu telefona kaydedemedi, bu yüzden bir sonraki açılışta şifreni yeniden sorar.</string>
     <!-- A session belongs to the server that opened it, so the choice waits for a logout. -->
