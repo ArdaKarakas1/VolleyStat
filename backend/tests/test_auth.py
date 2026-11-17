@@ -1186,7 +1186,8 @@ def test_a_deletion_waits_for_a_short_reader_before_it_empties_the_log(api, stor
     reader = sqlite3.connect(storage / "volleystat.sqlite3", check_same_thread=False)
     reader.execute("BEGIN")
     reader.execute("SELECT COUNT(*) FROM users").fetchall()
-    finished = threading.Timer(0.3, reader.rollback)
+    # Longer than one wait of SQLite's busy handler, shorter than all the attempts together.
+    finished = threading.Timer(0.6, reader.rollback)
     finished.start()
     try:
         assert api.post("/v1/me/delete", headers=bearer(body["session"]["token"]), json={"password": PASSWORD}).status_code == 204
@@ -1196,3 +1197,58 @@ def test_a_deletion_waits_for_a_short_reader_before_it_empties_the_log(api, stor
             assert trace.encode() not in files, trace
     finally:
         reader.close()
+
+
+def test_a_lock_names_whole_seconds_rounded_up():
+    limiter = accounts.Limiter()
+    keys = accounts.login_keys("ayse.k", "local")
+    for _ in range(5):
+        limiter.fail(keys, 100.0)
+    assert limiter.wait(keys, 100.5) == (30, "USER")
+
+
+def test_a_full_limiter_of_locked_keys_keeps_them_and_tracks_no_new_key():
+    limiter = accounts.Limiter(max_keys=2)
+    first, second = accounts.login_keys("ayse.k", "a")[:1], accounts.login_keys("mert.b", "b")[:1]
+    for _ in range(5):
+        limiter.fail(first, 100.0)
+        limiter.fail(second, 100.0)
+    limiter.fail(accounts.login_keys("yeni.kisi", "c")[:1], 101.0)
+    assert limiter.wait(first, 102.0) is not None and limiter.wait(second, 102.0) is not None
+
+
+def test_a_password_is_casefolded_and_not_only_lowered(api):
+    # Casefolding turns ß into ss; lowering keeps ß.
+    response = register(api, username="strasse.k", password="Straße.k-2026-x")
+    assert error(response)["details"]["reason"] == "CONTAINS_USERNAME"
+
+
+def test_a_session_ends_exactly_thirty_days_after_its_last_use(api, clock):
+    token = token_of(register(api))
+    clock.advance(days=30)
+    assert api.get("/v1/me", headers=bearer(token)).status_code == 401
+
+
+def test_a_session_ends_exactly_180_days_after_it_opened(api, storage, clock):
+    token = token_of(register(api))
+    for _ in range(6):
+        clock.advance(days=29)
+        assert api.get("/v1/me", headers=bearer(token)).status_code == 200
+    clock.advance(days=6)
+    assert api.get("/v1/me", headers=bearer(token)).status_code == 401
+
+
+def test_an_ended_session_is_removed_when_it_is_shown(api, storage, clock):
+    token = token_of(register(api))
+    clock.advance(days=31)
+    assert api.get("/v1/me", headers=bearer(token)).status_code == 401
+    assert rows(storage, "SELECT COUNT(*) FROM sessions") == [(0,)]
+
+
+def test_a_session_records_its_use_exactly_an_hour_later(api, storage, clock):
+    token = token_of(register(api))
+    written = rows(storage, "SELECT last_used_at FROM sessions")[0][0]
+    clock.advance(hours=1)
+    api.get("/v1/me", headers=bearer(token))
+    assert rows(storage, "SELECT last_used_at FROM sessions")[0][0] != written
+

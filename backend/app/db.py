@@ -13,8 +13,10 @@ from .errors import fail
 
 log = logging.getLogger(__name__)
 
-# How often and how far apart a deletion tries to empty the write-ahead log while a reader is busy.
+# How long a deletion waits for a reader before it gives up emptying the write-ahead log: each
+# attempt waits CHECKPOINT_WAIT in SQLite's busy handler, CHECKPOINT_ATTEMPTS times, about 3 s in all.
 CHECKPOINT_ATTEMPTS = 20
+CHECKPOINT_WAIT = 0.1
 CHECKPOINT_PAUSE = 0.05
 
 # No comment inside a CREATE TABLE below may hold a comma. An older SQLite that drops a column
@@ -317,7 +319,7 @@ def empty_write_ahead_log(db_path: Path) -> None:
     # A short wait: the deletion is already committed, and a reader must not hold its answer back.
     # A reader in the middle of a transaction makes the checkpoint answer busy, so it is tried a
     # few more times while such a reader finishes.
-    conn = sqlite3.connect(db_path, timeout=1)
+    conn = sqlite3.connect(db_path, timeout=CHECKPOINT_WAIT)
     try:
         for attempt in range(CHECKPOINT_ATTEMPTS):
             busy, _log_pages, _moved = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()

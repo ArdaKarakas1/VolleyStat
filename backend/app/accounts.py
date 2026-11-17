@@ -339,6 +339,8 @@ class Limiter:
         return count + sum(1 for moment in entry["times"] if at - moment < FORGET_AFTER)
 
     def _make_room(self, at: float, written: set[str]) -> None:
+        # The limiter grows only by a key's first failure, and a first failure never locks a key,
+        # so there is always an unlocked key to forget: at worst the one just written.
         while len(self._entries) > self.max_keys:
             victim, fewest = None, None
             for name, entry in self._entries.items():
@@ -347,9 +349,6 @@ class Limiter:
                 failures = self._recent_failures(entry, at)
                 if fewest is None or failures < fewest:
                     victim, fewest = name, failures
-            if victim is None:
-                # Every key is locked: the key just written leaves.
-                victim = next(reversed(self._entries))
             if victim in written and time.monotonic() - self._full_logged_at > 60:
                 self._full_logged_at = time.monotonic()
                 log.warning("The login limiter is full; a new key is not tracked")
@@ -644,9 +643,9 @@ def router(connect, db_path: Path, signup_mode: str, limiter: Limiter, pool: Has
         def create() -> dict[str, Any]:
             with connect(write=True) as db:
                 if code_hash is not None and db.execute(
-                        "DELETE FROM operator_codes WHERE code_hash=? AND kind='SIGNUP' AND expires_at > ?",
-                        (code_hash, iso(moment))).rowcount != 1:
-                    # Another registration used the code in the meantime.
+                        "DELETE FROM operator_codes WHERE code_hash=? AND kind='SIGNUP'", (code_hash,)).rowcount != 1:
+                    # Another registration used the code in the meantime. (Its expiry was checked at this
+                    # request's moment above, so a check here would add nothing.)
                     fail("SIGNUP_CODE_INVALID", "The operator code is not valid", 403)
                 if db.execute("SELECT 1 FROM users WHERE username=?", (payload.username,)).fetchone():
                     fail("USERNAME_TAKEN", "The username is taken", 409)
