@@ -53,7 +53,7 @@ private const val AWAY_TEAM = "Cihaz Misafir"
  * demo analyzer with VOLLEYSTAT_SIGNUP=open: open an account through the screens, create a
  * match, record a few seconds with the camera, upload, wait for the server's file check and the
  * demo job, watch the clip, move the end of a rally in the range editor, answer every rally and
- * read the report. The account is deleted at the end.
+ * read the report. The account is deleted at the end, and the server deletes its match with it.
  *
  * Skipped when the device has no camera or the backend does not answer. The demo analyzer
  * invents its rally intervals, so this proves the plumbing and nothing about analysis quality.
@@ -80,18 +80,25 @@ class DeviceFlowE2eTest {
         }
 
         override fun after() {
-            runCatching { storedMatch()?.session?.serverMatchId?.let(api::deleteMatch) }
-            // The session the app sealed with the keystore's key, or a fresh one: the account goes either way.
-            runCatching {
-                val token = runCatching { SessionStore(File(target.filesDir, "session.bin"), KeystoreSessionCipher()).load()?.token }.getOrNull()
-                    ?: api.login(username, password, null).token
-                ApiClient(BuildConfig.API_URL_EMULATOR, token = token).deleteAccount(password)
-            }
+            val client = runCatching { signedIn() }.getOrNull() ?: return
+            runCatching { storedMatch()?.session?.serverMatchId?.let(client::deleteMatch) }
+            // The account goes either way, and the server deletes its matches with it.
+            runCatching { client.deleteAccount(password) }
         }
     }
     @get:Rule(order = 2) val app = createAndroidComposeRule<MainActivity>()
 
     private fun text(id: Int, vararg args: Any) = target.getString(id, *args)
+
+    /**
+     * A client with the session the app sealed with the keystore's key, or with a fresh one when the app could
+     * not keep it. From server 0.9 on every match route needs a session, the test's own reads included.
+     */
+    private fun signedIn(): ApiClient {
+        val token = runCatching { SessionStore(File(target.filesDir, "session.bin"), KeystoreSessionCipher()).load()?.token }.getOrNull()
+            ?: api.login(username, password, null).token
+        return ApiClient(BuildConfig.API_URL_EMULATOR, token = token)
+    }
 
     private fun textsOf(node: SemanticsNode): List<String> =
         node.config.getOrElse(SemanticsProperties.Text) { emptyList() }.map { it.text } + node.children.flatMap(::textsOf)
@@ -168,7 +175,8 @@ class DeviceFlowE2eTest {
         assertEquals("The server did not accept the recording. ${evidence()}", VideoCheck.READY, match.check!!.status)
         waitForText(text(R.string.action_start_review), 60_000)
         app.onNodeWithText(text(R.string.demo_title)).assertIsDisplayed()
-        val job = api.latestAnalysis(match.check!!.videoId)!!
+        val server = signedIn()
+        val job = server.latestAnalysis(match.check!!.videoId)!!
         assertEquals(AnalysisSummary.NEEDS_REVIEW, job.state)
         app.onNodeWithText(text(R.string.action_start_review)).performClick()
 
@@ -183,7 +191,7 @@ class DeviceFlowE2eTest {
 
         // The range editor, on the same player as the user gets. The video runs on its own from the start
         // of the rally, the bar moves the picture, and the mark is the moment the screen shows.
-        val list = api.rallies(job.id)
+        val list = server.rallies(job.id)
         val rally = list.rallies.first()
         val window = rallyTarget(list, rally.id)!!
         app.onNodeWithText(text(R.string.review_fix_rally)).performClick()
@@ -199,7 +207,7 @@ class DeviceFlowE2eTest {
         app.onNodeWithText(text(R.string.action_end_here)).performClick()
         // One applied correction closes the editor. The rally asks for its winner on the new clip.
         waitForText(text(R.string.review_position, 1, job.rallies))
-        assertEquals("The end of the rally is not the moment the editor showed. ${evidence()}", mark, api.rallies(job.id).rallies.first().endMs)
+        assertEquals("The end of the rally is not the moment the editor showed. ${evidence()}", mark, server.rallies(job.id).rallies.first().endMs)
 
         for (position in 1..job.rallies) {
             waitForText(text(R.string.review_position, position, job.rallies))
@@ -212,7 +220,7 @@ class DeviceFlowE2eTest {
         waitForText(text(R.string.report_verification_done))
         app.onNodeWithText(text(R.string.demo_title)).assertIsDisplayed()
         app.onNodeWithText("${job.rallies}-0").assertIsDisplayed()
-        val report = api.report(match.session.serverMatchId!!)!!
+        val report = server.report(match.session.serverMatchId!!)!!
         assertEquals(job.rallies, report.home.points.value)
         assertEquals(0, report.away.points.value)
     }

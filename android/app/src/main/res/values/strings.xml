@@ -217,18 +217,22 @@
     <string name="phase_verifying">Sunucu dosyayı kontrol ediyor</string>
     <string name="upload_amount">%1$s / %2$s</string>
     <string name="percent">%%%1$d</string>
-    <string name="upload_keep_open">Yükleme bitene kadar uygulamayı açık tut. Yükleme yarıda kalırsa kaldığı yerden sürer.</string>
+    <string name="upload_keep_open">Yükleme bitene kadar uygulamayı açık tut. Yükleme yarıda kalırsa bir gün içinde kaldığı yerden sürdürebilirsin.</string>
     <string name="upload_paused">Yüklemeyi sen duraklattın.</string>
     <string name="upload_waiting">Yükleme başlamayı bekliyor.</string>
     <string name="upload_stopped">Yükleme durdu.</string>
     <string name="action_pause">Duraklat</string>
     <string name="action_resume">Sürdür</string>
     <string name="action_cancel_upload">Yüklemeyi İptal Et</string>
-    <string name="upload_kept">Sunucu videonun %1$s kadarını aldı ve saklıyor.</string>
+    <string name="upload_kept">Sunucu videonun %1$s kadarını aldı. Yükleme bir gün boyunca sürmezse sunucu bu kısmı siler.</string>
     <string name="upload_error_unreachable">Uygulama sunucuya ulaşamadı.</string>
     <string name="upload_error_too_large">Video sunucunun boyut sınırını aşıyor.</string>
     <string name="upload_error_source">Uygulama videoyu telefondan okuyamadı. Video silinmiş ya da taşınmış olabilir.</string>
     <string name="upload_error_refused">Sunucu yüklemeyi kabul etmedi.</string>
+    <!-- Slice B3: the server's limits, worded with the numbers the server sent (docs/API_V1.md, Depolama sınırları). -->
+    <string name="upload_quota_personal">Sunucu bu hesabın kişisel maç videolarına %1$s yer ayırdı. Sunucu bu hesaba en çok %2$s yer ayırır. Yeni video için önce eski bir maçı silebilirsin.</string>
+    <string name="upload_quota_server">Sunucu bütün hesapların kişisel maç videolarına en çok %1$s yer ayırır. Bu video kalan yere sığmadı. Video telefonunda kalır. Yüklemeyi sonra yeniden deneyebilirsin.</string>
+    <string name="upload_storage_full">Bu video sunucunun diskindeki boş yeri %1$s sınırının altına indirirdi. Sunucu bu yüzden yüklemeyi durdurdu. Video telefonunda kalır. Yüklemeyi sonra yeniden deneyebilirsin.</string>
     <string name="upload_error_checksum">Sunucuya ulaşan dosya telefondaki dosyayla iki kez uyuşmadı.</string>
     <string name="upload_busy">Uygulama aynı anda tek video yükler. Öteki yükleme bitince bu yüklemeyi başlat.</string>
     <string name="upload_blocked">Uygulama bu videoyu yükleyemez. Yüklemeyi iptal et ve başka bir videoyla yeni maç başlat.</string>
@@ -238,6 +242,12 @@
     <string name="cancel_title">Yüklemeyi iptal edeyim mi?</string>
     <string name="cancel_body">Sunucu aldığı kısmı ve maç bilgilerini siler. Uygulama bu maçı listeden kaldırır. Video telefonunda kalır.</string>
     <string name="cancel_confirm">İptal Et</string>
+    <!-- Slice B3: a match the server does not show to this account (403 NOT_A_MEMBER, design 10.7). -->
+    <string name="match_no_access_title">Bu hesabın bu maça erişimi yok</string>
+    <string name="match_no_access">Sunucu bu maçı bu hesaba göstermiyor. Sunucunun eski sürümleri maçları hiçbir hesaba bağlamıyordu. Uygulama bu maçı o sürümlerden birine yüklediyse Voleybol Ve Veleybol maçı hesabına bağlayabilir. Maçı telefondan da kaldırabilirsin.</string>
+    <string name="action_remove_from_phone">Telefondan Kaldır</string>
+    <string name="remove_from_phone_title">Bu maçı telefondan kaldırayım mı?</string>
+    <string name="remove_from_phone_body">Uygulama maç kaydını yalnız bu telefondan siler ve sunucuya bir istek göndermez. Telefonundaki video dosyası kalır.</string>
     <string name="stage_upload">Video yükleme</string>
     <string name="stage_upload_done">Sunucu videoyu aldı.</string>
     <string name="stage_check">Dosya kontrolü</string>
@@ -492,10 +502,10 @@
     <!-- What the users, sessions and login_devices tables of the server hold (review finding T1). -->
     <string name="privacy_accounts">Sunucu hesabın için kullanıcı adını, görünen adını ve şifrenin özetini saklar. Sunucu hesabın ne zaman ve nasıl açıldığını ve şifrenin son değiştiği zamanı da kaydeder. Her oturum ve giriş yaptığın her telefon için sunucu bir anahtar özetini ve kullanım zamanlarını saklar. Uygulama e-posta adresini ve telefon numaranı sormaz.</string>
     <!-- B2: the match routes do not check the session until slice B3, so anyone who reaches the server reaches every video. -->
-    <string name="privacy_matches_open">Sunucu maçları ve videoları henüz hesaplara bağlamıyor. Sunucunun çalıştığı bilgisayarı kullanan herkes yüklediğin videoları görebilir. Oyuncuların izin vermediği videoları ve telifli yayınları yükleme.</string>
+    <string name="privacy_matches">Sunucu maçlarını ve videolarını hesabına bağlar ve yalnız bu hesapla giriş yapan kişiye gösterir. Sunucunun çalıştığı bilgisayarı kullanan kişi sunucunun dosyalarındaki videoları yine de açabilir. Oyuncuların izin vermediği videoları ve telifli yayınları yükleme.</string>
     <string name="privacy_phone_accounts">Uygulama bu telefonda her hesabın maçlarını, kadrolarını ve kamera kayıtlarını ayrı tutar. Bu telefonda başka bir hesapla giriş yapan kişi uygulamada senin maçlarını görmez.</string>
     <string name="privacy_session">Uygulama şifreni telefona yazmaz ve oturum bilgisini telefonun anahtar deposundaki bir anahtarla şifreleyip saklar.</string>
-    <string name="privacy_retention">Sunucu hesabını sen silene kadar saklar. Sunucu videoyu ve maç bilgilerini sen maçı silene kadar saklar.</string>
+    <string name="privacy_retention">Sunucu hesabını sen silene kadar saklar. Sunucu videoyu ve maç bilgilerini sen maçı ya da hesabını silene kadar saklar. Yükleme bir gün boyunca sürmezse sunucu yarım kalan videonun aldığı kısmını siler.</string>
     <string name="privacy_delete">Sen maçı silince sunucu o maçın videosunu, analiz sonuçlarını, verdiğin kararları, yaptığın düzeltmeleri ve maç bilgilerini siler. Telefonundaki video dosyası kalır. Sen hesabını silince sunucu hesabın için sakladığı bütün bilgileri siler.</string>
     <string name="privacy_faces">Uygulama ve sunucu yüz tanımaz. Rapor bir sayıyı oyuncuya yalnızca sen forma numarasını seçince yazar.</string>
     <string name="profile_server">Sunucu bağlantısı</string>
@@ -594,7 +604,7 @@
          The design's text is adapted: the app knows only what the server answered. -->
     <string name="server_busy">Sunucu çok sayıda istek işlediğini bildirdi. Uygulama birkaç saniye sonra yeniden dener.</string>
     <!-- 401 AUTH_REQUIRED. The app keeps an upload's place, and the user resumes it after the next login. -->
-    <string name="session_ended">Sunucu oturumunu kapattı. Yeniden giriş yapınca yarım kalan bir yüklemeyi kaldığı yerden sürdürebilirsin.</string>
+    <string name="session_ended">Sunucu oturumunu kapattı. Yeniden giriş yapınca yarım kalan bir yüklemeyi sürdürebilirsin. Yükleme bir gün boyunca sürmezse sunucu aldığı kısmı siler ve yükleme baştan başlar.</string>
     <string name="account_deleted">Sunucu hesabını sildi. Uygulama bu telefondaki maç kayıtlarını, kadroları ve kamerayla çektiğin videoları da sildi.</string>
     <!-- A deletion got no answer, a 5xx or an answer the app can not read (or the process ended while it was on its way), and the
          session then left the phone without a sign that the account is still there. The text holds in each of these states, so it
@@ -700,13 +710,12 @@
     <string name="action_logout">Çıkış Yap</string>
     <string name="logout_title">Çıkış yapmak istiyor musun?</string>
     <string name="logout_body">Uygulama bu hesabın maçlarını, kadrolarını ve kamera kayıtlarını bu telefonda saklar. Yeniden giriş yapınca hepsini yerinde bulursun.</string>
-    <string name="logout_upload">Uygulama süren yüklemeyi durdurur. Yeniden giriş yapınca yüklemeyi kaldığı yerden sürdürebilirsin.</string>
+    <string name="logout_upload">Uygulama süren yüklemeyi durdurur. Yeniden giriş yapınca yüklemeyi sürdürebilirsin. Yükleme bir gün boyunca sürmezse sunucu aldığı kısmı siler ve yükleme baştan başlar.</string>
     <!-- Any failed logout: the session stays on the phone. %1$s is the label of action_logout_anyway. -->
     <string name="logout_not_confirmed">Uygulama sunucudan çıkışın onayını alamadı ve oturumu bu telefonda açık tuttu. %1$s düğmesine dokunursan uygulama oturumu yalnız bu telefonda kapatır. Sunucu kullanılmayan bir oturumu 30 gün sonra kapatır.</string>
     <string name="action_logout_anyway">Yine de Çıkış Yap</string>
     <string name="action_delete_account">Hesabı Sil</string>
     <string name="delete_account_title">Hesabını silmek istiyor musun?</string>
-    <string name="delete_account_body">Sunucu kullanıcı adını, görünen adını, şifrenin özetini ve oturumlarını siler. Uygulama bu telefondaki maç kayıtlarını, kadroları ve kamerayla çektiğin videoları da siler. Galeriden seçtiğin videolar galeride kalır.</string>
+    <string name="delete_account_body">Sunucu kullanıcı adını, görünen adını, şifrenin özetini ve oturumlarını siler. Sunucu bu hesaba ait maçları, videolarını ve analizlerini de siler. Uygulama bu telefondaki maç kayıtlarını, kadroları ve kamerayla çektiğin videoları da siler. Galeriden seçtiğin videolar galeride kalır.</string>
     <!-- %1$d: the matches of this account's list that the server holds. Matches belong to no account before slice B3. -->
-    <string name="delete_account_server_matches">Sunucu maçları henüz hesaplara bağlamıyor. Bu yüzden sen hesabını silince sunucu maç listendeki %1$d maçı silmez. Bu maçları silmek istersen önce her maçı kendi ekranından silebilirsin.</string>
 </resources>

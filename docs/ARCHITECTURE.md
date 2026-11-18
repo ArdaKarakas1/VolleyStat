@@ -36,7 +36,7 @@ Bilinmeyen değer `{"value": null, "status": "UNKNOWN"}` biçimindedir ve hiçbi
 | Sunum | `ui/screens/*`, `ui/components/*`, `ui/theme/*`, `VolleyStatApp.kt` | Ekranlar, ortak bileşenler, tema, gezinme grafiği |
 | Durum | `AppViewModel.kt` | Tek `ViewModel`. Ekran durumunu `StateFlow` ile yayar. Yükleme, analiz izleme, doğrulama ve rapor işlerini yürütür. |
 | Alan | `model/*`, `android/core` | Maç, takım, iş, kart ve rapor tipleri. `core` modülü Android'den bağımsız skor kurallarını taşır, ama uygulama bu modülü bugün kullanmaz. Set skorunu sunucu maçın kuralıyla sayar (ADR-0115). |
-| Veri | `data/ApiClient.kt`, `data/UploadEngine.kt`, `data/LocalStore.kt`, `data/VideoInspector.kt` | HTTP istemcisi, kaldığı yerden süren yükleme, telefondaki JSON kayıt, videonun telefonda okunan özellikleri |
+| Veri | `data/ApiClient.kt`, `data/UploadEngine.kt`, `data/LocalStore.kt`, `data/VideoInspector.kt` | HTTP istemcisi, kaldığı yerden süren yükleme (sunucu yüklemeyi kapattıysa yükleme baştan başlar), telefondaki JSON kayıt, videonun telefonda okunan özellikleri |
 
 Uygulama kamera kaydı için CameraX, klip oynatma için Media3 kullanır. Uygulama ses kaydetmez. Oyuncu adları yalnız telefonda durur. Uygulama sunucuya yalnız forma numarası gönderir.
 
@@ -61,7 +61,7 @@ Uygulama kamera kaydı için CameraX, klip oynatma için Media3 kullanır. Uygul
 | `admin.py` | Operatör komutları: kayıt kodu, geçici şifre ve hiçbir hesaba bağlı olmayan maçlar (`python -m app.admin legacy`) |
 | `wordlists/` | Yaygın şifre listesi ve lisansı |
 
-Sunucu yalnız geliştirme bilgisayarında çalışır. Sunucuda hesaplar var, ama maç uçları henüz oturum istemez ve TLS yoktur. Sunucu `127.0.0.1` adresini dinler.
+Sunucu yalnız geliştirme bilgisayarında çalışır. Sunucu sağlık, kayıt ve giriş dışındaki her uçta oturum ister. Sunucuda TLS yoktur. Sunucu `127.0.0.1` adresini dinler.
 
 Yüklenen her dosya `storage/media/<uploadId>.bin` adında tek bir dosyadır. Tamamlama adımı dosyayı taşımaz, video kaydı aynı dosyayı gösterir.
 

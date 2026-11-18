@@ -16,6 +16,9 @@ fun formatBytes(bytes: Long): String {
     }
 }
 
+/** [formatBytes] for a number inside a sentence: a no-break space keeps the number and its unit on one line. */
+fun formatBytesInText(bytes: Long): String = formatBytes(bytes).replace(' ', '\u00A0')
+
 /** "45 sn", "1 dk 23 sn", "1 sa 30 dk". */
 fun formatDuration(durationMs: Long): String {
     val seconds = durationMs / 1000

@@ -6,7 +6,7 @@ Hedef: Kullanıcı maçı telefonla kaydeder ya da galeriden seçer. Sunucu vide
 
 Bu depo yalnızca Android uygulamasını ve onun arka ucunu içerir. Web sitesi ayrı bir depodadır (`voleybolveveleybol`) ve bu projeyle kod paylaşmaz.
 
-## Bugünkü durum (uygulama 0.8.0, sunucu 0.9.0)
+## Bugünkü durum (uygulama 0.9.0, sunucu 0.9.0)
 
 | Parça | Durum |
 | --- | --- |
@@ -19,7 +19,7 @@ Bu depo yalnızca Android uygulamasını ve onun arka ucunu içerir. Web sitesi 
 | Maç kuralı | Var, testli. Kullanıcı maçı açarken kuralı seçer ve FIVB kuralı seçili gelir. Sunucu set skorlarını bu kurala göre sayar. Kullanıcı kuralı ralli listesinden de değiştirir. |
 | Ralli baseline'ı (`ml/`, hareket enerjisi) | Var. **Kimse gerçek maçta doğruluğunu ölçmedi.** |
 | Eğitilmiş yapay zekâ modeli | **Yok.** Uygulama bugün kendiliğinden istatistik çıkarmaz. Kullanıcı her rallinin kazananını kendisi seçer. |
-| Hesaplar (uygulama 0.8, sunucu 0.9) | Var, testli: kayıt, giriş, çıkış, görünen ad, şifre değişikliği ve hesap silme. Uygulama giriş yapmamış kişiye yalnız karşılama, başlangıç, giriş ve kayıt ekranlarını gösterir. Telefon her hesabın maçlarını, kadrolarını ve kayıtlarını ayrı klasörde tutar ve oturumu telefonun anahtar deposundaki bir anahtarla şifreler. Kayıt için operatörün kayıt kodu gerekir. Sunucu sağlık, kayıt ve giriş dışındaki her uçta oturum ister ve her maçı yalnız onu açan hesaba gösterir. Sunucu bir hesabın kişisel videolarına 8 GiB, bütün hesaplarınkine 40 GiB ayırır ve bir gün boyunca parça almayan yüklemeyi siler. Kimse giriş ekranlarını gerçek telefonda denemedi. |
+| Hesaplar (uygulama 0.9, sunucu 0.9) | Var, testli: kayıt, giriş, çıkış, görünen ad, şifre değişikliği ve hesap silme. Uygulama giriş yapmamış kişiye yalnız karşılama, başlangıç, giriş ve kayıt ekranlarını gösterir. Telefon her hesabın maçlarını, kadrolarını ve kayıtlarını ayrı klasörde tutar ve oturumu telefonun anahtar deposundaki bir anahtarla şifreler. Kayıt için operatörün kayıt kodu gerekir. Sunucu sağlık, kayıt ve giriş dışındaki her uçta oturum ister ve her maçı yalnız onu açan hesaba gösterir. Sunucu bir hesabın kişisel videolarına 8 GiB, bütün hesaplarınkine 40 GiB ayırır ve bir gün boyunca parça almayan yüklemeyi siler. Uygulama bu retleri sunucunun gönderdiği sayılarla yazar. Sunucu bir maçı hesaba göstermezse uygulama maçı silinmiş saymaz ve kişi maçı yalnız telefondan kaldırabilir. Kimse giriş ekranlarını gerçek telefonda denemedi. |
 | HTTPS, bulut | Yok. Sunucu yalnızca geliştirme bilgisayarında çalışır. |
 
 Özellik bazında tam döküm: [docs/GAP_ANALYSIS.md](docs/GAP_ANALYSIS.md). Yapay zekâ planı: [docs/AI_PLAN.md](docs/AI_PLAN.md). Mimari kararlar: [docs/ADR.md](docs/ADR.md).
@@ -42,7 +42,7 @@ Sunucuda TLS yoktur. İnternete açmayın. Kayıt için operatör kodu `python -
 
 Sunucu diskte en az 20 GiB boş yer bırakır. Bu sınırın altına inecek bir yüklemeye sunucu `507 STORAGE_FULL` döner. Diskiniz küçükse sınırı GiB olarak değiştirin: `VOLLEYSTAT_DISK_FLOOR_GIB=5 python -m app`.
 
-Sunucuyu 0.8'den 0.9'a yükselttiyseniz önceki maçların hiçbiri bir hesaba bağlı değildir. Uygulama 0.8'in giriş yapmış bir hesapla yüklediği maçlar da buna dahildir. Uygulama bu maçlara erişemez. Önce `python -m app.admin legacy --list` ile maçları listeleyin. Sonra `python -m app.admin legacy --assign <kullanıcı adı>` ile maçları bir hesaba bağlayın ya da `python -m app.admin legacy --delete` ile silin. İki komut da `--match <maç kimliği>` ile yalnız adı geçen maçlara dokunur.
+Sunucuyu 0.8'den 0.9'a yükselttiyseniz önceki maçların hiçbiri bir hesaba bağlı değildir. Uygulama 0.8'in giriş yapmış bir hesapla yüklediği maçlar da buna dahildir. Uygulama bu maçlara erişemez. Uygulama 0.9 böyle bir maçın ekranında hesabın maça erişimi olmadığını yazar ve kişiye maçı yalnız telefondan kaldırmayı önerir. Önce `python -m app.admin legacy --list` ile maçları listeleyin. Sonra `python -m app.admin legacy --assign <kullanıcı adı>` ile maçları bir hesaba bağlayın ya da `python -m app.admin legacy --delete` ile silin. İki komut da `--match <maç kimliği>` ile yalnız adı geçen maçlara dokunur.
 
 Sunucu varsayılan olarak analizör olmadan başlar ve analiz isteğine `503 MODEL_NOT_CONFIGURED` yanıtını verir. Analiz, inceleme ve rapor ekranlarını denemek için sunucuyu demo analizörle başlatın:
 
@@ -62,8 +62,8 @@ ffmpeg -f lavfi -i testsrc2=size=1280x720:rate=30 -t 5 -c:v libx264 -pix_fmt yuv
 
 1. `android/` klasörünü Android Studio ile açın (JDK 17, Android SDK 36).
 2. Arka ucu `python -m app --analyzer demo` komutuyla başlatın. Emülatör bu sunucuya `10.0.2.2:8000` adresinden ulaşır. USB ile bağlı telefon için önce `adb reverse tcp:8000 tcp:8000` komutunu çalıştırın ve giriş ya da kayıt ekranının altındaki "USB ile bağlı telefon" seçeneğini seçin.
-3. Uygulama 0.8 açılışta bir hesap ister. Hesap oluşturmak için `python -m app.admin signup-code` komutuyla bir kayıt kodu çıkarın ve kodu kayıt ekranındaki "Kayıt kodu" alanına yazın.
-4. `app` modülünün **debug** sürümünü çalıştırın. Release sürümünde sunucu adresi bilerek boştur. Bu yüzden kişi release sürümünde hesap açamaz, giriş yapamaz ve başlangıç ekranını geçemez. Ekip sunucuyu internete açan dilimde release sürümüne bir sunucu adresi verene kadar bu sınır sürer. Uygulama 0.7'nin release sürümü maçları, kadroları ve kamera kayıtlarını telefonda hesapsız tutuyordu. Bu veri telefonda kalır, ama kişi 0.8'in release sürümünde veriye uygulamadan ulaşamaz.
+3. Uygulama 0.9 açılışta bir hesap ister ve sunucunun 0.9 sürümüyle çalışır, çünkü uygulamanın hesap silme ve gizlilik metinleri yalnız bu sunucu için doğrudur. Hesap oluşturmak için `python -m app.admin signup-code` komutuyla bir kayıt kodu çıkarın ve kodu kayıt ekranındaki "Kayıt kodu" alanına yazın.
+4. `app` modülünün **debug** sürümünü çalıştırın. Release sürümünde sunucu adresi bilerek boştur. Bu yüzden kişi release sürümünde hesap açamaz, giriş yapamaz ve başlangıç ekranını geçemez. Ekip sunucuyu internete açan dilimde release sürümüne bir sunucu adresi verene kadar bu sınır sürer. Uygulama 0.7'nin release sürümü maçları, kadroları ve kamera kayıtlarını telefonda hesapsız tutuyordu. Bu veri telefonda kalır, ama kişi 0.8'den beri release sürümünde veriye uygulamadan ulaşamaz.
 
 Demo analizörle gördüğünüz ralli aralıkları uydurmadır. Uygulama bu veriyi her ekranda DEMO etiketiyle gösterir.
 
@@ -79,6 +79,7 @@ cd android
 # Uygulamanın istemcisini ve ekranlarını çalışan sunucuya karşı sürer.
 # Sunucu 127.0.0.1:8000 adresinde demo analizörle ve açık kayıt kapısıyla çalışmalıdır:
 # VOLLEYSTAT_SIGNUP=open VOLLEYSTAT_DISK_FLOOR_GIB=1 python -m app --analyzer demo. Testler kendi e2e_ hesaplarını açar ve siler.
+# Kota testi iki 4 GiB yükleme bildirir. Bu yüzden sunucunun diskinde en az 5 GiB boş yer olmalıdır.
 VOLLEYSTAT_E2E_URL=http://127.0.0.1:8000/v1 VOLLEYSTAT_E2E_VIDEO=/yol/ornek.mp4 \
   ./gradlew :app:testDebugUnitTest --tests '*E2eTest*'
 

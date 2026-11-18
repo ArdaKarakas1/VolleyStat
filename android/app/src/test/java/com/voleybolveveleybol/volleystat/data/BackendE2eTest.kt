@@ -1,5 +1,6 @@
 package com.voleybolveveleybol.volleystat.data
 
+import com.voleybolveveleybol.volleystat.TestAccounts
 import com.voleybolveveleybol.volleystat.model.AnalysisJob
 import com.voleybolveveleybol.volleystat.model.AnalysisSummary
 import com.voleybolveveleybol.volleystat.model.MatchRules
@@ -17,6 +18,8 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Assume.assumeTrue
+import org.junit.After
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -32,12 +35,29 @@ import java.io.File
  *
  * The review test also needs the server to run with the demo analyzer
  * (python -m app --analyzer demo) and is skipped otherwise.
+ *
+ * From server 0.9 on every route but health, register and login needs a session, so each test opens
+ * its own e2e_ account (the server must run with VOLLEYSTAT_SIGNUP=open, as CI starts it) and deletes
+ * it at the end. The server deletes the account's matches with it, so a test that stops half way
+ * leaves nothing behind.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class BackendE2eTest {
     private val url = System.getenv("VOLLEYSTAT_E2E_URL")
     private val clip = System.getenv("VOLLEYSTAT_E2E_VIDEO")?.let(::File)
+    private var account: Pair<SignedIn, String>? = null
+
+    @Before fun openAnAccount() {
+        if (url != null && clip != null && clip.isFile) account = TestAccounts.registerOnBackend(url)
+    }
+
+    @After fun deleteTheAccount() {
+        account?.let { (signedIn, password) -> TestAccounts.deleteOnBackend(url!!, signedIn, password) }
+    }
+
+    /** A client with the session of this test's account. */
+    private fun client() = ApiClient(url!!, token = account!!.first.token)
 
     private fun upload(
         file: File,
@@ -48,7 +68,7 @@ class BackendE2eTest {
         var saved = session
         var chunks = 0
         val check = try {
-            UploadEngine(ApiClient(url!!)).run(
+            UploadEngine(client()).run(
                 session, MatchInfo("E2E A Takımı", "E2E B Takımı", name = "E2E", playedOn = "2026-11-12", kind = "TRAINING", rules = rules), "e2e.mp4", "video/mp4",
                 VideoBytes(file.length()) { file.inputStream() },
                 onSession = { if (it.sentBytes > saved.sentBytes) chunks++; saved = it },
@@ -70,19 +90,19 @@ class BackendE2eTest {
         assertEquals("h264", check.codec)
         assertEquals(clip.length(), session.sentBytes)
         // The server keeps the video and still has no model: analysis must be refused honestly.
-        assertEquals(VideoCheck.READY, ApiClient(url!!).video(check.videoId).status)
-        ApiClient(url).deleteMatch(session.serverMatchId!!)
+        assertEquals(VideoCheck.READY, client().video(check.videoId).status)
+        client().deleteMatch(session.serverMatchId!!)
     }
 
     @Test fun anInterruptedUploadResumesOnTheRealServer() {
         assumeTrue(url != null && clip != null && clip.isFile && clip.length() > 5L * 1024 * 1024)
         val (partial, none) = upload(clip!!, stopAfterChunks = 1)
         assertEquals(null, none)
-        assertEquals(4L * 1024 * 1024, ApiClient(url!!).uploadStatus(partial.uploadId!!).nextOffset)
+        assertEquals(4L * 1024 * 1024, client().uploadStatus(partial.uploadId!!).nextOffset)
         val (finished, check) = upload(clip, partial)
         assertEquals(VideoCheck.READY, check!!.status)
         assertEquals(partial.uploadId, finished.uploadId)
-        ApiClient(url).deleteMatch(finished.serverMatchId!!)
+        client().deleteMatch(finished.serverMatchId!!)
     }
 
     @Test fun aTruncatedClipIsQuarantinedNotAccepted() {
@@ -92,7 +112,7 @@ class BackendE2eTest {
             val (session, check) = upload(half)
             assertEquals(VideoCheck.QUARANTINED, check!!.status)
             assertEquals("VIDEO_CORRUPT", check.rejectCode)
-            ApiClient(url!!).deleteMatch(session.serverMatchId!!)
+            client().deleteMatch(session.serverMatchId!!)
         } finally {
             half.delete()
         }
@@ -128,7 +148,7 @@ class BackendE2eTest {
 
     @Test fun aDemoAnalysisIsReviewedAndTheReportFollowsExactlyThoseAnswers() {
         assumeTrue(url != null && clip != null && clip.isFile)
-        val api = ApiClient(url!!)
+        val api = client()
         val (session, check) = upload(clip!!)
         val videoId = check!!.videoId
         val matchId = session.serverMatchId!!
@@ -200,7 +220,7 @@ class BackendE2eTest {
 
     @Test fun theRallyListIsCorrectedOnTheRealServerAndADemoListCanNotBeConfirmed() {
         assumeTrue(url != null && clip != null && clip.isFile)
-        val api = ApiClient(url!!)
+        val api = client()
         val (session, check) = upload(clip!!)
         val matchId = session.serverMatchId!!
         try {
@@ -280,7 +300,7 @@ class BackendE2eTest {
      */
     @Test fun theMatchRuleTravelsWithTheMatchAndTheRealServerNamesEveryChange() {
         assumeTrue(url != null && clip != null && clip.isFile)
-        val api = ApiClient(url!!)
+        val api = client()
         val chosen = MatchRules(2, 21, 15)
         val (session, check) = upload(clip!!, rules = chosen)
         val matchId = session.serverMatchId!!
@@ -321,7 +341,7 @@ class BackendE2eTest {
 
     @Test fun aDeletedMatchLeavesNothingOnTheServer() {
         assumeTrue(url != null && clip != null && clip.isFile)
-        val api = ApiClient(url!!)
+        val api = client()
         val (session, check) = upload(clip!!)
         api.deleteMatch(session.serverMatchId!!)
         // The video, the upload and the match record are all gone, not only the video.

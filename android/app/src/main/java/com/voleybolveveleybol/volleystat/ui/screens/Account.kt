@@ -801,11 +801,11 @@ fun PasswordChangeScreen(
 }
 
 /**
- * Hesabı Sil: what the server and the phone delete, what stays on the server, and the password
- * that confirms it. Nothing on the phone goes before the server's answer.
+ * Hesabı Sil: what the server and the phone delete, and the password that confirms it. From server
+ * 0.9 on the server deletes the account's matches with it. Nothing on the phone goes before the server's answer.
  */
 @Composable
-fun DeleteAccountScreen(account: AccountUi, serverMatches: Int, onDelete: (password: String) -> Unit, onBack: () -> Unit) {
+fun DeleteAccountScreen(account: AccountUi, onDelete: (password: String) -> Unit, onBack: () -> Unit) {
     var password by remember { mutableStateOf("") }
     val ready = password.isNotEmpty() && !account.busy
     AccountScaffold(
@@ -818,7 +818,6 @@ fun DeleteAccountScreen(account: AccountUi, serverMatches: Int, onDelete: (passw
     ) {
         Text(stringResource(R.string.delete_account_title), style = MaterialTheme.typography.titleMedium)
         Text(stringResource(R.string.delete_account_body), style = MaterialTheme.typography.bodyMedium)
-        if (serverMatches > 0) Notice(stringResource(R.string.delete_account_server_matches, serverMatches), Tone.CAUTION)
         PasswordField(password, { password = it }, stringResource(R.string.field_your_password), ContentType.Password)
     }
 }
