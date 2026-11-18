@@ -126,15 +126,16 @@ sealed interface AuthProblem {
 /**
  * Whether [error], the failure that ended a change of the user's own account, leaves open whether the
  * server made the change: the request went out and no answer came, a 5xx other than SERVER_BUSY came, or
- * an answer the app can not read (third review, B3). A 4xx without the API's envelope is such an answer:
- * a gateway on the way may have sent it, and the app can not tell whether the server got the request
- * (sixth checker, Q2). A 401 that names the Bearer scheme reads as AUTH_REQUIRED and is not one of them.
- * The registration keeps the narrower [ApiException.leavesOutcomeUnknown]: its mark sends a login to the
- * account that holds the username. A request that never left the phone leaves nothing open (fourth
- * review, D2), nor does an answer from another address, whose session the app closed again.
+ * an answer the app can not read (third review, B3). A 3xx is such an answer, and so is a 4xx without the
+ * API's envelope: a gateway on the way may have sent it, and the app can not tell whether the server got
+ * the request (sixth checker, Q2). A 401 that names the Bearer scheme reads as AUTH_REQUIRED for a request
+ * that carried the session, and is not one of them. The registration keeps the narrower
+ * [ApiException.leavesOutcomeUnknown], which leaves out the 3xx and the 4xx: its mark sends a login to the
+ * account that holds the username (seventh checker, R1). A request that never left the phone leaves nothing
+ * open (fourth review, D2), nor does an answer from another address, whose session the app closed again.
  */
 fun outcomeUnknownAfter(error: Throwable): Boolean = when (error) {
-    is ApiException -> error.leavesOutcomeUnknown || error.code.startsWith("HTTP_")
+    is ApiException -> error.leavesOutcomeUnknown || error.status in 300..399 || error.code.startsWith("HTTP_")
     is RequestNotSent -> false
     is AnswerFromAnotherServer -> false
     else -> true

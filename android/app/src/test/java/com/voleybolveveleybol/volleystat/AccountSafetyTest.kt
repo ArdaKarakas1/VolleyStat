@@ -425,6 +425,50 @@ class AccountSafetyTest {
         assertEquals(UnconfirmedDeletion(user.userId, user.username), vm.state.value.account.unconfirmedDeletion)
     }
 
+    /** The gateway's page for a 401 that names the Bearer scheme: no envelope of the API. */
+    private fun bearerPage() = MockResponse().setResponseCode(401).setHeader("Content-Type", "text/html")
+        .setHeader("WWW-Authenticate", "Bearer realm=\"gw\"").setBody("<html>Unauthorized</html>")
+
+    /**
+     * The deletion always carries the session. A 401 without the envelope that names the Bearer scheme reads as the API's
+     * AUTH_REQUIRED there (seventh checker, R3): the session ends, and no earlier deletion is in doubt, so nothing is offered.
+     */
+    @Test fun aDeletionAnsweredByABearer401WithoutTheEnvelopeEndsTheSession() {
+        seedAccountWithData()
+        on("POST /me/delete") { bearerPage() }
+        val vm = viewModel()
+        vm.deleteAccount(password)
+        await("the end of the session") { vm.state.value.account.user == null && !vm.state.value.account.busy }
+        val account = vm.state.value.account
+        assertTrue(account.sessionEnded)
+        assertNull(account.problem)
+        assertNull(account.unconfirmedDeletion)
+        assertEquals(listOf("POST /me/delete"), seen.map { it.key })
+        assertEquals("the deletion carried the session", "Bearer ${user.token}", seen.single().authorization)
+    }
+
+    /**
+     * After a lost deletion, the login that asks whether the account is still there carries no session. A 401 without the
+     * envelope that names the Bearer scheme reads as LOGIN_FAILED on the login (ADR-0119): the session leaves the phone and
+     * the login screen offers Telefondan Sil, which deletes nothing before the user says so.
+     */
+    @Test fun aRepeatedDeletionWhoseLoginMeetsABearer401WithoutTheEnvelopeReadsItAsAFailedLogin() {
+        val recording = seedAccountWithData()
+        val vm = viewModel()
+        vm.deleteAndLoseTheAnswer()
+        on("POST /me/delete") { refuse(401, "AUTH_REQUIRED") }
+        on("POST /auth/login") { bearerPage() }
+        vm.deleteAccount(password)
+        await("the end of the session") { vm.state.value.account.user == null && !vm.state.value.account.busy }
+        assertEquals(listOf("POST /me/delete", "POST /me/delete", "POST /auth/login"), seen.map { it.key })
+        assertNull("the login carries no session", seen.last().authorization)
+        val account = vm.state.value.account
+        assertEquals(UnconfirmedDeletion(user.userId, user.username), account.unconfirmedDeletion)
+        assertNull(account.problem)
+        assertTrue(recording.exists())
+        assertTrue(File(folder, "volleystat.json").exists())
+    }
+
     /**
      * The third review's B3 (the reader's probe F): a 5xx on the deletion keeps the mark, because the server may
      * have deleted the account. The screen says that the app does not know; it never says that nothing changed.

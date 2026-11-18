@@ -1136,7 +1136,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 api.register(name, displayName.trim(), password, code)
             } catch (error: ApiException) {
                 // A 5xx, or a success the app can not read, may come after the server opened the account, as a lost
-                // answer may (third review, B3): the mark makes the next try look for it.
+                // answer may (third review, B3): the mark makes the next try look for it. A 3xx or a 4xx marks nothing (R1).
                 if (error.leavesOutcomeUnknown) {
                     markRegistration(name)
                     throw error

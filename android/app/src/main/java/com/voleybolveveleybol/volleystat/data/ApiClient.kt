@@ -28,14 +28,17 @@ import java.net.URL
  */
 class ApiException(val status: Int, val code: String, message: String, val details: JSONObject, val retryAfterSeconds: Int? = null) : IOException(message) {
     /**
-     * The answer leaves open whether the server made the change: a 5xx other than SERVER_BUSY, a 3xx,
-     * or a success the app can not read (UNEXPECTED_ANSWER). A 4xx comes before the server changes
-     * anything, and SERVER_BUSY before it counts or writes anything (third review, B3). The registration
-     * marks a username by this rule. A 4xx without the API's envelope marks none: it most likely comes
-     * from a gateway that never passed the request on, and the mark would send a login to the account
-     * that holds the username. The changes of the user's own account read it with [outcomeUnknownAfter].
+     * The registration's own rule: the answer may come after the server opened the account, so the app
+     * marks the username, and the next try looks for the account with a login. Only a 5xx other than
+     * SERVER_BUSY and a success the app can not read (UNEXPECTED_ANSWER) mark; no answer to a request that
+     * left the phone marks too (AppViewModel.register). A 4xx comes before the server changes anything, and SERVER_BUSY before it
+     * counts or writes anything (third review, B3). A 4xx without the API's envelope marks none, nor does a
+     * 3xx, which the API never sends to a registration (seventh checker, R1): such an answer most likely
+     * comes from a gateway or a captive portal that never passed the request on, and the mark would send a
+     * login with the typed password to the account that holds the username. The changes of the user's own
+     * account read the wider [outcomeUnknownAfter], which leaves the outcome open after a 3xx as well.
      */
-    val leavesOutcomeUnknown: Boolean get() = status !in 400..499 && code != "SERVER_BUSY"
+    val leavesOutcomeUnknown: Boolean get() = (status >= 500 && code != "SERVER_BUSY") || code == "UNEXPECTED_ANSWER"
 }
 
 /**
@@ -440,7 +443,7 @@ class ApiClient(
                 val error = runCatching { JSONObject(text).getJSONObject("error") }.getOrNull()
                 val failure = ApiException(
                     status = status,
-                    code = error?.optString("code").orEmpty().ifEmpty { unreadable401(status, path, connection) ?: "HTTP_$status" },
+                    code = error?.optString("code").orEmpty().ifEmpty { unreadable401(status, path, token != null, connection) ?: "HTTP_$status" },
                     message = error?.optString("message").orEmpty().ifEmpty { "HTTP $status" },
                     details = error?.optJSONObject("details") ?: JSONObject(),
                     retryAfterSeconds = connection.getHeaderField("Retry-After")?.trim()?.toIntOrNull()?.takeIf { it >= 0 },
@@ -469,14 +472,21 @@ class ApiClient(
  * The code of a 401 whose body did not arrive. The JVM's HttpURLConnection drops the body of a 401
  * to a streamed request, because it can not send that request again; Android's keeps it. Such an
  * answer is read by the contract of docs/API_V1.md section 10 only when it names the Bearer scheme,
- * as this API's 401 always does: the login route answers 401 only with LOGIN_FAILED, every other
- * route only with AUTH_REQUIRED. Anything else stays unread.
+ * as this API's 401 always does, and only on two kinds of request: the login route answers 401 only
+ * with LOGIN_FAILED, and a request that [carriedSession] gets 401 only with AUTH_REQUIRED, which ends
+ * that session. A request without a session to any other route has no session to end, and the API
+ * never answers a registration with a 401: a Bearer 401 there comes from something on the way and stays
+ * unread (seventh checker, R3), as anything else does.
  */
-private fun unreadable401(status: Int, path: String, connection: HttpURLConnection): String? {
+private fun unreadable401(status: Int, path: String, carriedSession: Boolean, connection: HttpURLConnection): String? {
     if (status != 401) return null
     val scheme = connection.getHeaderField("WWW-Authenticate")?.trim()?.substringBefore(' ')
     if (!scheme.equals("Bearer", ignoreCase = true)) return null
-    return if (path == "/auth/login") "LOGIN_FAILED" else "AUTH_REQUIRED"
+    return when {
+        path == "/auth/login" -> "LOGIN_FAILED"
+        carriedSession -> "AUTH_REQUIRED"
+        else -> null
+    }
 }
 
 private fun JSONObject.optStringOrNull(name: String): String? = if (isNull(name)) null else getString(name)

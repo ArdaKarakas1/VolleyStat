@@ -187,6 +187,42 @@ class AuthApiTest {
         assertEquals(listOf("token"), ended)
     }
 
+    /**
+     * The seventh checker's R3: a gateway's 401 that names the Bearer scheme but carries no envelope is read by the contract
+     * only for a request that carried a session (AUTH_REQUIRED) or went to the login (LOGIN_FAILED). A request without a
+     * session to any other route gets HTTP_401, an answer the app can not read: the registration form says so, and no
+     * username is marked.
+     */
+    @Test fun aBearer401WithoutTheEnvelopeIsReadByTheContractOnlyWithASessionOrAtTheLogin() {
+        fun gateway401() = MockResponse().setResponseCode(401).setHeader("Content-Type", "text/html")
+            .setHeader("WWW-Authenticate", "Bearer realm=\"gw\"").setBody("<html>401</html>")
+        fun failureOf(api: ApiClient, call: (ApiClient) -> Unit): ApiException {
+            server.enqueue(gateway401())
+            return try {
+                call(api)
+                throw AssertionError("the call must fail")
+            } catch (error: ApiException) {
+                error
+            }
+        }
+        val register = failureOf(client()) { it.register("ali", "Ali", "uzun bir şifre 42", null) }
+        assertEquals("HTTP_401", register.code)
+        assertEquals(AuthProblem.UnexpectedAnswer, AuthProblem.of(register))
+        assertFalse("the registration marks no username", register.leavesOutcomeUnknown)
+        assertEquals("HTTP_401", failureOf(client()) { it.me() }.code)
+        assertEquals("HTTP_401", failureOf(client()) { it.health() }.code)
+        assertTrue("a request without a session ends none", ended.isEmpty())
+        // The login reads it as LOGIN_FAILED, with a session or without one, and ends no session.
+        assertEquals("LOGIN_FAILED", failureOf(client()) { it.login("ali", "uzun bir şifre 42", null) }.code)
+        assertEquals("LOGIN_FAILED", failureOf(client("token")) { it.login("ali", "uzun bir şifre 42", null) }.code)
+        assertTrue(ended.isEmpty())
+        // A request that carried a session reads it as AUTH_REQUIRED, and that session ends.
+        val change = failureOf(client("token")) { it.changeDisplayName("Yeni Ad") }
+        assertEquals("AUTH_REQUIRED", change.code)
+        assertEquals(AuthProblem.SessionEnded, AuthProblem.of(change))
+        assertEquals(listOf("token"), ended)
+    }
+
     @Test fun retryAfterIsReadFromTheHeader() {
         server.enqueue(error(503, "SERVER_BUSY", headers = mapOf("Retry-After" to "2")))
         try {
@@ -307,6 +343,32 @@ class AuthApiTest {
         // The API's own envelope makes a 4xx the server's answer, which came before it changed anything.
         assertFalse(outcomeUnknownAfter(failureOf(error(404, "NOT_FOUND")) { it.changeDisplayName("Yeni Ad") }))
         assertFalse(outcomeUnknownAfter(failureOf(error(422, "PASSWORD_REJECTED")) { it.changePassword("eski bir şifre 1", "kısa") }))
+    }
+
+    /**
+     * The seventh checker's R1: the registration has its own rule. It marks the username only after no answer to a request
+     * that left the phone, a 5xx other than SERVER_BUSY, or a success the app can not read. The API never answers a
+     * registration with a redirect, so a 3xx (a captive portal's 302, say) marks nothing: the mark would send a login with
+     * the typed password to the account that holds the username. A change of the user's own account still leaves its
+     * outcome open after a 3xx, because that outcome touches only the user's own account.
+     */
+    @Test fun aRegistrationMarksItsUsernameOnlyAfterA5xxOrASuccessTheAppCanNotRead() {
+        fun failure(status: Int, code: String) = ApiException(status, code, code, JSONObject())
+        listOf(failure(500, "INTERNAL"), failure(502, "HTTP_502"), failure(200, "UNEXPECTED_ANSWER")).forEach { marked ->
+            assertTrue("${marked.status} ${marked.code}", marked.leavesOutcomeUnknown)
+        }
+        val redirects = listOf(failure(302, "HTTP_302"), failure(307, "HTTP_307"), failure(301, "INTERNAL"))
+        (redirects + listOf(failure(503, "SERVER_BUSY"), failure(409, "USERNAME_TAKEN"), failure(404, "HTTP_404"), failure(401, "HTTP_401"))).forEach { unmarked ->
+            assertFalse("${unmarked.status} ${unmarked.code}", unmarked.leavesOutcomeUnknown)
+        }
+        redirects.forEach { assertTrue("${it.status} ${it.code}: a change of the user's own account stays open", outcomeUnknownAfter(it)) }
+        // The client follows no redirect: a portal's 302 reaches the registration as it came.
+        server.enqueue(MockResponse().setResponseCode(302).setHeader("Location", "http://portal.example/login").setBody("<html>portal</html>"))
+        val portal = runCatching { client().register("ali", "Ali", "uzun bir şifre 42", null) }.exceptionOrNull() as ApiException
+        assertEquals(302 to "HTTP_302", portal.status to portal.code)
+        assertFalse(portal.leavesOutcomeUnknown)
+        assertEquals(AuthProblem.UnexpectedAnswer, AuthProblem.of(portal))
+        assertEquals("one request, no second one to the portal", 1, server.requestCount)
     }
 
     @Test fun aClosedSignUpNamesItsReason() {

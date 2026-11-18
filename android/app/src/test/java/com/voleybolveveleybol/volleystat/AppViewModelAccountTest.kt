@@ -826,6 +826,73 @@ class AppViewModelAccountTest {
         assertFalse(File(files, "registrations.bin").exists())
     }
 
+    /**
+     * The seventh checker's R1 (probe p9c): the API never answers a registration with a redirect. A 3xx (a captive portal's
+     * 302, say) most likely comes from something on the way that never passed the request on, so it marks no username: the
+     * mark would send the typed password as a login to the account that holds the username.
+     */
+    @Test fun aRegistrationAnsweredByARedirectIsNotLookedFor() {
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        val answered = mutableSetOf<String>()
+        on("POST /auth/register") {
+            val name = JSONObject(seen.last().body).getString("username")
+            when {
+                !answered.add(name) -> refuse(409, "USERNAME_TAKEN")
+                name == "ali" -> MockResponse().setResponseCode(302).setHeader("Location", "http://portal.example/login").setBody("<html>portal</html>")
+                else -> MockResponse().setResponseCode(307).setHeader("Location", "http://portal.example/login")
+            }
+        }
+        val vm = viewModel()
+        listOf("ali", "veli").forEach { name ->
+            vm.registerAndWait(name, operatorCode = null)
+            assertEquals("$name: the form says that the app can not read the answer", AuthProblem.UnexpectedAnswer, vm.state.value.account.problem)
+            assertFalse("$name: no mark", File(files, "registrations.bin").exists())
+            vm.registerAndWait(name, operatorCode = null)
+            assertEquals(AuthProblem.UsernameTaken, vm.state.value.account.problem)
+        }
+        assertEquals("no login goes to the account that holds the username", List(4) { "POST /auth/register" }, seen.map { it.key })
+        assertFalse(File(files, "registrations.bin").exists())
+    }
+
+    /**
+     * The seventh checker's R3 (probe p9d): a gateway's 401 that names the Bearer scheme answers a registration, which carried
+     * no session. The app reads it as an answer it can not read, not as an ended session: the form says so, and no username
+     * is marked.
+     */
+    @Test fun aRegistrationAnsweredByABearer401WithoutTheEnvelopeSaysThatTheAppCanNotReadTheAnswerAndMarksNothing() {
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        var registrations = 0
+        on("POST /auth/register") {
+            if (++registrations == 1) page(401).setHeader("WWW-Authenticate", "Bearer realm=\"gw\"") else refuse(409, "USERNAME_TAKEN")
+        }
+        val vm = viewModel()
+        vm.registerAndWait(operatorCode = null)
+        val account = vm.state.value.account
+        assertEquals(AuthProblem.UnexpectedAnswer, account.problem)
+        assertEquals(
+            R.string.account_unexpected_change,
+            com.voleybolveveleybol.volleystat.ui.screens.accountProblemText(account.problem!!, com.voleybolveveleybol.volleystat.ui.screens.AccountAction.REGISTER).id,
+        )
+        assertNull(account.user)
+        assertFalse("no session was there to end", account.sessionEnded)
+        assertFalse(File(files, "registrations.bin").exists())
+        vm.registerAndWait(operatorCode = null)
+        assertEquals(AuthProblem.UsernameTaken, vm.state.value.account.problem)
+        assertEquals("no login goes to the account that holds the username", List(2) { "POST /auth/register" }, seen.map { it.key })
+    }
+
+    /** The login reads a gateway's Bearer 401 without the envelope by the contract: LOGIN_FAILED, with no session to end. */
+    @Test fun aLoginAnsweredByABearer401WithoutTheEnvelopeReadsAsAFailedLogin() {
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        on("POST /auth/login") { page(401).setHeader("WWW-Authenticate", "Bearer realm=\"gw\"") }
+        val vm = viewModel()
+        vm.login("ali", "uzun bir şifre 42")
+        await("the answer") { !vm.state.value.account.busy && seen.isNotEmpty() }
+        assertEquals(AuthProblem.LoginFailed, vm.state.value.account.problem)
+        assertNull(vm.state.value.account.user)
+        assertFalse(vm.state.value.account.sessionEnded)
+    }
+
     @Test fun theMarkOfALostRegistrationIsSealedAndNoPlainFileNamesTheAccount() {
         val sealing = ReplaceableKeyCipher()
         TestApplication.cipher = sealing
