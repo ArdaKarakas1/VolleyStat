@@ -7,8 +7,6 @@ import com.voleybolveveleybol.volleystat.model.MatchKind
 import com.voleybolveveleybol.volleystat.model.MatchRecord
 import com.voleybolveveleybol.volleystat.model.MatchRules
 import com.voleybolveveleybol.volleystat.model.Player
-import com.voleybolveveleybol.volleystat.model.ServerTarget
-import com.voleybolveveleybol.volleystat.model.Settings
 import com.voleybolveveleybol.volleystat.model.Team
 import com.voleybolveveleybol.volleystat.model.UploadSession
 import com.voleybolveveleybol.volleystat.model.VideoCheck
@@ -17,17 +15,20 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
+/** What one account keeps on this phone. The phone's own settings live in device.json (DeviceStore). */
 data class StoredState(
     val matches: List<MatchRecord> = emptyList(),
     val teams: List<Team> = emptyList(),
     val draft: Draft = Draft(),
-    val settings: Settings = Settings(),
 )
 
 /**
- * The app's own record of matches, teams, the unfinished draft and settings, kept as one JSON
- * file in private storage. It is the reason a rotation, a camera round trip or a killed process
- * loses neither the recording nor the upload position.
+ * One account's record of matches, teams and the unfinished draft, kept as one JSON file in that
+ * account's folder (accounts/<userId>/volleystat.json). It is the reason a rotation, a camera
+ * round trip or a killed process loses neither the recording nor the upload position.
+ *
+ * Version 3. Version 2 was the single file of app 0.7, which also held the settings; this store
+ * still reads it (for the move of the first login) and ignores its settings.
  */
 class LocalStore(private val file: File) {
 
@@ -44,6 +45,8 @@ class LocalStore(private val file: File) {
 
     @Synchronized
     fun save(state: StoredState) {
+        // An account's folder exists from its first save on.
+        file.parentFile?.mkdirs()
         val temporary = File(file.parentFile, "${file.name}.tmp")
         temporary.writeText(encode(state).toString())
         if (!temporary.renameTo(file)) {
@@ -53,11 +56,7 @@ class LocalStore(private val file: File) {
     }
 
     private fun encode(state: StoredState) = JSONObject()
-        .put("version", 2)
-        .put("settings", JSONObject()
-            .put("serverTarget", state.settings.serverTarget.name)
-            .put("displayName", state.settings.displayName)
-            .put("welcomeSeen", state.settings.welcomeSeen))
+        .put("version", 3)
         .put("draft", with(state.draft) {
             JSONObject()
                 .put("name", name).put("playedOn", playedOn).put("venue", venue).put("kind", kind.name)
@@ -120,16 +119,10 @@ class LocalStore(private val file: File) {
         .put("warnings", JSONArray(check.warnings))
 
     private fun decode(json: JSONObject): StoredState {
-        val settings = json.optJSONObject("settings") ?: JSONObject()
         val draft = json.optJSONObject("draft") ?: JSONObject()
         val teams = json.optJSONArray("teams") ?: JSONArray()
         val matches = json.optJSONArray("matches") ?: JSONArray()
         return StoredState(
-            settings = Settings(
-                serverTarget = enumOr(settings.optString("serverTarget"), ServerTarget.EMULATOR),
-                displayName = settings.optString("displayName"),
-                welcomeSeen = settings.optBoolean("welcomeSeen", false),
-            ),
             draft = Draft(
                 name = draft.optString("name"), playedOn = draft.optString("playedOn"), venue = draft.optString("venue"),
                 kind = enumOr(draft.optString("kind"), MatchKind.TRAINING),

@@ -4,11 +4,29 @@ import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.voleybolveveleybol.volleystat.data.AccountFiles
+import com.voleybolveveleybol.volleystat.data.AccountSpace
+import com.voleybolveveleybol.volleystat.data.AccountUser
+import com.voleybolveveleybol.volleystat.data.AnswerFromAnotherServer
 import com.voleybolveveleybol.volleystat.data.ApiClient
 import com.voleybolveveleybol.volleystat.data.ApiException
-import com.voleybolveveleybol.volleystat.data.LocalStore
+import com.voleybolveveleybol.volleystat.data.AuthProblem
+import com.voleybolveveleybol.volleystat.data.DeletionDoubtStore
+import com.voleybolveveleybol.volleystat.data.DeviceStore
+import com.voleybolveveleybol.volleystat.data.DeviceTokenStore
+import com.voleybolveveleybol.volleystat.data.KeystoreSessionCipher
+import com.voleybolveveleybol.volleystat.data.LegacyContent
 import com.voleybolveveleybol.volleystat.data.MatchInfo
+import com.voleybolveveleybol.volleystat.data.RequestNotSent
+import com.voleybolveveleybol.volleystat.data.outcomeUnknownAfter
+import com.voleybolveveleybol.volleystat.data.Session
+import com.voleybolveveleybol.volleystat.data.SessionCipher
+import com.voleybolveveleybol.volleystat.data.SessionCipherSource
+import com.voleybolveveleybol.volleystat.data.SessionStore
+import com.voleybolveveleybol.volleystat.data.SignedIn
 import com.voleybolveveleybol.volleystat.data.StoredState
+import com.voleybolveveleybol.volleystat.data.UnansweredRegistrationStore
+import com.voleybolveveleybol.volleystat.data.sha256Hex
 import com.voleybolveveleybol.volleystat.data.UploadCancelled
 import com.voleybolveveleybol.volleystat.data.UploadEngine
 import com.voleybolveveleybol.volleystat.data.UploadException
@@ -31,7 +49,9 @@ import com.voleybolveveleybol.volleystat.model.Player
 import com.voleybolveveleybol.volleystat.model.ServerTarget
 import com.voleybolveveleybol.volleystat.model.Settings
 import com.voleybolveveleybol.volleystat.model.Team
+import com.voleybolveveleybol.volleystat.model.normalizeUsername
 import com.voleybolveveleybol.volleystat.model.uploadFormat
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -75,6 +95,99 @@ enum class RemovalFailure { UNCONFIRMED, VERIFYING, REFUSED }
 
 data class RemovalProblem(val matchId: String, val failure: RemovalFailure)
 
+/** Where the app opens (design 10.1). The navigation maps each to its route. */
+enum class Entry { WELCOME, START, LOGIN, LEGACY, HOME }
+
+/**
+ * A change of the account that the server confirmed. The screen that asked for it says so once;
+ * DELETED is said by the login screen the app opens after the deletion. PHONE_DATA_DELETED is the
+ * one change the phone makes alone: it deleted the data of an [UnconfirmedDeletion] on the user's
+ * word, and the server was not asked.
+ */
+enum class AccountChange { DISPLAY_NAME, PASSWORD, DELETED, PHONE_DATA_DELETED }
+
+/**
+ * Why a new password the server confirmed reached no password manager. The profile names the
+ * reason next to the confirmation, so the user knows which password the server now holds.
+ */
+enum class PasswordNotHandedOver {
+    /** Android rebuilt the screen while the change was on its way, and the rebuilt fields are empty by design (second review, R2-D). */
+    SCREEN_REBUILT,
+    /** The user left the screen before the answer came, so no screen was there to commit it (third review, B1). */
+    SCREEN_LEFT,
+    /**
+     * The user edited the new password while the change was on its way. The field no longer holds the
+     * password the server got, and a commit would hand the edited text over (third review, B2).
+     */
+    PASSWORD_EDITED,
+}
+
+/**
+ * An account whose deletion got no answer and whose session then left the phone without a sign
+ * that the account is still there (review finding S1). The server may have deleted it, so its
+ * folder may be one that no login can reach again. The login screen offers to delete that folder
+ * and the account's device token; nothing goes before the user says so. The offer is kept in
+ * deletions.ids until the user answers it or the account logs in again, through any restart (F1),
+ * and through a new keystore key. [username] is null when the phone can not read it now (the sealed
+ * deletions.bin, a new key or a damaged file) or deleted deletions.bin because the keystore could not
+ * reseal it when another doubt ended (third checker's C1): the offer then names no account.
+ */
+data class UnconfirmedDeletion(val userId: String, val username: String?)
+
+/**
+ * The end of a change whose screen the user left while its request was on its way: [problem] is the
+ * answer that ended it, and [outcomeUnknown] says that this answer leaves open whether the server made
+ * the change (no answer after the request went out, a 5xx, or an answer the app can not read).
+ */
+data class OutcomeAfterLeave(val change: AccountChange, val problem: AuthProblem, val outcomeUnknown: Boolean)
+
+/** The question of the first login about the data app 0.7 kept for its one user (design 10.3). */
+data class LegacyQuestion(val titles: List<String>, val teams: Int, val recordings: Int, val draft: Boolean)
+
+/** Who is signed in on this phone, and the account call that is on its way. */
+data class AccountUi(
+    /** The signed-in account. Null until the server confirmed a login or a registration. */
+    val user: AccountUser? = null,
+    /** An account call is on its way. The form keeps its input and waits for the answer. */
+    val busy: Boolean = false,
+    /**
+     * The server answered the call with SERVER_BUSY, and the app waits out its Retry-After before
+     * it sends the request again. The form says so (`server_busy`) instead of waiting for an
+     * answer that already came (review finding T5). The next try and the end of the call clear it.
+     */
+    val retryingAfterBusy: Boolean = false,
+    /** Why the last account call failed. The next call and clearAccountProblem() clear it. */
+    val problem: AuthProblem? = null,
+    /** The server ended the session (401 AUTH_REQUIRED) and the app left the account. The login screen says so (`session_ended`). */
+    val sessionEnded: Boolean = false,
+    /** After the first login, while the data of app 0.7 waits for the answer to its question. */
+    val legacy: LegacyQuestion? = null,
+    /** The answer to that question is on its way. Its buttons wait for it; a move that failed gives them back (F4). */
+    val legacyMoving: Boolean = false,
+    /** The last change the server confirmed. The next call and clearAccountProblem() clear it. */
+    val confirmed: AccountChange? = null,
+    /** The account whose phone data the login screen offers to delete. A login of that account withdraws the offer. */
+    val unconfirmedDeletion: UnconfirmedDeletion? = null,
+    /** The account whose phone data the app deleted, for the text of [AccountChange.PHONE_DATA_DELETED]: the other accounts keep theirs. */
+    val deletedFromPhone: UnconfirmedDeletion? = null,
+    /**
+     * The phone could not seal the session at login (the keystore failed). The session lives in
+     * memory only, so the next start asks for the password; Home says so. A later save that works clears it.
+     */
+    val sessionNotKept: Boolean = false,
+    /**
+     * The server confirmed a new password, and the password manager did not get it: why, by
+     * [PasswordNotHandedOver]. The profile says so next to the confirmation. The next call and
+     * clearAccountProblem() clear it, as they clear [confirmed].
+     */
+    val newPasswordNotHandedOver: PasswordNotHandedOver? = null,
+    /**
+     * How a change of the display name or of the password ended when the user had left its screen while its
+     * request was on its way (fourth review, D1). The profile says so. The next call and clearAccountProblem() clear it.
+     */
+    val afterLeave: OutcomeAfterLeave? = null,
+)
+
 data class AppUiState(
     val matches: List<MatchRecord> = emptyList(),
     val teams: List<Team> = emptyList(),
@@ -91,7 +204,20 @@ data class AppUiState(
     val removalProblem: RemovalProblem? = null,
     /** The last change did not reach the disk. It is still in memory and the next change tries again. */
     val saveFailed: Boolean = false,
+    val account: AccountUi = AccountUi(),
 ) {
+    /**
+     * The screen the app opens on (design 10.1): the welcome until it was seen; without a session
+     * the start screen while no account ever logged in on this phone, else the login; the question
+     * about the old data while it waits; else Home.
+     */
+    val entry: Entry get() = when {
+        !settings.welcomeSeen -> Entry.WELCOME
+        account.user == null -> if (settings.accountSeen) Entry.LOGIN else Entry.START
+        account.legacy != null -> Entry.LEGACY
+        else -> Entry.HOME
+    }
+
     /** A camera file that the draft or an upload that has not finished still reads from. */
     fun recordingInUse(path: String) = draft.video?.location == path || matches.any { it.check == null && it.video.location == path }
 }
@@ -102,10 +228,10 @@ enum class JobLoad { LOADING, READY, NO_JOB, NO_ANALYZER, VIDEO_MISSING, UNREACH
 
 enum class ReviewProblem { STALE, SAVE_FAILED, LOAD_FAILED }
 
-/** OUTDATED: the server answered, but not with a report this app can read. A server before 0.7 answers that way. */
+/** OUTDATED: an answer came, but not one this app can read as a report. A server before 0.7 answers that way, and so may something else at its address. */
 enum class ReportLoad { LOADING, READY, NONE, UNREACHABLE, OUTDATED }
 
-/** OUTDATED: the server answered, but not with a rally list this app can read. An older server answers that way. */
+/** OUTDATED: an answer came, but not one this app can read as a rally list. An older server answers that way, and so may something else at its address. */
 enum class RalliesLoad { LOADING, READY, UNREACHABLE, OUTDATED }
 
 /**
@@ -171,23 +297,85 @@ data class AnalysisUi(
 }
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
-    private val store = LocalStore(File(application.filesDir, "volleystat.json"))
-    private val inspector = VideoInspector(application)
-    private val recordingsFolder = File(application.filesDir, "recordings")
-    private var uploadJob: Job? = null
+    companion object {
+        /** How often an account call meets SERVER_BUSY before the screen hears of it. Each try waits the server's Retry-After first. */
+        const val BUSY_TRIES = 5
+        private const val LONGEST_BUSY_WAIT_SECONDS = 10
+
+        /**
+         * The refusals of POST /me/delete that the server gives only after it found the session
+         * (backend/app/accounts.py, delete_account): the account was still there. A 422 comes
+         * before that check, so it shows nothing; it and every other 4xx but 401 put the mark back
+         * to what it was before the request.
+         */
+        private val ANSWERS_OF_A_LIVE_SESSION = setOf("PASSWORD_WRONG", "TOO_MANY_ATTEMPTS", "SERVER_BUSY")
+    }
+
+    // What lives where (design 10.3): device.json for the phone, session.bin and device.bin sealed
+    // with the keystore's key, and one folder per account. The app reads only the signed-in account's folder.
+    private val cipher: SessionCipher = (application as? SessionCipherSource)?.sessionCipher ?: KeystoreSessionCipher()
+    private val folders = AccountFiles(application.filesDir)
+    private val device = DeviceStore(File(application.filesDir, "device.json"), folders.legacyStore)
+    private val sessions = SessionStore(File(application.filesDir, "session.bin"), cipher)
+    private val deviceTokens = DeviceTokenStore(File(application.filesDir, "device.bin"), cipher)
+    private val doubtStore = DeletionDoubtStore(File(application.filesDir, "deletions.bin"), cipher)
+    private val registrations = UnansweredRegistrationStore(File(application.filesDir, "registrations.bin"), cipher)
+    /**
+     * Where a phone without a session would put a recording. The screens never let it record without
+     * one; should it happen, the file stays in the cache and in no account.
+     */
+    private val signedOut = AccountSpace(File(application.cacheDir, "signed-out"))
+
+    /** The signed-in session and its folder. Both change together, under [storeLock]. */
+    @Volatile private var session: Session? = null
+    @Volatile private var space: AccountSpace? = null
+    /**
+     * The accounts whose deletion is in doubt, newest first, as deletions.bin keeps them (F1). The
+     * login screen offers the first; the others wait their turn. Changed under [accountLock].
+     */
+    @Volatile private var inDoubt: List<UnconfirmedDeletion> = emptyList()
+    private val storeLock = Any()
+    private val accountLock = Any()
+
+    private val inspector = VideoInspector(application) { (space ?: signedOut).thumbnails }
+    private val recordingsFolder: File get() = (space ?: signedOut).recordings
+    @Volatile private var uploadJob: Job? = null
 
     private val _state: MutableStateFlow<AppUiState>
     val state: StateFlow<AppUiState>
 
     init {
-        val saved = store.load()
+        val settings = device.load()
+        // A session whose account id can not name a folder is no session: nothing of it is read or written.
+        val saved = sessions.load()?.takeIf { runCatching { folders.of(it.userId) }.isSuccess }
+        session = saved
+        space = saved?.let { folders.of(it.userId) }
+        // A doubt whose id names no folder could never be acted on. The signed-in account is plainly still there: a
+        // login of it left a doubt behind only when the file could not be written then, so the doubt leaves it now.
+        val doubts = doubtStore.load().map { (id, name) -> UnconfirmedDeletion(id, name) }
+        inDoubt = doubts.filter { doubt -> runCatching { folders.of(doubt.userId) }.isSuccess && doubt.userId != saved?.userId }
+        if (saved != null && doubts.any { it.userId == saved.userId }) runCatching { doubtStore.remove(saved.userId) }
+        val stored = space?.store?.load() ?: StoredState()
+        // The question about the old data waits for its answer through a restart, for the account it was put to only (S2).
+        val asked = settings.legacyAskedUser
+        val legacy = if (saved != null && !settings.legacyHandled && (asked == null || asked == sha256Hex(saved.userId))) {
+            runCatching { folders.legacyContent() }.getOrNull()
+        } else {
+            null
+        }
         _state = MutableStateFlow(
             AppUiState(
-                matches = saved.matches, teams = saved.teams, draft = saved.draft, settings = saved.settings,
-                serverConfigured = baseUrl(saved.settings.serverTarget).isNotBlank(), recordings = listRecordings(),
+                matches = stored.matches, teams = stored.teams, draft = stored.draft, settings = settings,
+                serverConfigured = baseUrl(settings.serverTarget).isNotBlank(), recordings = listRecordings(),
+                account = AccountUi(
+                    user = saved?.let { AccountUser(it.userId, it.username, it.displayName, it.passwordTemporary) }, legacy = legacy?.let(::question),
+                    unconfirmedDeletion = inDoubt.firstOrNull(),
+                ),
             )
         )
         state = _state.asStateFlow()
+        // A question put before the phone remembered whom it was put to belongs to the account that sees it now.
+        if (legacy != null && asked == null) saved?.let { changeDevice { settings -> settings.copy(legacyAskedUser = sha256Hex(it.userId)) } }
     }
 
     /** Tests point the view model at a stand-in server with this. It is null everywhere else. */
@@ -199,22 +387,45 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private fun baseUrl(target: ServerTarget) =
         baseUrlOverride ?: if (target == ServerTarget.EMULATOR) BuildConfig.API_URL_EMULATOR else BuildConfig.API_URL_USB
 
-    fun api() = ApiClient(baseUrl(_state.value.settings.serverTarget), correctionTimeoutMs ?: ApiClient.CORRECTION_TIMEOUT_MS)
+    /**
+     * A client for the server, with the session's token when one is signed in. A call that gets
+     * 401 AUTH_REQUIRED ends that session (and only that one) before it throws.
+     */
+    fun api() = client(endsSession = true)
+
+    private fun client(endsSession: Boolean) = ApiClient(
+        baseUrl(_state.value.settings.serverTarget), correctionTimeoutMs ?: ApiClient.CORRECTION_TIMEOUT_MS,
+        token = session?.token, onAuthRequired = if (endsSession) ::onSessionEnded else null,
+    )
+
+    /** The headers the video players send with every request: the session, when one is signed in (design 10.5). */
+    fun playbackHeaders(): Map<String, String> = session?.let { mapOf("Authorization" to "Bearer ${it.token}") }.orEmpty()
 
     /** Base address for streaming a video from the server (review clips). */
     fun serverBaseUrl(): String = baseUrl(_state.value.settings.serverTarget)
 
-    /** Every change to matches, draft or settings goes through here so it reaches the disk. */
+    /**
+     * Every change to matches, teams or the draft goes through here so it reaches the signed-in
+     * account's folder. Without a session nothing reaches the disk.
+     */
     private fun change(transform: (AppUiState) -> AppUiState) {
         _state.update(transform)
         // Changes arrive from the main thread and from the upload thread. Writing whatever is
-        // current under one lock means a slower writer can never put an older state on disk.
-        val saved = synchronized(store) {
+        // current under one lock means a slower writer can never put an older state on disk. An
+        // account switch takes the same lock, so one account's state never lands in another's folder.
+        val saved = synchronized(storeLock) {
             val current = _state.value
             // A full disk must not take the app down in the middle of a keystroke or an upload.
-            runCatching { store.save(StoredState(current.matches, current.teams, current.draft, current.settings)) }.isSuccess
+            space?.let { runCatching { it.store.save(StoredState(current.matches, current.teams, current.draft)) }.isSuccess } ?: true
         }
         if (_state.value.saveFailed == saved) _state.update { it.copy(saveFailed = !saved) }
+    }
+
+    /** Every change to what the phone itself remembers goes through here (device.json). */
+    private fun changeDevice(transform: (Settings) -> Settings) {
+        _state.update { it.copy(settings = transform(it.settings)) }
+        val saved = synchronized(storeLock) { runCatching { device.save(_state.value.settings) }.isSuccess }
+        if (!saved) _state.update { it.copy(saveFailed = true) }
     }
 
     // ----- New analysis draft -----
@@ -408,12 +619,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     // ----- Profile -----
 
-    fun setServerTarget(target: ServerTarget) =
-        change { it.copy(settings = it.settings.copy(serverTarget = target), serverTest = ServerTest.IDLE, serverConfigured = baseUrl(target).isNotBlank()) }
+    /**
+     * Chooses the server of a debug build. A session belongs to the server that opened it, so the
+     * choice waits for a logout: otherwise its token would go to the other address, in plain HTTP,
+     * and that server's 401 would end a session that is still alive (review finding S5). It also
+     * waits while an account call is on its way: a login sent to one server must not sign in a
+     * session that then talks to the other (second review, R2-B).
+     */
+    fun setServerTarget(target: ServerTarget) = synchronized(accountLock) {
+        if (session != null || _state.value.account.busy) return@synchronized
+        changeDevice { it.copy(serverTarget = target) }
+        _state.update { it.copy(serverTest = ServerTest.IDLE, serverConfigured = baseUrl(target).isNotBlank()) }
+    }
 
-    fun setDisplayName(name: String) = change { it.copy(settings = it.settings.copy(displayName = name.take(40))) }
-
-    fun markWelcomeSeen() = change { it.copy(settings = it.settings.copy(welcomeSeen = true)) }
+    fun markWelcomeSeen() = changeDevice { it.copy(welcomeSeen = true) }
 
     /** Remembers the last job state the analysis screens saw, so lists can show it offline. */
     fun rememberAnalysis(matchId: String, summary: AnalysisSummary?) = change { state ->
@@ -424,7 +643,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _analysis = MutableStateFlow(AnalysisUi())
     val analysis: StateFlow<AnalysisUi> = _analysis.asStateFlow()
-    private var watchJob: Job? = null
+    @Volatile private var watchJob: Job? = null
 
     private fun videoIdOf(matchId: String) = _state.value.matches.firstOrNull { it.localId == matchId }?.check
         ?.takeIf { it.status == com.voleybolveveleybol.volleystat.model.VideoCheck.READY }?.videoId
@@ -561,7 +780,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
      * reuses the key, so a decision whose answer was lost is answered from the server's record
      * instead of being refused as a stale version.
      */
-    private var pendingDecision: Pair<String, String>? = null
+    @Volatile private var pendingDecision: Pair<String, String>? = null
 
     /** One tap is one decision: it is saved at once and the next open card comes up. */
     fun answerReview(selection: String) {
@@ -872,4 +1091,566 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         recordingsFolder.listFiles().orEmpty().filter { it.isFile && it.length() > 0 }
             .sortedByDescending { it.lastModified() }
             .map { RecordingFile(it.name, it.absolutePath, it.length()) }
+
+    // ----- Accounts (design 3, 10.3, 10.5 and 10.7; docs/API_V1.md section 10) -----
+    // The app says that someone is signed in, registered, renamed or logged out only after the
+    // server confirmed it. A password never leaves the call it was typed for.
+
+    @Volatile private var accountJob: Job? = null
+
+    /**
+     * Counts the starts and the ends of account calls, so it is odd while one runs. An account read
+     * that left while a call was on its way, or before one started, may describe the account as it
+     * was before that call: a name the user has just changed, a session whose deletion is in doubt.
+     * Its answer is dropped (review finding F7). The next visit of the profile reads again.
+     */
+    private val accountCallMarks = java.util.concurrent.atomic.AtomicInteger()
+
+    /**
+     * The SHA-256 of each username whose registration went out and got no answer, or an answer that leaves
+     * the outcome unknown (a 5xx, or a JSON success the app can not read), with the time of the mark: the server
+     * may have opened that account all the same (third review, A1 and B3). A registration that never left
+     * the phone gets no mark (fourth review, D2). registrations.bin keeps them sealed through a restart; a
+     * phone that can not seal the file keeps them in memory until the app ends. A sign-in of that username,
+     * LOGIN_FAILED for the login that looks for its account, or the end of its day ends a mark. Changed under [accountLock].
+     */
+    @Volatile private var unansweredRegistrations: Map<String, Long> = registrations.load(System.currentTimeMillis())
+
+    /** The clock of the registration marks. Tests move it on with this instead of waiting a day. */
+    internal var clock: () -> Long = System::currentTimeMillis
+
+    fun login(username: String, password: String) {
+        val name = normalizeUsername(username)
+        accountCall { api -> signIn(api.login(name, password, deviceTokens.tokenFor(name)), api.baseUrl) }
+    }
+
+    /**
+     * Opens an account. [operatorCode] is the operator's sign-up code (kayıt kodu); a blank one is
+     * none. The server's gate needs one until invite links come (slice B5).
+     */
+    fun register(displayName: String, username: String, password: String, operatorCode: String?) {
+        val name = normalizeUsername(username)
+        val code = operatorCode?.trim()?.ifEmpty { null }
+        accountCall { api ->
+            val result = try {
+                api.register(name, displayName.trim(), password, code)
+            } catch (error: ApiException) {
+                // A 5xx, or a JSON success the app can not read, may come after the server opened the account, as a lost
+                // answer may (third review, B3): the mark makes the next try look for it. A 3xx, a 4xx, a 511 or a 2xx that
+                // is not JSON marks nothing (R1, S1, S3).
+                if (error.leavesOutcomeUnknown) {
+                    markRegistration(name)
+                    throw error
+                }
+                findLostRegistration(api, name, password, error)
+            } catch (error: RequestNotSent) {
+                // Nothing of the request left the phone, so no account can have opened: no mark sends a login later (D2).
+                throw error
+            } catch (error: IOException) {
+                // No answer came, and the server may have opened the account all the same.
+                markRegistration(name)
+                throw error
+            }
+            // The sign-in ends the mark of this username, if it had one.
+            signIn(result, api.baseUrl)
+        }
+    }
+
+    /**
+     * A registration whose answer was lost may have opened the account. Its repeat then meets that
+     * account: the spent code answers first ([refused] SIGNUP_CODE_INVALID), otherwise the taken
+     * username. A login with the same password tells the two apart. It goes only for a username whose
+     * registration got no answer: for any other username it would count a failed attempt against
+     * someone else's account. Throws [refused] when the registration's answer stands.
+     */
+    private fun findLostRegistration(api: ApiClient, name: String, password: String, refused: ApiException): SignedIn {
+        if (!registrationUnanswered(name) || (refused.code != "USERNAME_TAKEN" && refused.code != "SIGNUP_CODE_INVALID")) throw refused
+        return try {
+            api.login(name, password, deviceTokens.tokenFor(name))
+        } catch (error: ApiException) {
+            // Only LOGIN_FAILED answers the question: no account of this name has this password, so the
+            // registration's answer stands and the mark goes. Any other answer (SERVER_BUSY, TOO_MANY_ATTEMPTS)
+            // stands as itself, as a missing answer does, and the mark stays for the next try.
+            if (error.code != "LOGIN_FAILED") throw error
+            forgetRegistration(name)
+            throw refused
+        }
+    }
+
+    /**
+     * Whether [username] carries a mark that still counts. A mark a day old sends no login: by then the username may
+     * name someone else's account (fourth review, D2). It leaves memory and the file here.
+     */
+    private fun registrationUnanswered(username: String): Boolean {
+        val at = unansweredRegistrations[sha256Hex(username)] ?: return false
+        if (UnansweredRegistrationStore.current(at, clock())) return true
+        forgetRegistration(username)
+        return false
+    }
+
+    /** Marks [username]: its registration got no answer. A phone that can not seal registrations.bin keeps the mark in memory. */
+    private fun markRegistration(username: String) {
+        synchronized(accountLock) {
+            val now = clock()
+            unansweredRegistrations = unansweredRegistrations + (sha256Hex(username) to now)
+            runCatching { registrations.add(username, now) }
+        }
+    }
+
+    /** Ends the mark of [username]: a sign-in found the account, or LOGIN_FAILED showed that it is not there with this password. */
+    private fun forgetRegistration(username: String) {
+        synchronized(accountLock) {
+            unansweredRegistrations = unansweredRegistrations - sha256Hex(username)
+            runCatching { registrations.remove(username) }
+        }
+    }
+
+    /**
+     * Ends the session on the server, then on the phone. Without an answer the session stays,
+     * because the server may still hold it, unless [evenWithoutAnswer]: then the phone lets it go
+     * and the server ends it when it runs out. The device token stays (design 3.2).
+     */
+    fun logout(evenWithoutAnswer: Boolean = false) {
+        val leaving = session ?: return
+        accountCall(endsSession = false) { api ->
+            val answered = try {
+                api.logout()
+                true
+            } catch (error: IOException) {
+                // A session the server already ended is as closed as one it ends now.
+                val gone = error is ApiException && error.code == "AUTH_REQUIRED"
+                if (!gone && !evenWithoutAnswer) throw error
+                false
+            }
+            // The server's 204 shows that the account is still there. Without it a deletion in doubt stays in doubt (S1).
+            leave(leaving, ended = false, offer = !answered)
+        }
+    }
+
+    fun changeDisplayName(displayName: String) {
+        val current = session ?: return
+        accountCall(change = AccountChange.DISPLAY_NAME) { api -> updateUser(current, api.changeDisplayName(displayName.trim()), AccountChange.DISPLAY_NAME) }
+    }
+
+    /** The server ends every other session of the account and forgets its device tokens, this phone's included. */
+    fun changePassword(currentPassword: String, newPassword: String) {
+        val current = session ?: return
+        accountCall(change = AccountChange.PASSWORD) { api ->
+            val user = api.changePassword(currentPassword, newPassword)
+            runCatching { deviceTokens.forget(current.username) }
+            updateUser(current, user, AccountChange.PASSWORD)
+        }
+    }
+
+    /**
+     * Deletes the account on the server and then everything the phone keeps for it: its records,
+     * rosters, draft, camera recordings, thumbnails, session and device token. Nothing on the phone
+     * goes before the server's 204.
+     *
+     * A deletion whose answer was lost may have deleted the account (review finding S1). The session
+     * keeps a mark of it in session.bin, through a restart. When a repeat then meets an ended session,
+     * a login with the password the user just typed asks the server whether the account is still
+     * there. If it is, the deletion goes out again with the new session. If the login fails, the
+     * session leaves the phone and the login screen offers to delete the account's data
+     * ([UnconfirmedDeletion]). Any other end of a marked session leaves the same offer.
+     */
+    fun deleteAccount(password: String) {
+        if (session == null) return
+        // The 401 is read here and not by the client: an ended session may be the sign of a deletion that got through.
+        accountCall(endsSession = false) { api -> deleteOnServer(api, password, mayLogin = true) }
+    }
+
+    private fun deleteOnServer(api: ApiClient, password: String, mayLogin: Boolean) {
+        val current = session ?: return
+        val earlier = current.deletionUnanswered
+        // Marked before the request goes, so a process that ends before the answer remembers it too.
+        val sent = markDeletion(current, unanswered = true)
+        try {
+            api.deleteAccount(password)
+        } catch (error: RequestNotSent) {
+            // Nothing of the request left the phone, so the server can not have deleted the account (fifth check, P1).
+            // The mark is what it was before it.
+            markDeletion(sent, unanswered = earlier)
+            throw error
+        } catch (error: ApiException) {
+            when {
+                error.code != "AUTH_REQUIRED" -> {
+                    when {
+                        // The server found the session and refused: the account is still there.
+                        error.code in ANSWERS_OF_A_LIVE_SESSION -> markDeletion(sent, unanswered = false)
+                        // A refusal that comes before the server acts on the account (a 422 for a password of more than
+                        // 1024 characters, say) says nothing about this deletion. The mark is what it was before it. Only the
+                        // API's own envelope makes a 4xx the server's refusal: a 4xx without it (HTTP_404 from a proxy's HTML
+                        // page, say) is an answer the app can not read, and the mark stays (fifth check, P4).
+                        error.status in 400..499 && !error.code.startsWith("HTTP_") -> markDeletion(sent, unanswered = earlier)
+                        // A 5xx may come after the deletion: the mark stays, as for a missing answer.
+                    }
+                    throw error
+                }
+                // The server ended the session before this deletion, and no earlier deletion is in doubt.
+                !earlier -> {
+                    leave(sent, ended = true, offer = false)
+                    throw error
+                }
+                mayLogin -> deleteAfterEndedSession(sent, password)
+                else -> leave(sent, ended = true)
+            }
+            return
+        }
+        // The server's 204: the account is gone, and everything the phone keeps for it goes too.
+        leave(sent, ended = false, offer = false)
+        folders.delete(sent.userId)
+        runCatching { deviceTokens.forget(sent.username) }
+        synchronized(accountLock) {
+            // Another call of this session may have met the ended session before the 204 came, and its 401 left a
+            // doubt about this account. The 204 is the server's word that the account is gone: the doubt goes, in
+            // memory and on the disk, and the next account in doubt, if any, takes its place on the login screen.
+            dropDoubt(sent.userId)
+            _state.update { it.copy(account = it.account.copy(confirmed = AccountChange.DELETED, unconfirmedDeletion = inDoubt.firstOrNull())) }
+        }
+    }
+
+    /**
+     * The server ended the session after a deletion whose answer was lost. A login with the same
+     * password and this phone's device token asks whether the account is still there. Only
+     * LOGIN_FAILED answers that it is not, and it can also mean a password changed on another phone:
+     * the app then deletes nothing on its own and leaves the choice to the user.
+     */
+    private fun deleteAfterEndedSession(sent: Session, password: String) {
+        val asked = ApiClient(baseUrl(_state.value.settings.serverTarget))
+        val again = try {
+            asked.login(sent.username, password, deviceTokens.tokenFor(sent.username))
+        } catch (error: ApiException) {
+            // Any other failure answers nothing. The session stays on the phone with its mark, and a repeat asks again.
+            if (error.code != "LOGIN_FAILED") throw error
+            null
+        }
+        if (again == null || again.user.id != sent.userId) {
+            // The username now names another account: its new session is closed again, and none of it reaches the phone.
+            again?.let { other -> runCatching { ApiClient(asked.baseUrl, token = other.token).logout() } }
+            leave(sent, ended = true)
+            return
+        }
+        try {
+            signIn(again, asked.baseUrl)
+        } catch (moved: AnswerFromAnotherServer) {
+            // The address changed while the login was on its way. The session that the server ended goes too: the next
+            // call would carry its token to the other address. The login showed that the account is still there, so no
+            // doubt about its deletion stays behind.
+            leave(sent, ended = true, offer = false)
+            throw moved
+        }
+        // The account is still there, and the user asked for its deletion: the request goes out again with the new session.
+        deleteOnServer(client(endsSession = false), password, mayLogin = false)
+    }
+
+    /**
+     * Sets or clears [Session.deletionUnanswered] on [current], if it is still the signed-in
+     * session, and writes it to session.bin. A phone that can not write it keeps it in memory.
+     */
+    private fun markDeletion(current: Session, unanswered: Boolean): Session = synchronized(accountLock) {
+        val live = session?.takeIf { it.token == current.token } ?: return@synchronized current
+        if (live.deletionUnanswered == unanswered) return@synchronized live
+        val next = live.copy(deletionUnanswered = unanswered)
+        session = next
+        runCatching { sessions.save(next) }
+        next
+    }
+
+    /**
+     * Deletes what the phone keeps for the account of [AccountUi.unconfirmedDeletion]: its folder
+     * (matches, rosters, draft, recordings and thumbnails) and its device token. The user asked for
+     * it on the login screen. The server is not asked, and nothing says that it deleted the account.
+     */
+    fun deleteUnconfirmedAccountData() = synchronized(accountLock) {
+        val doubt = _state.value.account.unconfirmedDeletion ?: return@synchronized
+        // A login on its way may be one of this account, and the signed-in account's folder never goes this way.
+        if (_state.value.account.busy || session?.userId == doubt.userId) return@synchronized
+        runCatching { folders.delete(doubt.userId) }
+        // A folder that is still there keeps the offer, so the user can try again.
+        if (runCatching { folders.of(doubt.userId).root.exists() }.getOrDefault(true)) return@synchronized
+        // Without its username the phone can not name the device token. Its own device.bin then went with the old key.
+        doubt.username?.let { name -> runCatching { deviceTokens.forget(name) } }
+        dropDoubt(doubt.userId)
+        // The next account in doubt, if any, takes its place on the login screen.
+        _state.update {
+            it.copy(account = it.account.copy(unconfirmedDeletion = inDoubt.firstOrNull(), confirmed = AccountChange.PHONE_DATA_DELETED, deletedFromPhone = doubt))
+        }
+    }
+
+    /**
+     * Keeps [doubt] first among the accounts in doubt, in memory and in deletions.bin (F1). A phone
+     * that can not write the file keeps it in memory until the app ends. Runs under [accountLock].
+     */
+    private fun keepDoubt(doubt: UnconfirmedDeletion) {
+        inDoubt = listOf(doubt) + inDoubt.filterNot { it.userId == doubt.userId }
+        runCatching { doubtStore.add(doubt.userId, doubt.username) }
+    }
+
+    /** Takes the account [userId] off the accounts in doubt. Runs under [accountLock]. */
+    private fun dropDoubt(userId: String) {
+        if (inDoubt.none { it.userId == userId }) return
+        inDoubt = inDoubt.filterNot { it.userId == userId }
+        runCatching { doubtStore.remove(userId) }
+    }
+
+    /** Reads the account from the server: a name changed on another phone, or a session that ended there. */
+    fun refreshAccount() {
+        val current = session ?: return
+        val mark = accountCallMarks.get()
+        viewModelScope.launch {
+            val user = withContext(Dispatchers.IO) { runCatching { client(endsSession = true).me() }.getOrNull() } ?: return@launch
+            updateUser(current, user, null, readAt = mark)
+        }
+    }
+
+    /**
+     * The answer to the question about the data of app 0.7: [move] puts it into the signed-in
+     * account, otherwise it stays where it is and no account reads it. The phone asks only once.
+     */
+    fun answerLegacy(move: Boolean) {
+        val target = space ?: return
+        synchronized(accountLock) {
+            // One answer at a time: a second tap before the first one landed is no second answer.
+            if (_state.value.account.legacy == null || _state.value.account.legacyMoving) return
+            _state.update { it.copy(account = it.account.copy(legacyMoving = true)) }
+        }
+        viewModelScope.launch {
+            val done = withContext(Dispatchers.IO) {
+                !move || runCatching {
+                    synchronized(storeLock) {
+                        folders.moveLegacyInto(target)
+                        if (space === target) {
+                            val stored = target.store.load()
+                            _state.update { it.copy(matches = stored.matches, teams = stored.teams, draft = stored.draft, recordings = listRecordings()) }
+                        }
+                    }
+                }.isSuccess
+            }
+            if (!done) {
+                // The question stays, and the next answer tries again: a record that already moved is not added twice.
+                // Every failed attempt gives the buttons back, the second one too, whatever the disk said before.
+                _state.update { it.copy(saveFailed = true, account = it.account.copy(legacyMoving = false)) }
+                return@launch
+            }
+            changeDevice { it.copy(legacyHandled = true) }
+            _state.update { it.copy(account = it.account.copy(legacy = null, legacyMoving = false)) }
+        }
+    }
+
+    /**
+     * The reason a password screen gave when it went while its change was on its way (third review, B1).
+     * The confirmation of that call names it; the end of the call and the next call drop it. Set under [accountLock].
+     */
+    @Volatile private var notHandedOverAtConfirmation: PasswordNotHandedOver? = null
+
+    /**
+     * The password screen could not hand the new password to the password manager, for [reason]. Only a
+     * confirmed change counts: a confirmation that already came is named at once, and one still on its way
+     * (the user left the screen, B1) is named when it comes. A refusal or a missing answer names nothing.
+     */
+    fun newPasswordNotHandedOver(reason: PasswordNotHandedOver) = synchronized(accountLock) {
+        val account = _state.value.account
+        when {
+            account.confirmed == AccountChange.PASSWORD -> _state.update { it.copy(account = it.account.copy(newPasswordNotHandedOver = reason)) }
+            account.busy -> notHandedOverAtConfirmation = reason
+        }
+    }
+
+    fun clearAccountProblem() =
+        _state.update { it.copy(account = it.account.copy(problem = null, confirmed = null, sessionEnded = false, newPasswordNotHandedOver = null, afterLeave = null)) }
+
+    /**
+     * Stops an account call that waits to repeat after SERVER_BUSY, for a screen the user left (design 10.7, R10). A
+     * request already on its way goes on and is not repeated; its outcome stays (fourth review, D1).
+     */
+    fun cancelAccountCall() {
+        accountJob?.cancel()
+    }
+
+    /**
+     * Runs one account call off the main thread. SERVER_BUSY is asked again after the server's
+     * Retry-After, a few times; the server answers it before it counts or writes anything, so a
+     * repeat changes nothing twice. Every other failure becomes the account's problem.
+     */
+    private fun accountCall(endsSession: Boolean = true, change: AccountChange? = null, call: (ApiClient) -> Unit) {
+        val caller = session
+        synchronized(accountLock) {
+            if (_state.value.account.busy) return
+            _state.update { it.copy(account = it.account.copy(busy = true, problem = null, confirmed = null, newPasswordNotHandedOver = null, afterLeave = null)) }
+            notHandedOverAtConfirmation = null
+            accountCallMarks.incrementAndGet()
+        }
+        accountJob = viewModelScope.launch {
+            // Set inside the call's own context. A screen the user left cancels this job, and the cancelled withContext
+            // throws on its way back, after the request went out and its answer came: the failure must not go with it (D1).
+            var failure: Exception? = null
+            try {
+                withContext(Dispatchers.IO) { failure = callUntilNotBusy(endsSession, call) }
+            } finally {
+                // An ended session left the account before this line, and the login screen says so in its own words
+                // (sessionEnded, or the offer of a deletion in doubt). The same reason as a problem would stand there twice (F3).
+                val ended = failure
+                val problem = ended?.let(AuthProblem::of)?.takeUnless { it == AuthProblem.SessionEnded }
+                // The user left the screen of this call while its request was on its way (StopAccountCallOnLeave).
+                val left = !isActive
+                // The form of a call that was left is gone, and its problem would stand on whatever form comes next. The
+                // profile says how a change of its own ended, while the session that asked for it is still signed in.
+                val afterLeave = if (left && ended != null && problem != null && change != null && caller != null && session?.token == caller.token) {
+                    OutcomeAfterLeave(change, problem, outcomeUnknownAfter(ended))
+                } else {
+                    null
+                }
+                accountCallMarks.incrementAndGet()
+                // A screen that went during this call speaks for this call only.
+                notHandedOverAtConfirmation = null
+                _state.update { it.copy(account = it.account.copy(busy = false, retryingAfterBusy = false, problem = problem.takeUnless { left }, afterLeave = afterLeave)) }
+            }
+        }
+    }
+
+    /** Runs [call] and repeats it after SERVER_BUSY, at most [BUSY_TRIES] times in all. Returns the failure that ended it, or null. */
+    private suspend fun callUntilNotBusy(endsSession: Boolean, call: (ApiClient) -> Unit): Exception? {
+        repeat(BUSY_TRIES) { attempt ->
+            val error = try {
+                call(client(endsSession))
+                return null
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                error
+            }
+            if (error !is ApiException || error.code != "SERVER_BUSY" || attempt == BUSY_TRIES - 1) return error
+            // The form says that the server is busy and that the app sends again (T5); the next try waits for an answer again.
+            retryingAfterBusy(true)
+            // The wait can be cancelled: a screen the user left stops it (cancelAccountCall), and accountCall clears the mark.
+            waitAfterBusy(1_000L * (error.retryAfterSeconds ?: 1).coerceIn(0, LONGEST_BUSY_WAIT_SECONDS))
+            retryingAfterBusy(false)
+        }
+        return null
+    }
+
+    /**
+     * How the app waits out a SERVER_BUSY answer before the next try. Tests count the wait on a clock of
+     * their own with this instead of waiting it out. The wait stays cancellable everywhere else.
+     */
+    internal var waitAfterBusy: suspend (millis: Long) -> Unit = { delay(it) }
+
+    private fun retryingAfterBusy(waiting: Boolean) = _state.update { it.copy(account = it.account.copy(retryingAfterBusy = waiting)) }
+
+    /**
+     * Takes the server's confirmation of a login or a registration that went to [sentTo]. Runs on the
+     * thread of the call. An answer from another address than the one the app talks to now opens no
+     * session: its token would go to that other address with every later call (second review, R2-B).
+     * The session goes back closed to the server that opened it, and nothing of it reaches the disk.
+     */
+    private fun signIn(result: SignedIn, sentTo: String) {
+        if (sentTo != baseUrl(_state.value.settings.serverTarget)) {
+            runCatching { ApiClient(sentTo, token = result.token).logout() }
+            throw AnswerFromAnotherServer()
+        }
+        val next = Session(
+            result.token, result.user.id, result.user.username, result.user.displayName, result.expiresAt,
+            passwordTemporary = result.user.passwordTemporary,
+        )
+        // An id that can not name a folder throws here, before anything is written.
+        val nextSpace = folders.of(next.userId)
+        result.deviceToken?.let { token -> runCatching { deviceTokens.remember(next.username, token) } }
+        // A phone that can not seal the session keeps it in memory: the user is signed in until the app ends.
+        val kept = runCatching { sessions.save(next) }.isSuccess
+        val content = if (_state.value.settings.legacyHandled) null else runCatching { folders.legacyContent() }.getOrNull()
+        // The question belongs to the first account it is put to (S2). Any other account gets no question and no
+        // titles, and the old data stays unread until that account answers.
+        val digest = sha256Hex(next.userId)
+        val legacy = content?.takeIf { _state.value.settings.legacyAskedUser.let { asked -> asked == null || asked == digest } }
+        synchronized(accountLock) {
+            // A login of an account in doubt shows that it is still there: its folder is its own again.
+            dropDoubt(result.user.id)
+            // The account of a registration without an answer is found, whichever screen signed it in.
+            forgetRegistration(result.user.username)
+            switchAccount(next, nextSpace) {
+                it.copy(
+                    user = result.user, sessionEnded = false, legacy = legacy?.let(::question), legacyMoving = false,
+                    unconfirmedDeletion = inDoubt.firstOrNull(),
+                    // A session the keystore could not seal is not a full disk: Home says that the next start asks for the password (S3).
+                    sessionNotKept = !kept,
+                )
+            }
+        }
+        changeDevice {
+            it.copy(accountSeen = true, legacyHandled = it.legacyHandled || content == null, legacyAskedUser = if (legacy != null) digest else it.legacyAskedUser)
+        }
+    }
+
+    private fun question(old: LegacyContent) = LegacyQuestion(old.titles, old.teams, old.recordings, old.draft)
+
+    /** The server ended the session that carried a call (401 AUTH_REQUIRED). An answer about an earlier session ends no later one. */
+    private fun onSessionEnded(token: String) {
+        session?.takeIf { it.token == token }?.let { leave(it, ended = true) }
+    }
+
+    /**
+     * Leaves [leaving] on the phone, if it is still the signed-in session. The account's folder stays
+     * for its next login. A session that carries a deletion without an answer leaves an
+     * [UnconfirmedDeletion] behind, and its text then stands in place of `session_ended`, unless
+     * [offer] is false: an answer showed that the account is still there, or its folder goes anyway.
+     */
+    private fun leave(leaving: Session, ended: Boolean, offer: Boolean = true) = synchronized(accountLock) {
+        val current = session?.takeIf { it.token == leaving.token } ?: return@synchronized
+        val doubt = if (offer && current.deletionUnanswered) UnconfirmedDeletion(current.userId, current.username) else null
+        // The doubt is written before the session goes: a process that ends in between keeps one of the two (F1).
+        doubt?.let(::keepDoubt)
+        runCatching { sessions.clear() }
+        switchAccount(null, null) { AccountUi(busy = it.busy, retryingAfterBusy = it.retryingAfterBusy, sessionEnded = ended && doubt == null, unconfirmedDeletion = inDoubt.firstOrNull()) }
+    }
+
+    /**
+     * Puts [next] and its folder in place of the signed-in account, with that folder's data on
+     * screen. A running upload and a followed analysis of the account that leaves stop; the server
+     * keeps what it has, and the upload resumes from its offset after the next login.
+     */
+    private fun switchAccount(next: Session?, nextSpace: AccountSpace?, account: (AccountUi) -> AccountUi) {
+        uploadJob?.cancel()
+        watchJob?.cancel()
+        synchronized(storeLock) {
+            session = next
+            space = nextSpace
+            val stored = nextSpace?.let { runCatching { it.store.load() }.getOrNull() } ?: StoredState()
+            _state.update {
+                it.copy(
+                    matches = stored.matches, teams = stored.teams, draft = stored.draft, upload = null, readingVideo = false,
+                    sourceProblem = null, removalProblem = null, saveFailed = false, recordings = listRecordings(), account = account(it.account),
+                )
+            }
+        }
+        _analysis.value = AnalysisUi()
+        pendingDecision = null
+    }
+
+    /**
+     * Takes the account as the server now describes it, if [current] is still the signed-in session.
+     * An account read names the [accountCallMarks] it left at in [readAt]: an account call that ran
+     * meanwhile makes its answer an old one.
+     */
+    private fun updateUser(current: Session, user: AccountUser, change: AccountChange?, readAt: Int? = null) = synchronized(accountLock) {
+        if (session?.token != current.token || user.id != current.userId) return@synchronized
+        if (readAt != null && (readAt % 2 != 0 || readAt != accountCallMarks.get())) return@synchronized
+        // The server answered for the session, so a deletion that got no answer did not happen (S1).
+        val next = current.copy(displayName = user.displayName, passwordTemporary = user.passwordTemporary, deletionUnanswered = false)
+        session = next
+        val kept = runCatching { sessions.save(next) }.isSuccess
+        // The password screen went while this change was on its way: no screen is left to hand the password over (B1).
+        val notHandedOver = notHandedOverAtConfirmation.takeIf { change == AccountChange.PASSWORD }
+        if (notHandedOver != null) notHandedOverAtConfirmation = null
+        // A session that was never kept stays unkept until a save works: its own text says so, not the disk text.
+        _state.update {
+            it.copy(
+                account = it.account.copy(
+                    user = user, confirmed = change ?: it.account.confirmed, sessionNotKept = it.account.sessionNotKept && !kept,
+                    newPasswordNotHandedOver = notHandedOver ?: it.account.newPasswordNotHandedOver,
+                ),
+                saveFailed = it.saveFailed || (!kept && !it.account.sessionNotKept),
+            )
+        }
+    }
 }

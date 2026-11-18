@@ -6,7 +6,7 @@ Hedef: Kullanıcı maçı telefonla kaydeder ya da galeriden seçer. Sunucu vide
 
 Bu depo yalnızca Android uygulamasını ve onun arka ucunu içerir. Web sitesi ayrı bir depodadır (`voleybolveveleybol`) ve bu projeyle kod paylaşmaz.
 
-## Bugünkü durum (uygulama 0.7.0, sunucu 0.8.0)
+## Bugünkü durum (uygulama 0.8.0, sunucu 0.8.0)
 
 | Parça | Durum |
 | --- | --- |
@@ -19,7 +19,7 @@ Bu depo yalnızca Android uygulamasını ve onun arka ucunu içerir. Web sitesi 
 | Maç kuralı | Var, testli. Kullanıcı maçı açarken kuralı seçer ve FIVB kuralı seçili gelir. Sunucu set skorlarını bu kurala göre sayar. Kullanıcı kuralı ralli listesinden de değiştirir. |
 | Ralli baseline'ı (`ml/`, hareket enerjisi) | Var. **Kimse gerçek maçta doğruluğunu ölçmedi.** |
 | Eğitilmiş yapay zekâ modeli | **Yok.** Uygulama bugün kendiliğinden istatistik çıkarmaz. Kullanıcı her rallinin kazananını kendisi seçer. |
-| Hesaplar (sunucu 0.8) | Sunucuda var, testli: kayıt, giriş, oturum, şifre değişikliği, hesap silme. Uygulamada giriş ekranı henüz yok. Maç uçları oturum istemez. |
+| Hesaplar (uygulama ve sunucu 0.8) | Var, testli: kayıt, giriş, çıkış, görünen ad, şifre değişikliği ve hesap silme. Uygulama giriş yapmamış kişiye yalnız karşılama, başlangıç, giriş ve kayıt ekranlarını gösterir. Telefon her hesabın maçlarını, kadrolarını ve kayıtlarını ayrı klasörde tutar ve oturumu telefonun anahtar deposundaki bir anahtarla şifreler. Kayıt için operatörün kayıt kodu gerekir. Maç uçları oturum istemez ve sunucu maçları henüz hesaplara bağlamaz. Kimse giriş ekranlarını gerçek telefonda denemedi. |
 | HTTPS, bulut | Yok. Sunucu yalnızca geliştirme bilgisayarında çalışır. |
 
 Özellik bazında tam döküm: [docs/GAP_ANALYSIS.md](docs/GAP_ANALYSIS.md). Yapay zekâ planı: [docs/AI_PLAN.md](docs/AI_PLAN.md). Mimari kararlar: [docs/ADR.md](docs/ADR.md).
@@ -57,8 +57,9 @@ ffmpeg -f lavfi -i testsrc2=size=1280x720:rate=30 -t 5 -c:v libx264 -pix_fmt yuv
 ### Android
 
 1. `android/` klasörünü Android Studio ile açın (JDK 17, Android SDK 36).
-2. Arka ucu `python -m app --analyzer demo` komutuyla başlatın. Emülatör bu sunucuya `10.0.2.2:8000` adresinden ulaşır. USB ile bağlı telefon için önce `adb reverse tcp:8000 tcp:8000` komutunu çalıştırın ve uygulamanın Profil sekmesinden "USB ile bağlı telefon" seçeneğini seçin.
-3. `app` modülünün **debug** sürümünü çalıştırın. Release sürümünde sunucu adresi bilerek boştur.
+2. Arka ucu `python -m app --analyzer demo` komutuyla başlatın. Emülatör bu sunucuya `10.0.2.2:8000` adresinden ulaşır. USB ile bağlı telefon için önce `adb reverse tcp:8000 tcp:8000` komutunu çalıştırın ve giriş ya da kayıt ekranının altındaki "USB ile bağlı telefon" seçeneğini seçin.
+3. Uygulama 0.8 açılışta bir hesap ister. Hesap oluşturmak için `python -m app.admin signup-code` komutuyla bir kayıt kodu çıkarın ve kodu kayıt ekranındaki "Kayıt kodu" alanına yazın.
+4. `app` modülünün **debug** sürümünü çalıştırın. Release sürümünde sunucu adresi bilerek boştur. Bu yüzden kişi release sürümünde hesap açamaz, giriş yapamaz ve başlangıç ekranını geçemez. Ekip sunucuyu internete açan dilimde release sürümüne bir sunucu adresi verene kadar bu sınır sürer. Uygulama 0.7'nin release sürümü maçları, kadroları ve kamera kayıtlarını telefonda hesapsız tutuyordu. Bu veri telefonda kalır, ama kişi 0.8'in release sürümünde veriye uygulamadan ulaşamaz.
 
 Demo analizörle gördüğünüz ralli aralıkları uydurmadır. Uygulama bu veriyi her ekranda DEMO etiketiyle gösterir.
 
@@ -72,7 +73,8 @@ cd android
 ./gradlew :app:testDebugUnitTest -Proborazzi.test.record=true
 
 # Uygulamanın istemcisini ve ekranlarını çalışan sunucuya karşı sürer.
-# Sunucu 127.0.0.1:8000 adresinde demo analizörle açık olmalıdır.
+# Sunucu 127.0.0.1:8000 adresinde demo analizörle ve açık kayıt kapısıyla çalışmalıdır:
+# VOLLEYSTAT_SIGNUP=open python -m app --analyzer demo. Testler kendi e2e_ hesaplarını açar ve siler.
 VOLLEYSTAT_E2E_URL=http://127.0.0.1:8000/v1 VOLLEYSTAT_E2E_VIDEO=/yol/ornek.mp4 \
   ./gradlew :app:testDebugUnitTest --tests '*E2eTest*'
 

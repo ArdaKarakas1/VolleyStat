@@ -1,6 +1,5 @@
 package com.voleybolveveleybol.volleystat.ui
 
-import android.content.Context
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -13,12 +12,11 @@ import androidx.test.core.app.ApplicationProvider
 import com.voleybolveveleybol.volleystat.AppViewModel
 import com.voleybolveveleybol.volleystat.MainActivity
 import com.voleybolveveleybol.volleystat.R
-import com.voleybolveveleybol.volleystat.data.LocalStore
+import com.voleybolveveleybol.volleystat.TestAccounts
 import com.voleybolveveleybol.volleystat.data.StoredState
 import com.voleybolveveleybol.volleystat.model.AnalysisSummary
 import com.voleybolveveleybol.volleystat.model.LocalVideo
 import com.voleybolveveleybol.volleystat.model.MatchRecord
-import com.voleybolveveleybol.volleystat.model.Settings
 import com.voleybolveveleybol.volleystat.model.UploadSession
 import com.voleybolveveleybol.volleystat.model.VideoCheck
 import com.voleybolveveleybol.volleystat.model.VideoSource
@@ -36,7 +34,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
-import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList
 import com.voleybolveveleybol.volleystat.model.SetScore
 import com.voleybolveveleybol.volleystat.partJson
@@ -55,7 +52,6 @@ private const val AWAY_TEAM = "Dönüş Misafir"
 class ReportReturnTest {
     private val server = MockWebServer()
     private val requests = CopyOnWriteArrayList<String>()
-    private val storeFile get() = File(ApplicationProvider.getApplicationContext<Context>().filesDir, "volleystat.json")
 
     private fun ok(json: JSONObject) = MockResponse().setResponseCode(200).setHeader("Content-Type", "application/json").setBody(json.toString())
     private fun value(number: Int?) = JSONObject().put("value", number ?: JSONObject.NULL).put("status", if (number == null) "UNKNOWN" else "PARTIAL")
@@ -96,7 +92,8 @@ class ReportReturnTest {
                 }
             }
             server.start()
-            LocalStore(storeFile).save(
+            TestAccounts.seed(
+                ApplicationProvider.getApplicationContext(),
                 StoredState(
                     matches = listOf(
                         MatchRecord(
@@ -106,7 +103,6 @@ class ReportReturnTest {
                             analysis = AnalysisSummary("j1", AnalysisSummary.NEEDS_REVIEW, mock = true, reviewOpen = 1, reviewTotal = 2),
                         )
                     ),
-                    settings = Settings(welcomeSeen = true),
                 )
             )
         }

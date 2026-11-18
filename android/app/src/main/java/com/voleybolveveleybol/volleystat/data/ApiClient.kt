@@ -22,8 +22,51 @@ import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 
-/** A reply the server sent with an error status. [code] is the server's error code. */
-class ApiException(val status: Int, val code: String, message: String, val details: JSONObject) : IOException(message)
+/**
+ * A reply the server sent with an error status. [code] is the server's error code. [retryAfterSeconds]
+ * is the server's Retry-After header, when it sent one (429 and 503). [contentType] is the Content-Type
+ * of a 2xx answer the app could not read (UNEXPECTED_ANSWER), as it came; the registration's rule reads it.
+ */
+class ApiException(
+    val status: Int, val code: String, message: String, val details: JSONObject, val retryAfterSeconds: Int? = null, val contentType: String? = null,
+) : IOException(message) {
+    /**
+     * The registration's own rule: the answer may come after the server opened the account, so the app
+     * marks the username, and the next try looks for the account with a login. Only a 5xx other than
+     * SERVER_BUSY and 511, and a 2xx with a JSON Content-Type that the app can not read (UNEXPECTED_ANSWER),
+     * mark; no answer to a request that left the phone marks too (AppViewModel.register). A 4xx comes before
+     * the server changes anything, and SERVER_BUSY before it counts or writes anything (third review, B3). A 4xx
+     * without the API's envelope marks none, nor does a 3xx (seventh checker, R1), nor a 4xx or a 3xx whose
+     * envelope names UNEXPECTED_ANSWER (eighth checker, S1). The API answers a registration with JSON or a 5xx,
+     * never with a 3xx, RFC 6585's 511 Network Authentication Required or a 2xx of another Content-Type: such
+     * an answer most likely comes from a gateway or a captive portal that never passed the request on
+     * (eighth checker, S3), and the mark would send a login with the typed password to the account that holds
+     * the username. The changes of the user's own account read the wider [outcomeUnknownAfter], which leaves
+     * the outcome open after all of these answers. HTTP has no status of 600 or above and the API never sends
+     * one, so such a status marks nothing either (ninth checker).
+     */
+    val leavesOutcomeUnknown: Boolean
+        get() = (status in 500..599 && status != 511 && code != "SERVER_BUSY") || (status in 200..299 && code == "UNEXPECTED_ANSWER" && namesJson(contentType))
+}
+
+/** Whether a Content-Type header names JSON, as the API's answers do: application/json, with any parameters. */
+private fun namesJson(contentType: String?): Boolean = contentType?.substringBefore(';')?.trim().equals("application/json", ignoreCase = true)
+
+/**
+ * The request never left the phone: the app could not open a connection to the server's address (the
+ * connection was refused, the name did not resolve, no route led there, or no connection came within the
+ * wait). Nothing of the request reached the server, so the server can not have acted on it (fourth review, D2).
+ */
+class RequestNotSent(cause: IOException) : IOException("The request never left the phone", cause)
+
+/** An account as the server describes it (docs/API_V1.md, section 10). */
+data class AccountUser(val id: String, val username: String, val displayName: String, val passwordTemporary: Boolean = false)
+
+/** The answer to a registration or a login: the account, its new session and the phone's device token. */
+class SignedIn(val user: AccountUser, val token: String, val expiresAt: String, val deviceToken: String?) {
+    /** Printed, the answer never shows its secrets. */
+    override fun toString() = "SignedIn(user=$user, expiresAt=$expiresAt, token=<hidden>, deviceToken=${if (deviceToken == null) "none" else "<hidden>"})"
+}
 
 data class Health(val maxVideoBytes: Long, val probeAvailable: Boolean)
 
@@ -41,18 +84,90 @@ data class MatchInfo(
 data class UploadTicket(val uploadId: String, val nextOffset: Long, val chunkSizeBytes: Int)
 data class UploadStatus(val nextOffset: Long, val status: String, val videoId: String?)
 
-/** Blocking client for the local development API. Call it off the main thread. */
+/**
+ * Blocking client for the local development API. Call it off the main thread.
+ *
+ * With a [token], every call carries it in `Authorization: Bearer`, and only there: no token ever
+ * stands in an address. A call that carried it and got `401 AUTH_REQUIRED` reports the token to
+ * [onAuthRequired] before it throws, so the app can end that one session.
+ */
 class ApiClient(
-    private val baseUrl: String,
+    /** The address every call of this client goes to. The view model compares it with the one it talks to when a login comes back. */
+    val baseUrl: String,
     /**
      * How long the app waits for the answer to a correction, and for the list and the cards it
      * reads right after one. The screen that sent the correction keeps the user until all three
      * are there, so the wait is short: the server applies a correction in one small transaction.
      */
     val correctionTimeoutMs: Int = CORRECTION_TIMEOUT_MS,
+    private val token: String? = null,
+    private val onAuthRequired: ((String) -> Unit)? = null,
 ) {
     companion object {
         const val CORRECTION_TIMEOUT_MS = 15_000
+    }
+
+    // ----- Accounts (docs/API_V1.md, section 10) -----
+    // A password goes only into the body of these calls. Nothing here logs a body.
+
+    /** Opens an account. [operatorCode] is the operator's one-time sign-up code; null sends none. */
+    fun register(username: String, displayName: String, password: String, operatorCode: String?): SignedIn {
+        val body = JSONObject().put("username", username).put("displayName", displayName).put("password", password).putOpt("operatorCode", operatorCode)
+        // The registration's rule reads the status and the Content-Type of a success the app can not read (ApiException.leavesOutcomeUnknown).
+        val received = Received()
+        return readable(received) { parseSignedIn(request("POST", "/auth/register", body.toString().toByteArray(), received = received)) }
+    }
+
+    /** Opens a session. [deviceToken] is the token this phone got at an earlier login of [username], if any (design 3.2). */
+    fun login(username: String, password: String, deviceToken: String?): SignedIn {
+        val body = JSONObject().put("username", username).put("password", password).putOpt("deviceToken", deviceToken)
+        return readable { parseSignedIn(request("POST", "/auth/login", body.toString().toByteArray())) }
+    }
+
+    /** Ends this client's session on the server. Only the route's own 204 counts. */
+    fun logout() {
+        request("POST", "/auth/logout", "{}".toByteArray(), expectedStatus = 204)
+    }
+
+    fun me(): AccountUser = readable { parseUser(request("GET", "/me").getJSONObject("user")) }
+
+    fun changeDisplayName(displayName: String): AccountUser =
+        readable { parseUser(request("PUT", "/me/display-name", JSONObject().put("displayName", displayName).toString().toByteArray()).getJSONObject("user")) }
+
+    /** Sets a new password. The server ends every other session of the account and forgets every device token of it. */
+    fun changePassword(currentPassword: String, newPassword: String): AccountUser {
+        val body = JSONObject().put("currentPassword", currentPassword).put("newPassword", newPassword)
+        return readable { parseUser(request("PUT", "/me/password", body.toString().toByteArray()).getJSONObject("user")) }
+    }
+
+    /** Deletes the account on the server. Only the route's own 204 counts as deleted. */
+    fun deleteAccount(password: String) {
+        request("POST", "/me/delete", JSONObject().put("password", password).toString().toByteArray(), expectedStatus = 204)
+    }
+
+    private fun parseUser(json: JSONObject) = AccountUser(
+        json.getString("id"), json.getString("username"), json.getString("displayName"), json.optBoolean("passwordTemporary", false),
+    )
+
+    private fun parseSignedIn(json: JSONObject): SignedIn {
+        val session = json.getJSONObject("session")
+        return SignedIn(parseUser(json.getJSONObject("user")), session.getString("token"), session.getString("expiresAt"), json.optStringOrNull("deviceToken"))
+    }
+
+    /**
+     * An answer that came but lacks what this call reads is a failed call, not a crash. A call that passes
+     * [received] gives the failure the status and the Content-Type of the answer it got.
+     */
+    private fun <T> readable(received: Received? = null, read: () -> T): T = try {
+        read()
+    } catch (error: org.json.JSONException) {
+        throw ApiException(received?.status ?: 200, "UNEXPECTED_ANSWER", "The answer is not the one this call expects", JSONObject(), contentType = received?.contentType)
+    }
+
+    /** The status and the Content-Type of the 2xx answer a request got, filled by [request]. */
+    private class Received {
+        var status = 200
+        var contentType: String? = null
     }
 
     fun health(): Health {
@@ -314,45 +429,88 @@ class ApiClient(
         timeoutMs: Int = 60_000,
         headers: Map<String, String> = emptyMap(),
         expectedStatus: Int? = null,
+        received: Received? = null,
     ): JSONObject {
-        val connection = URL(baseUrl.trimEnd('/') + path).openConnection() as HttpURLConnection
+        // An address the phone can not even read (a build without a server address) sends nothing either.
+        val connection = try {
+            URL(baseUrl.trimEnd('/') + path).openConnection() as HttpURLConnection
+        } catch (error: IOException) {
+            throw RequestNotSent(error)
+        }
         try {
             connection.requestMethod = method
             connection.connectTimeout = 5_000
             connection.readTimeout = timeoutMs
             connection.instanceFollowRedirects = false
+            if (token != null) connection.setRequestProperty("Authorization", "Bearer $token")
             headers.forEach { (name, value) -> connection.setRequestProperty(name, value) }
             if (body != null) {
                 connection.doOutput = true
                 connection.setRequestProperty("Content-Type", contentType)
+                // A streamed body can not be sent a second time, so the HTTP stack never repeats a request
+                // on its own after a lost answer. A register or a login that went out twice would be wrong.
                 connection.setFixedLengthStreamingMode(length)
-                connection.outputStream.use { it.write(body, 0, length) }
             }
+            // The connection is opened on its own, before any of the body goes: a failure here (refused, no such
+            // name, no route, no connection within the wait) means that the request never left the phone (D2).
+            try {
+                connection.connect()
+            } catch (error: IOException) {
+                throw RequestNotSent(error)
+            }
+            if (body != null) connection.outputStream.use { it.write(body, 0, length) }
             val status = connection.responseCode
             val stream = if (status in 200..299) connection.inputStream else connection.errorStream
             val text = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
             if (status !in 200..299) {
                 val error = runCatching { JSONObject(text).getJSONObject("error") }.getOrNull()
-                throw ApiException(
+                val failure = ApiException(
                     status = status,
-                    code = error?.optString("code").orEmpty().ifEmpty { "HTTP_$status" },
+                    code = error?.optString("code").orEmpty().ifEmpty { unreadable401(status, path, token != null, connection) ?: "HTTP_$status" },
                     message = error?.optString("message").orEmpty().ifEmpty { "HTTP $status" },
                     details = error?.optJSONObject("details") ?: JSONObject(),
+                    retryAfterSeconds = connection.getHeaderField("Retry-After")?.trim()?.toIntOrNull()?.takeIf { it >= 0 },
                 )
+                // The session this call carried has ended. A call without one, or a wrong password at login, ends nothing.
+                if (status == 401 && failure.code == "AUTH_REQUIRED" && token != null) onAuthRequired?.invoke(token)
+                throw failure
             }
             if (expectedStatus != null && status != expectedStatus) {
                 throw ApiException(status, "UNEXPECTED_ANSWER", "HTTP $status where $expectedStatus was expected", JSONObject())
             }
+            received?.status = status
+            received?.contentType = connection.contentType
             // An answer that is not JSON comes from something that is not this API. It is a failed
             // call like any other, not a crash.
             return if (text.isBlank()) JSONObject() else try {
                 JSONObject(text)
             } catch (error: org.json.JSONException) {
-                throw ApiException(status, "UNEXPECTED_ANSWER", "The answer is not JSON", JSONObject())
+                throw ApiException(status, "UNEXPECTED_ANSWER", "The answer is not JSON", JSONObject(), contentType = connection.contentType)
             }
         } finally {
             connection.disconnect()
         }
+    }
+}
+
+/**
+ * The code of a 401 whose body did not arrive. The JVM's HttpURLConnection drops the body of a 401
+ * to a streamed request, because it can not send that request again; Android's keeps it. Such an
+ * answer is read by the contract of docs/API_V1.md section 10 only when it names the Bearer scheme,
+ * as this API's 401 always does, and only on two kinds of request: the login route answers 401 only
+ * with LOGIN_FAILED, and a request that [carriedSession] gets 401 only with AUTH_REQUIRED, which ends
+ * that session. A request without a session to any other route has no session to end, and the API
+ * never answers a registration with a 401: a Bearer 401 there comes from something on the way and stays
+ * unread (seventh checker, R3), as anything else does.
+ */
+private fun unreadable401(status: Int, path: String, carriedSession: Boolean, connection: HttpURLConnection): String? {
+    if (status != 401) return null
+    val scheme = connection.getHeaderField("WWW-Authenticate")?.trim()?.substringBefore(' ')
+    if (!scheme.equals("Bearer", ignoreCase = true)) return null
+    return when {
+        path == "/auth/login" -> "LOGIN_FAILED"
+        carriedSession -> "AUTH_REQUIRED"
+        else -> null
     }
 }
 

@@ -6,6 +6,9 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
@@ -17,6 +20,7 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.lifecycle.ViewModelProvider
 import com.github.takahirom.roborazzi.captureRoboImage
+import com.voleybolveveleybol.volleystat.AccountStandIn
 import com.voleybolveveleybol.volleystat.AppViewModel
 import com.voleybolveveleybol.volleystat.MainActivity
 import com.voleybolveveleybol.volleystat.R
@@ -24,6 +28,7 @@ import com.voleybolveveleybol.volleystat.model.LocalVideo
 import com.voleybolveveleybol.volleystat.model.MatchRules
 import com.voleybolveveleybol.volleystat.model.VideoSource
 import org.junit.Assert.assertEquals
+import org.junit.After
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -34,7 +39,8 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * Walks the real activity, navigation graph, view model and local store on the JVM. It proves
+ * Walks the real activity, navigation graph, view model and local store on the JVM, from a fresh
+ * install through a registration against a stand-in of the account routes. It proves
  * that the screens are wired together; it says nothing about the camera, the video picker or
  * the player, which need a device.
  */
@@ -58,14 +64,28 @@ class JourneyTest {
     private fun text(id: Int, vararg arguments: Any) = app.activity.getString(id, *arguments)
     private fun tap(id: Int) = app.onAllNodesWithText(text(id)).onFirst().performClick()
 
+    /** The account routes. From version 0.8 the app opens Home only for a signed-in account. */
+    private val standIn = AccountStandIn()
+
+    @After fun stopTheStandIn() = standIn.close()
+
+    /** A fresh install: the welcome, the start screen and a registration lead to Home. */
     private fun passWelcome() {
+        ViewModelProvider(app.activity)[AppViewModel::class.java].baseUrlOverride = standIn.baseUrl
         app.onNodeWithText(text(R.string.action_start)).performClick()
+        app.onNodeWithText(text(R.string.start_body)).assertIsDisplayed()
+        app.onNodeWithText(text(R.string.action_create_account)).performClick()
+        app.onNode(hasSetTextAction() and hasText(text(R.string.field_display_name))).performTextInput("Deneme Oyuncu")
+        app.onNode(hasSetTextAction() and hasText(text(R.string.field_password))).performTextInput("uzun bir şifre 42")
+        app.onNode(hasClickAction() and hasText(text(R.string.action_create_account))).performClick()
+        app.waitUntil(10_000) { app.onAllNodesWithText(text(R.string.home_new_match_body)).fetchSemanticsNodes().isNotEmpty() }
         app.onNodeWithText(text(R.string.home_new_match_body)).assertIsDisplayed()
     }
 
     @Test fun firstLaunchShowsWelcomeOnceAndThenTheHomeScreenWithItsTabs() {
         app.onNodeWithText(text(R.string.welcome_today)).assertIsDisplayed()
         passWelcome()
+        assertTrue(standIn.exists("deneme.oyuncu"))
         listOf(R.string.nav_home, R.string.nav_matches, R.string.nav_teams, R.string.nav_profile).forEach {
             app.onAllNodesWithText(text(it)).onFirst().assertIsDisplayed()
         }

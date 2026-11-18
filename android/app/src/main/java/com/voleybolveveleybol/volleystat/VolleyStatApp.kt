@@ -3,6 +3,7 @@ package com.voleybolveveleybol.volleystat
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.os.Build
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -45,18 +46,26 @@ import com.voleybolveveleybol.volleystat.model.gapTarget
 import com.voleybolveveleybol.volleystat.model.rallyTarget
 import com.voleybolveveleybol.volleystat.model.status
 import com.voleybolveveleybol.volleystat.ui.screens.ClipPlayer
+import com.voleybolveveleybol.volleystat.ui.screens.DeleteAccountScreen
 import com.voleybolveveleybol.volleystat.ui.screens.EditorVideo
 import com.voleybolveveleybol.volleystat.ui.screens.GuideScreen
 import com.voleybolveveleybol.volleystat.ui.screens.HomeScreen
+import com.voleybolveveleybol.volleystat.ui.screens.LegacyScreen
+import com.voleybolveveleybol.volleystat.ui.screens.LoginScreen
 import com.voleybolveveleybol.volleystat.ui.screens.MatchCreateScreen
 import com.voleybolveveleybol.volleystat.ui.screens.MatchTeamsScreen
 import com.voleybolveveleybol.volleystat.ui.screens.MatchesScreen
+import com.voleybolveveleybol.volleystat.ui.screens.PasswordChangeScreen
 import com.voleybolveveleybol.volleystat.ui.screens.PlayersScreen
+import com.voleybolveveleybol.volleystat.ui.screens.ProfileAccountActions
 import com.voleybolveveleybol.volleystat.ui.screens.ProfileScreen
 import com.voleybolveveleybol.volleystat.ui.screens.RalliesScreen
 import com.voleybolveveleybol.volleystat.ui.screens.RallyEditorScreen
 import com.voleybolveveleybol.volleystat.ui.screens.RallyEditorWaiting
 import com.voleybolveveleybol.volleystat.ui.screens.RecordRoute
+import com.voleybolveveleybol.volleystat.ui.screens.RegisterScreen
+import com.voleybolveveleybol.volleystat.ui.screens.ServerSection
+import com.voleybolveveleybol.volleystat.ui.screens.StartScreen
 import com.voleybolveveleybol.volleystat.ui.screens.ReportScreen
 import com.voleybolveveleybol.volleystat.ui.screens.ReviewScreen
 import com.voleybolveveleybol.volleystat.ui.screens.StatusScreen
@@ -71,7 +80,16 @@ import java.time.LocalDate
 
 private object Routes {
     const val WELCOME = "welcome"
+    /** The first start without any account on this phone (design 10.1). */
+    const val START = "start"
+    const val LOGIN = "login"
+    const val REGISTER = "register"
+    /** The question of the first login about the data app 0.7 kept without an account. */
+    const val LEGACY = "legacy"
     const val HOME = "home"
+    /** Şifreyi Değiştir and Hesabı Sil, opened from the profile. */
+    const val PASSWORD = "account/password"
+    const val DELETE_ACCOUNT = "account/delete"
     const val MATCHES = "matches"
     const val TEAMS = "teams"
     const val PROFILE = "profile"
@@ -109,6 +127,26 @@ private object Routes {
     fun gap(id: String, atMs: Long) = "gap/$id/$atMs"
 }
 
+/** The screens a phone shows while nobody is signed in. */
+private val signedOutRoutes = setOf(Routes.START, Routes.LOGIN, Routes.REGISTER)
+
+/** The screen the app opens on for [entry] (design 10.1). */
+private fun routeOf(entry: Entry) = when (entry) {
+    Entry.WELCOME -> Routes.WELCOME
+    Entry.START -> Routes.START
+    Entry.LOGIN -> Routes.LOGIN
+    Entry.LEGACY -> Routes.LEGACY
+    Entry.HOME -> Routes.HOME
+}
+
+/** Whether [route] belongs to what the app shows at [entry]. Within the signed-out screens and within the account's screens the user moves freely. */
+private fun fits(route: String, entry: Entry) = when (entry) {
+    Entry.WELCOME -> route == Routes.WELCOME
+    Entry.START, Entry.LOGIN -> route in signedOutRoutes
+    Entry.LEGACY -> route == Routes.LEGACY
+    Entry.HOME -> route !in signedOutRoutes && route != Routes.LEGACY && route != Routes.WELCOME
+}
+
 private class Tab(val route: String, val label: Int, val icon: Int, val selectedIcon: Int)
 
 private val tabs = listOf(
@@ -121,16 +159,33 @@ private val tabs = listOf(
 @Composable
 fun VolleyStatApp(
     viewModel: AppViewModel = viewModel(),
-    /** The video of the range editor. A test puts a stand-in here, because no player runs in a test. */
-    editorVideo: @Composable (url: String, startMs: Long) -> EditorVideo = { url, startMs -> rememberEditorVideo(url, startMs) },
+    /**
+     * The video of the range editor, read with [headers] on every request. A test puts a stand-in
+     * here, because no player runs in a test, and sees what the player would be given.
+     */
+    editorVideo: @Composable (url: String, startMs: Long, headers: Map<String, String>) -> EditorVideo = { url, startMs, headers -> rememberEditorVideo(url, startMs, headers) },
+    /** The clip of a review card, read with [headers] on every request. A test puts a stand-in here, as for [editorVideo]. */
+    clipPlayer: @Composable (url: String, startMs: Long, endMs: Long, headers: Map<String, String>) -> Unit = { url, startMs, endMs, headers -> ClipPlayer(url, startMs, endMs, headers) },
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val analysis by viewModel.analysis.collectAsStateWithLifecycle()
     val nav = rememberNavController()
     val route = nav.currentBackStackEntryAsState().value?.destination?.route
     val scheme = MaterialTheme.colorScheme
-    // The welcome screen is shown once; the choice is fixed for this launch so it does not jump mid-session.
-    val start = remember { if (state.settings.welcomeSeen) Routes.HOME else Routes.WELCOME }
+    // The screen the app opens on, fixed for this launch (design 10.1).
+    val start = remember { routeOf(state.entry) }
+    // A login, a registration, the answer about the old data, a logout, a deletion or a session the server
+    // ended moves the app to another part. The back stack starts afresh there, so back never leads from the
+    // login into an account's screens, or from Home back to a form.
+    LaunchedEffect(state.entry) {
+        val current = nav.currentDestination?.route ?: return@LaunchedEffect
+        if (!fits(current, state.entry)) {
+            nav.navigate(routeOf(state.entry)) {
+                popUpTo(nav.graph.id) { inclusive = true }
+                launchSingleTop = true
+            }
+        }
+    }
 
     /** One step forward. A second tap during the transition must not open the same screen twice. */
     fun go(route: String) = nav.navigate(route) { launchSingleTop = true }
@@ -224,7 +279,8 @@ fun VolleyStatApp(
                 }
             },
             onBack = { nav.popBackStack() },
-            clip = { card -> ClipPlayer(url, card.clipStartMs, card.clipEndMs) },
+            // The session goes with every request of the player, in a header (design 10.5).
+            clip = { card -> clipPlayer(url, card.clipStartMs, card.clipEndMs, viewModel.playbackHeaders()) },
             onRetry = { viewModel.retryReview(match.localId, atRally.takeIf { !opened }) },
             onFixRally = { card -> go(Routes.rally(match.localId, card.rallyId)) },
             // The list may already be below, when this review was opened from it. Going back to it keeps the
@@ -263,7 +319,7 @@ fun VolleyStatApp(
                 val below = remember { nav.previousBackStackEntry?.destination?.route }
                 val fromReview = below == Routes.REVIEW || below == Routes.REVIEW_AT
                 RallyEditorScreen(
-                    target, shown, editorVideo(url, startMs),
+                    target, shown, editorVideo(url, startMs, viewModel.playbackHeaders()),
                     onMove = { start, end -> if (rally != null) viewModel.moveRally(rally.id, start, end) { done() } },
                     onSplit = { at -> if (rally != null) viewModel.splitRally(rally.id, at) { done() } },
                     onMerge = { if (rally != null) viewModel.mergeWithPrevious(rally.id) { done() } },
@@ -332,11 +388,48 @@ fun VolleyStatApp(
         },
     ) {
         NavHost(nav, startDestination = start) {
-            composable(Routes.WELCOME) {
-                WelcomeScreen(onStart = {
-                    viewModel.markWelcomeSeen()
-                    nav.navigate(Routes.HOME) { popUpTo(Routes.WELCOME) { inclusive = true } }
-                })
+            // The entry moves on once the welcome was seen, and the navigation follows it.
+            composable(Routes.WELCOME) { WelcomeScreen(onStart = viewModel::markWelcomeSeen) }
+            composable(Routes.START) {
+                StartScreen(
+                    onCreateAccount = { viewModel.clearAccountProblem(); go(Routes.REGISTER) },
+                    onLogin = { viewModel.clearAccountProblem(); go(Routes.LOGIN) },
+                    // A release build has no server address until the hosting slice: no form of this screen can work there.
+                    serverConfigured = state.serverConfigured,
+                )
+            }
+            composable(Routes.LOGIN) {
+                // A screen the user left stops the repeats of a busy server, and its outcome stays behind.
+                StopAccountCallOnLeave(viewModel)
+                LoginScreen(
+                    state.account, onLogin = viewModel::login,
+                    onCreateAccount = {
+                        viewModel.clearAccountProblem()
+                        // The register screen may be below, when the login was opened from it.
+                        if (!nav.popBackStack(Routes.REGISTER, inclusive = false)) go(Routes.REGISTER)
+                    },
+                    onBack = if (nav.previousBackStackEntry != null) ({ viewModel.clearAccountProblem(); nav.popBackStack() }) else null,
+                    serverConfigured = state.serverConfigured,
+                    server = { ServerSection(state, viewModel::setServerTarget, viewModel::testServer) },
+                    onDeletePhoneData = viewModel::deleteUnconfirmedAccountData,
+                )
+            }
+            composable(Routes.REGISTER) {
+                StopAccountCallOnLeave(viewModel)
+                RegisterScreen(
+                    state.account, onRegister = { name, username, password, code -> viewModel.register(name, username, password, code) },
+                    onHaveAccount = {
+                        viewModel.clearAccountProblem()
+                        if (!nav.popBackStack(Routes.LOGIN, inclusive = false)) nav.navigate(Routes.LOGIN) { popUpTo(Routes.REGISTER) { inclusive = true } }
+                    },
+                    onBack = { viewModel.clearAccountProblem(); nav.popBackStack() },
+                    serverConfigured = state.serverConfigured,
+                    server = { ServerSection(state, viewModel::setServerTarget, viewModel::testServer) },
+                )
+            }
+            composable(Routes.LEGACY) {
+                val question = state.account.legacy
+                if (question != null) LegacyScreen(question, state.saveFailed, state.account.legacyMoving, viewModel::answerLegacy)
             }
             composable(Routes.HOME) {
                 HomeScreen(
@@ -350,8 +443,12 @@ fun VolleyStatApp(
             }
             composable(Routes.PROFILE) {
                 val context = LocalContext.current
+                // The profile shows the account as the server holds it now: a name changed on another phone, or a
+                // session that ended there. A busy server's repeats stop when the tab is left.
+                LaunchedEffect(Unit) { viewModel.refreshAccount() }
+                StopAccountCallOnLeave(viewModel)
                 ProfileScreen(
-                    state, BuildConfig.VERSION_NAME, viewModel::setDisplayName, viewModel::setServerTarget, viewModel::testServer,
+                    state, BuildConfig.VERSION_NAME, viewModel::setServerTarget, viewModel::testServer,
                     viewModel::deleteRecording,
                     onSendFeedback = {
                         try {
@@ -361,6 +458,34 @@ fun VolleyStatApp(
                             false
                         }
                     },
+                    account = ProfileAccountActions(
+                        onChangeDisplayName = viewModel::changeDisplayName,
+                        onOpenPasswordChange = { viewModel.clearAccountProblem(); go(Routes.PASSWORD) },
+                        onLogout = viewModel::logout,
+                        onOpenDeletion = { viewModel.clearAccountProblem(); go(Routes.DELETE_ACCOUNT) },
+                        onClearProblem = viewModel::clearAccountProblem,
+                    ),
+                )
+            }
+            composable(Routes.PASSWORD) {
+                StopAccountCallOnLeave(viewModel)
+                val activity = LocalActivity.current
+                // A confirmed change closes the screen, and the profile says what the server did.
+                LaunchedEffect(state.account.confirmed) { if (state.account.confirmed == AccountChange.PASSWORD) leave(Routes.PASSWORD) }
+                PasswordChangeScreen(
+                    state.account, viewModel::changePassword, onBack = { viewModel.clearAccountProblem(); nav.popBackStack() },
+                    onNewPasswordNotHandedOver = viewModel::newPasswordNotHandedOver,
+                    // A screen Android rebuilds comes back and speaks for itself at the confirmation (R2-D). A screen the user
+                    // left does not, so the view model names the change when it is confirmed (third review, B1).
+                    onGoneWithoutHandingOver = { reason -> if (activity?.isChangingConfigurations != true) viewModel.newPasswordNotHandedOver(reason) },
+                )
+            }
+            composable(Routes.DELETE_ACCOUNT) {
+                // After the deletion the app opens the login, which says what the server deleted.
+                StopAccountCallOnLeave(viewModel)
+                DeleteAccountScreen(
+                    state.account, serverMatches = state.matches.count { it.session.serverMatchId != null },
+                    onDelete = viewModel::deleteAccount, onBack = { viewModel.clearAccountProblem(); nav.popBackStack() },
                 )
             }
             composable(Routes.TEAM) { entry ->
@@ -515,6 +640,17 @@ fun VolleyStatApp(
             }
         }
     }
+}
+
+/**
+ * Stops the account call of a screen the user leaves: a busy server's repeats end there (design
+ * 10.7, R10). A screen the system recreates for a dark theme, a language or a font size is not
+ * left. Its call goes on, and the answer reaches the screen that comes back (review finding F8).
+ */
+@Composable
+private fun StopAccountCallOnLeave(viewModel: AppViewModel) {
+    val activity = LocalActivity.current
+    DisposableEffect(Unit) { onDispose { if (activity?.isChangingConfigurations != true) viewModel.cancelAccountCall() } }
 }
 
 /** 05 with its system launcher. The picker hands over exactly one video and needs no storage permission. */

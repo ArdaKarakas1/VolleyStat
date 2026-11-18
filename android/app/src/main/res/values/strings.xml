@@ -332,7 +332,9 @@
     <string name="rallies_title">Ralli Listesi</string>
     <string name="rallies_loading">Uygulama ralli listesini alıyor</string>
     <string name="rallies_load_failed">Uygulama ralli listesini sunucudan alamadı.</string>
-    <string name="rallies_outdated_server">Sunucu ralli listesini bu uygulamanın okuyabildiği biçimde vermedi. Sunucunun güncel sürümle çalıştığını denetle.</string>
+    <!-- A 2xx the app can not read as a rally list: an older server sends it, but so may something else at that address (an empty
+         2xx, another service's JSON), so the text does not name the server as its sender (eighth checker, S2). The same for the report. -->
+    <string name="rallies_outdated_server">Uygulama isteğe gelen yanıtı ralli listesi olarak okuyamadı. Sunucunun güncel sürümle çalıştığını denetle.</string>
     <string name="rallies_help">Bir ralliyi düzeltmek için o ralliye dokun. Kaçan bir ralliyi eklemek için iki ralli arasındaki boşluğa dokun.</string>
     <string name="rallies_count">Listede %1$d ralli var.</string>
     <string name="rallies_count_rejected">Listede %1$d ralli ve ralli saymadığın %2$d aralık var.</string>
@@ -456,7 +458,7 @@
     <string name="report_unavailable_title">Rapor henüz yok</string>
     <string name="report_unavailable_body">Bu maç için analiz işi yok.</string>
     <string name="report_load_failed">Uygulama raporu sunucudan alamadı.</string>
-    <string name="report_outdated_server">Sunucu raporu bu uygulamanın okuyabildiği biçimde vermedi. Sunucunun güncel sürümle çalıştığını denetle.</string>
+    <string name="report_outdated_server">Uygulama isteğe gelen yanıtı rapor olarak okuyamadı. Sunucunun güncel sürümle çalıştığını denetle.</string>
     <string name="value_not_measured">Ölçüm yok</string>
     <string name="value_partial_note">Artı işareti alt sınırı gösterir. Sayı doğrulama sürdükçe artabilir.</string>
     <string name="value_missing_note">Kesik çizgili kutu ölçüm olmadığını gösterir. Uygulama eksik ölçümü sıfır yazmaz.</string>
@@ -476,8 +478,6 @@
     <string name="players_points_note">Sayılar yalnızca doğrulama sırasında oyuncusunu seçtiğin sayılardır.</string>
 
     <!-- Profile -->
-    <string name="profile_name">Adın</string>
-    <string name="profile_name_hint">Ana sayfadaki selamda görünür</string>
     <string name="profile_today">Bu sürümde neler var</string>
     <string name="feature_match">Maç ve takım kaydı</string>
     <string name="feature_video">Video kaydetme ve seçme</string>
@@ -486,12 +486,17 @@
     <string name="feature_review">Ralli doğrulama, ralli düzeltme ve rapor</string>
     <string name="feature_analysis">Otomatik analiz modeli</string>
     <string name="profile_privacy">Gizlilik</string>
-    <string name="privacy_server">Uygulama videoyu, takım adlarını ve maç bilgilerini yalnızca geliştirme bilgisayarındaki yerel sunucuya gönderir.</string>
+    <string name="privacy_server">Uygulama videoyu, takım adlarını, maç bilgilerini ve hesap bilgilerini yalnızca geliştirme bilgisayarındaki yerel sunucuya gönderir.</string>
     <string name="privacy_picker">Uygulama yalnızca senin seçtiğin videoyu okur ve depolama izni istemez.</string>
     <string name="privacy_training">Uygulama videoyu model eğitimi için göndermez.</string>
-    <string name="privacy_accounts">Sunucuda hesap sistemi yok. Sunucunun çalıştığı bilgisayarı kullanan herkes yüklediğin videoları görebilir. Oyuncuların izin vermediği videoları ve telifli yayınları yükleme.</string>
-    <string name="privacy_retention">Sunucu videoyu ve maç bilgilerini sen maçı silene kadar saklar.</string>
-    <string name="privacy_delete">Sen maçı silince sunucu o maçın videosunu, analiz sonuçlarını, verdiğin kararları, yaptığın düzeltmeleri ve maç bilgilerini siler. Telefonundaki video dosyası kalır.</string>
+    <!-- What the users, sessions and login_devices tables of the server hold (review finding T1). -->
+    <string name="privacy_accounts">Sunucu hesabın için kullanıcı adını, görünen adını ve şifrenin özetini saklar. Sunucu hesabın ne zaman ve nasıl açıldığını ve şifrenin son değiştiği zamanı da kaydeder. Her oturum ve giriş yaptığın her telefon için sunucu bir anahtar özetini ve kullanım zamanlarını saklar. Uygulama e-posta adresini ve telefon numaranı sormaz.</string>
+    <!-- B2: the match routes do not check the session until slice B3, so anyone who reaches the server reaches every video. -->
+    <string name="privacy_matches_open">Sunucu maçları ve videoları henüz hesaplara bağlamıyor. Sunucunun çalıştığı bilgisayarı kullanan herkes yüklediğin videoları görebilir. Oyuncuların izin vermediği videoları ve telifli yayınları yükleme.</string>
+    <string name="privacy_phone_accounts">Uygulama bu telefonda her hesabın maçlarını, kadrolarını ve kamera kayıtlarını ayrı tutar. Bu telefonda başka bir hesapla giriş yapan kişi uygulamada senin maçlarını görmez.</string>
+    <string name="privacy_session">Uygulama şifreni telefona yazmaz ve oturum bilgisini telefonun anahtar deposundaki bir anahtarla şifreleyip saklar.</string>
+    <string name="privacy_retention">Sunucu hesabını sen silene kadar saklar. Sunucu videoyu ve maç bilgilerini sen maçı silene kadar saklar.</string>
+    <string name="privacy_delete">Sen maçı silince sunucu o maçın videosunu, analiz sonuçlarını, verdiğin kararları, yaptığın düzeltmeleri ve maç bilgilerini siler. Telefonundaki video dosyası kalır. Sen hesabını silince sunucu hesabın için sakladığı bütün bilgileri siler.</string>
     <string name="privacy_faces">Uygulama ve sunucu yüz tanımaz. Rapor bir sayıyı oyuncuya yalnızca sen forma numarasını seçince yazar.</string>
     <string name="profile_server">Sunucu bağlantısı</string>
     <string name="server_emulator">Emülatör</string>
@@ -563,4 +568,145 @@
     <string name="rule_refused">Sunucu kuralı kaydetmedi. Sunucunun güncel sürümle çalıştığını denetle ve yeniden dene.</string>
     <!-- %1$s: the whole rule the server has now, as the rule card writes it (rule_detail). The user checks the choice against it. -->
     <string name="rule_stale">Sunucudaki kural değişmiş. Sunucu şimdi \"%1$s\" kuralıyla sayıyor. Seçimini denetle ve yeniden kaydet.</string>
+
+    <!-- Accounts (slice B2; design 3, 10.1, 10.7 and 10.8; docs/API_V1.md section 10). A text says that someone
+         is signed in, registered, renamed or logged out only after the server confirmed it. Texts of design 10.8
+         and 2.12 that speak of teams, invites or open matches are adapted: this app version has none of them. -->
+    <string name="start_body">Uygulamayı kullanmak için bir hesabın olmalı. Hesabın yoksa Voleybol Ve Veleybol\'dan bir kayıt kodu alıp hesap oluşturabilirsin. Hesabın varsa giriş yapabilirsin.</string>
+    <string name="start_no_server">Bu yüzden uygulama hesap açamaz ve giriş yapamaz.</string>
+    <string name="action_login">Giriş Yap</string>
+    <string name="action_create_account">Hesap Oluştur</string>
+    <string name="action_have_account">Hesabım Var</string>
+    <string name="login_intro">Uygulama bu telefonda her hesabın maçlarını, kadrolarını ve kamera kayıtlarını ayrı saklar. Kullanıcı adınla ve şifrenle giriş yapabilirsin.</string>
+    <string name="field_username">Kullanıcı adı</string>
+    <string name="field_password">Şifre</string>
+    <string name="field_display_name">Görünen ad</string>
+    <string name="field_signup_code">Kayıt kodu</string>
+    <string name="field_current_password">Şu anki şifren</string>
+    <string name="field_new_password">Yeni şifre</string>
+    <string name="field_your_password">Şifren</string>
+    <string name="password_toggle_show">Göster</string>
+    <string name="password_toggle_hide">Gizle</string>
+    <string name="password_show">Şifreyi göster</string>
+    <string name="password_hide">Şifreyi gizle</string>
+    <string name="account_waiting">Uygulama sunucunun yanıtını bekliyor.</string>
+    <!-- 503 SERVER_BUSY while the app waits out the server's Retry-After (at most 10 s) before its next try (design 2.12, R10).
+         The design's text is adapted: the app knows only what the server answered. -->
+    <string name="server_busy">Sunucu çok sayıda istek işlediğini bildirdi. Uygulama birkaç saniye sonra yeniden dener.</string>
+    <!-- 401 AUTH_REQUIRED. The app keeps an upload's place, and the user resumes it after the next login. -->
+    <string name="session_ended">Sunucu oturumunu kapattı. Yeniden giriş yapınca yarım kalan bir yüklemeyi kaldığı yerden sürdürebilirsin.</string>
+    <string name="account_deleted">Sunucu hesabını sildi. Uygulama bu telefondaki maç kayıtlarını, kadroları ve kamerayla çektiğin videoları da sildi.</string>
+    <!-- A deletion got no answer, a 5xx or an answer the app can not read (or the process ended while it was on its way), and the
+         session then left the phone without a sign that the account is still there. The text holds in each of these states, so it
+         does not say that no answer came (fifth check, P2). %1$s is the username, %2$s the label of action_delete_from_phone. -->
+    <string name="deletion_unconfirmed">Uygulama sunucunun %1$s hesabını silip silmediğini bilmiyor. Sunucu hesabı silmediyse giriş yapınca maçlarını yeniden görürsün. Sunucu hesabı sildiyse bu telefondaki verilerini %2$s düğmesiyle silebilirsin.</string>
+    <!-- The same offer when the phone can no longer read the username (a new keystore key, a damaged deletions.bin).
+         %1$s is the label of action_delete_from_phone. -->
+    <string name="deletion_unconfirmed_unnamed">Uygulama sunucunun bir hesabı silip silmediğini bilmiyor. Uygulama bu hesabın kullanıcı adını da okuyamadı. Sunucu hesabı silmediyse giriş yapınca maçlarını yeniden görürsün. Sunucu hesabı sildiyse bu telefondaki verilerini %1$s düğmesiyle silebilirsin.</string>
+    <string name="action_delete_from_phone">Telefondan Sil</string>
+    <string name="delete_from_phone_title">Bu telefondaki verileri silmek istiyor musun?</string>
+    <!-- %1$s is the username. -->
+    <string name="delete_from_phone_body">Uygulama %1$s hesabının bu telefondaki maç kayıtlarını, kadrolarını ve kamerayla çektiğin videoları siler. Galeriden seçtiğin videolar galeride kalır. Uygulama bunun için sunucuya hiçbir istek göndermez.</string>
+    <string name="delete_from_phone_body_unnamed">Uygulama kullanıcı adını okuyamadığı hesabın bu telefondaki maç kayıtlarını, kadrolarını ve kamerayla çektiğin videoları siler. Galeriden seçtiğin videolar galeride kalır. Uygulama bunun için sunucuya hiçbir istek göndermez.</string>
+    <!-- %1$s is the username of the account whose data went. Another account of the phone keeps its own. -->
+    <string name="phone_data_deleted">Uygulama %1$s hesabının bu telefondaki maç kayıtlarını, kadrolarını ve kamerayla çektiğin videoları sildi.</string>
+    <string name="phone_data_deleted_unnamed">Uygulama kullanıcı adını okuyamadığı hesabın bu telefondaki maç kayıtlarını, kadrolarını ve kamerayla çektiğin videoları sildi.</string>
+    <!-- The keystore could not seal session.bin at login: the session lives in memory until the app ends. -->
+    <string name="session_not_kept">Uygulama oturumunu bu telefona kaydedemedi, bu yüzden bir sonraki açılışta şifreni yeniden sorar.</string>
+    <!-- A session belongs to the server that opened it, so the choice waits for a logout. -->
+    <string name="server_locked">Uygulama oturum açıkken sunucu seçimini değiştirmez. Başka bir sunucu seçmek için önce çıkış yapabilirsin.</string>
+    <string name="register_data">Sunucu hesabın için kullanıcı adını, şifrenin özetini ve görünen adını saklar. Uygulama e-posta adresini ve telefon numaranı sormaz.</string>
+    <string name="register_display_hint">Uygulama bu adı ana sayfadaki selamda gösterir. Sunucu bu adı şimdilik başka hiçbir kullanıcıya göstermez.</string>
+    <string name="register_username_hint">Uygulama kullanıcı adını yalnız giriş yaptığın telefonlarda gösterir. Sunucu kullanıcı adını başka kullanıcılara göndermez. Kullanıcı adı küçük harf, rakam, nokta ve alt çizgi taşıyabilir.</string>
+    <string name="register_username_suggested">Uygulama kullanıcı adını görünen adından önerdi. İstersen kullanıcı adını değiştirebilirsin.</string>
+    <string name="register_password_hint">Şifre en az 10 karakter olmalı ve kullanıcı adını içermemeli. Sunucu çok yaygın şifreleri kabul etmez.</string>
+    <string name="register_code_hint">Kayıt kodunu Voleybol Ve Veleybol verir. Kodu büyük ya da küçük harfle, tireli ya da tiresiz yazabilirsin.</string>
+    <string name="username_invalid">Kullanıcı adı 3 ile 30 karakter arasında olmalı, bir harfle başlamalı ve yalnız a-z harfleri, rakam, nokta ve alt çizgi taşımalı.</string>
+    <!-- The server's whole rule (API_V1 section 10): ".." meets length and characters and is refused for want of a letter or digit (T3). -->
+    <string name="display_name_invalid">Görünen ad 2 ile 40 karakter arasında olmalı ve en az bir harf ya da rakam içermeli. Görünen ad harf ve rakamın yanında yalnız boşluk, nokta, kesme işareti ve kısa çizgi taşıyabilir.</string>
+    <!-- 403 SIGNUP_CLOSED. Invite links come with a later slice, so this app can open an account with a code only. -->
+    <string name="register_gate">Sunucu şimdilik yalnızca kayıt koduyla hesap açar. Kayıt kodunu Voleybol Ve Veleybol verir. Kodu kayıt kodu alanına yazıp yeniden deneyebilirsin.</string>
+    <string name="register_code_invalid">Sunucu bu kayıt kodunu kabul etmedi. Kodu kontrol edebilir ya da Voleybol Ve Veleybol\'dan yeni bir kod isteyebilirsin.</string>
+    <!-- 409 USERNAME_TAKEN. The register screen has put digits after the refused name. -->
+    <string name="username_taken">Sunucuda bu kullanıcı adını taşıyan bir hesap var. Uygulama yeni bir ad önerdi. İstersen başka bir ad seçebilirsin.</string>
+    <string name="login_failed">Sunucu bu kullanıcı adını ve şifreyi eşleştiremedi. Kullanıcı adını ve şifreni kontrol edip yeniden deneyebilirsin.</string>
+    <!-- 429 TOO_MANY_ATTEMPTS by details.scope. %1$s is the wait the server named, as wait_seconds or wait_minutes write it. -->
+    <string name="login_wait">Sunucu bu kullanıcı adı için çok sayıda yanlış deneme gördü ve girişi %1$s süreyle durdurdu. Şifreni unuttuysan Voleybol Ve Veleybol şifreni sıfırlayabilir.</string>
+    <string name="login_wait_device">Sunucu bu telefondan bu kullanıcı adı için çok sayıda yanlış deneme aldı ve bu telefondan girişi %1$s süreyle durdurdu. Şifreni unuttuysan Voleybol Ve Veleybol şifreni sıfırlayabilir.</string>
+    <string name="login_wait_source">Sunucu bu internet adresinden çok sayıda yanlış giriş denemesi aldı ve bu adresten girişi %1$s süreyle durdurdu.</string>
+    <string name="register_wait_source">Sunucu bu internet adresinden kısa sürede kabul etmediği çok sayıda kayıt isteği aldı ve bu adresten kaydı %1$s süreyle durdurdu.</string>
+    <string name="account_wait">Sunucu bu hesap için çok sayıda yanlış şifre aldı. Sunucu şifre değişikliğini ve hesap silmeyi %1$s süreyle durdurdu.</string>
+    <string name="account_wait_unknown">Sunucu çok sayıda deneme aldı ve bu isteği %1$s süreyle durdurdu.</string>
+    <string name="account_wait_no_time">Sunucu çok sayıda deneme aldı ve bu isteği durdurdu. Sunucu bekleme süresini bildirmedi.</string>
+    <string name="wait_seconds">%1$d saniye</string>
+    <string name="wait_minutes">%1$d dakika</string>
+    <string name="password_too_short">Şifre en az 10 karakter olmalı. Sunucu daha kısa bir şifreyi kabul etmez.</string>
+    <string name="password_too_long">Şifre en çok 128 karakter olmalı. Sunucu daha uzun bir şifreyi kabul etmez.</string>
+    <string name="password_contains_username">Şifre kullanıcı adını içeriyor. Sunucu kullanıcı adını içeren bir şifreyi kabul etmez. Başka bir şifre seçebilirsin.</string>
+    <!-- The server counts after folding case and dropping marks, so "AaBbAaBbAaBb" is refused: the text says what the server counted (T2). -->
+    <string name="password_repetitive">Sunucu bu şifrede dörtten az farklı karakter saydı ve şifreyi kabul etmedi. Sunucu A ile a, ş ile s ve ı ile i gibi harf çiftlerini aynı karakter sayar. Başka bir şifre seçebilirsin.</string>
+    <string name="password_common">Bu şifre çok yaygın şifreler listesinde var. Sunucu bu şifreyi kabul etmez. Başka bir şifre seçebilirsin.</string>
+    <string name="password_rejected">Sunucu bu şifreyi kabul etmedi. Başka bir şifre seçebilirsin.</string>
+    <string name="password_wrong">Sunucu yazdığın şifreyi hesabının şu anki şifresiyle eşleştiremedi. Şifreni kontrol edip yeniden deneyebilirsin.</string>
+    <!-- No answer arrived: the request may have reached the server, so the text says no more than that. -->
+    <string name="net_no_answer">Uygulama sunucudan yanıt alamadı. Biraz sonra yeniden deneyebilirsin.</string>
+    <!-- An answer the app can not read (a 3xx, a 4xx without the API's envelope, a gateway's Bearer 401, a 2xx HTML page) may come
+         from something on the way, so this text and the two below do not name the server as its sender (eighth checker, S2). -->
+    <string name="account_unexpected">Uygulama isteğe gelen yanıtı okuyamadı. Sunucu seçimini kontrol edip yeniden deneyebilirsin.</string>
+    <string name="account_server_changed">Uygulama bu isteği şu an seçili olmayan bir sunucuya gönderdi ve gelen yanıtla oturum açmadı. Yeniden deneyebilirsin.</string>
+    <string name="account_server_older">Sunucunun sürümü bu uygulamadan eski. Uygulama bu sunucuda hesap açamaz ve giriş yapamaz.</string>
+    <string name="account_refused">Sunucu bu isteği kabul etmedi ve hiçbir şeyi değiştirmedi.</string>
+    <string name="account_outcome_unknown">Sunucu bir hata bildirdi. Uygulama sunucunun bu isteği yerine getirip getirmediğini bilmiyor. Biraz sonra yeniden deneyebilirsin.</string>
+    <string name="account_unexpected_change">Uygulama isteğe gelen yanıtı okuyamadı ve sunucunun bu isteği yerine getirip getirmediğini bilmiyor. Sunucu seçimini kontrol edip yeniden deneyebilirsin.</string>
+    <!-- A 5xx without the API's envelope (HTTP_5xx): a gateway on the way may have sent it, so the text does not name the server as the sender. -->
+    <string name="account_outcome_unknown_on_the_way">Uygulama sunucudan ya da sunucuya giden yoldan bir hata yanıtı aldı. Uygulama sunucunun bu isteği yerine getirip getirmediğini bilmiyor. Biraz sonra yeniden deneyebilirsin.</string>
+    <!-- An unreadable answer to the display name change, the password change or the deletion. The app locks the server choice
+         while a session is open, so the text gives no advice about it. -->
+    <string name="account_unexpected_change_signed_in">Uygulama isteğe gelen yanıtı okuyamadı ve sunucunun bu isteği yerine getirip getirmediğini bilmiyor. Biraz sonra yeniden deneyebilirsin.</string>
+    <!-- 503 SERVER_BUSY after the app's own repeats. %1$d is the number of times it sent the request. -->
+    <string name="server_busy_gave_up">Uygulama isteği %1$d kez gönderdi ve sunucu her seferinde çok sayıda istek işlediğini bildirdi. Biraz sonra yeniden deneyebilirsin.</string>
+
+    <!-- The question of the first login about the data app 0.7 kept without an account. -->
+    <string name="legacy_title">Eski Veriler</string>
+    <string name="legacy_body">Uygulamanın önceki sürümü bu telefonda hesaba bağlı olmayan şu verileri sakladı. Bu verileri hesabına taşıyabilirsin.</string>
+    <plurals name="legacy_teams">
+        <item quantity="one">%1$d takım ve kadrosu</item>
+        <item quantity="other">%1$d takım ve kadroları</item>
+    </plurals>
+    <string name="legacy_recordings">%1$d kamera kaydı</string>
+    <string name="legacy_draft">Yarım kalan maç kurulumu</string>
+    <string name="legacy_keep_note">Taşımazsan uygulama bu verileri silmez ama hiçbir hesapta göstermez. Uygulama bu soruyu bir daha sormaz.</string>
+    <string name="legacy_move">Hesabıma Taşı</string>
+    <string name="legacy_keep">Taşımadan Devam Et</string>
+
+    <!-- Profile: the account -->
+    <string name="profile_account">Hesap</string>
+    <string name="profile_username">Kullanıcı adı</string>
+    <string name="action_save_name">Adı Kaydet</string>
+    <string name="display_name_saved">Sunucu görünen adını kaydetti.</string>
+    <string name="password_temporary">Voleybol Ve Veleybol bu hesabın şifresini sıfırladı ve sana geçici bir şifre verdi. Profil sekmesinde yeni bir şifre seçebilirsin.</string>
+    <string name="action_change_password">Şifreyi Değiştir</string>
+    <string name="password_change_body">Sunucu yeni şifreyi kaydedince bu hesabın öteki bütün oturumlarını kapatır. Bu telefondaki oturumun açık kalır.</string>
+    <string name="password_changed">Sunucu şifreni değiştirdi ve bu hesabın öteki bütün oturumlarını kapattı.</string>
+    <string name="password_not_handed_over">Android şifre değiştirme ekranını sunucunun yanıtı gelmeden yeniden kurdu. Bu yüzden uygulama yeni şifreni şifre yöneticisine iletemedi. Şifre yöneticin bu hesabın eski şifresini tutuyorsa yeni şifreyi oraya sen yazabilirsin.</string>
+    <string name="password_not_handed_over_left">Şifre değiştirme ekranından sunucunun yanıtı gelmeden çıktın. Bu yüzden uygulama yeni şifreni şifre yöneticisine iletemedi. Şifre yöneticin bu hesabın eski şifresini tutuyorsa yeni şifreyi oraya sen yazabilirsin.</string>
+    <!-- The change goes from the button or from the keyboard's Done key, so the text names the sending, not the button (fourth review, D3). -->
+    <string name="password_not_handed_over_edited">Uygulama sunucunun yanıtını beklerken sen yeni şifre alanındaki yazıyı değiştirdin. Sen değişikliği gönderdiğinde sunucu alanda o an yazan şifreyi yeni şifre olarak kaydetti. Alanda artık bu şifre yazmadığı için uygulama şifre yöneticisine hiçbir şifre iletmedi. Şifre yöneticin bu hesabın eski şifresini tutuyorsa sunucunun kaydettiği şifreyi oraya sen yazabilirsin.</string>
+    <!-- The user left Şifreyi Değiştir while the change was on its way, and the answer leaves the outcome open (no answer, a 5xx,
+         an unreadable answer). The profile shows it below the text of that answer. A screen that stays hands nothing over either:
+         the missing confirmation is the reason, not the leaving (fifth check, P3). An unreadable answer may have been the server's
+         confirmation, so the text says that the app got none it could read, not that none came. -->
+    <string name="password_left_outcome_unknown">Şifre değiştirme ekranından sunucunun yanıtı gelmeden çıktın. Uygulama sunucunun şifreni değiştirip değiştirmediğini bilmiyor. Uygulama sunucudan okuyabildiği bir onay almadığı için şifre yöneticisine hiçbir şifre iletmedi. Sunucu şifreni değiştirdiyse şifre yöneticin bu hesabın eski şifresini tutuyor olabilir.</string>
+    <string name="action_logout">Çıkış Yap</string>
+    <string name="logout_title">Çıkış yapmak istiyor musun?</string>
+    <string name="logout_body">Uygulama bu hesabın maçlarını, kadrolarını ve kamera kayıtlarını bu telefonda saklar. Yeniden giriş yapınca hepsini yerinde bulursun.</string>
+    <string name="logout_upload">Uygulama süren yüklemeyi durdurur. Yeniden giriş yapınca yüklemeyi kaldığı yerden sürdürebilirsin.</string>
+    <!-- Any failed logout: the session stays on the phone. %1$s is the label of action_logout_anyway. -->
+    <string name="logout_not_confirmed">Uygulama sunucudan çıkışın onayını alamadı ve oturumu bu telefonda açık tuttu. %1$s düğmesine dokunursan uygulama oturumu yalnız bu telefonda kapatır. Sunucu kullanılmayan bir oturumu 30 gün sonra kapatır.</string>
+    <string name="action_logout_anyway">Yine de Çıkış Yap</string>
+    <string name="action_delete_account">Hesabı Sil</string>
+    <string name="delete_account_title">Hesabını silmek istiyor musun?</string>
+    <string name="delete_account_body">Sunucu kullanıcı adını, görünen adını, şifrenin özetini ve oturumlarını siler. Uygulama bu telefondaki maç kayıtlarını, kadroları ve kamerayla çektiğin videoları da siler. Galeriden seçtiğin videolar galeride kalır.</string>
+    <!-- %1$d: the matches of this account's list that the server holds. Matches belong to no account before slice B3. -->
+    <string name="delete_account_server_matches">Sunucu maçları henüz hesaplara bağlamıyor. Bu yüzden sen hesabını silince sunucu maç listendeki %1$d maçı silmez. Bu maçları silmek istersen önce her maçı kendi ekranından silebilirsin.</string>
 </resources>

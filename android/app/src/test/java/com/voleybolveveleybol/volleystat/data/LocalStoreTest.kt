@@ -8,8 +8,6 @@ import com.voleybolveveleybol.volleystat.model.MatchRecord
 import com.voleybolveveleybol.volleystat.model.MatchRules
 import com.voleybolveveleybol.volleystat.model.MatchStatus
 import com.voleybolveveleybol.volleystat.model.Player
-import com.voleybolveveleybol.volleystat.model.ServerTarget
-import com.voleybolveveleybol.volleystat.model.Settings
 import com.voleybolveveleybol.volleystat.model.Team
 import com.voleybolveveleybol.volleystat.model.UploadSession
 import com.voleybolveveleybol.volleystat.model.VideoCheck
@@ -42,7 +40,6 @@ class LocalStoreTest {
     @Test fun everythingSurvivesARestartAndUnknownStaysUnknown() {
         val file = File(folder.root, "state.json")
         val state = StoredState(
-            settings = Settings(ServerTarget.USB_DEVICE, displayName = "Deneme", welcomeSeen = true),
             draft = Draft("Hazırlık", "2026-11-12", "Salon", MatchKind.OFFICIAL, "A Takımı", "B Takımı", "t1", null, unknownVideo, "/data/pending.mp4",
                 rules = MatchRules(2, 21, 15)),
             teams = listOf(
