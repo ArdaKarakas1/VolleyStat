@@ -1266,6 +1266,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val sent = markDeletion(current, unanswered = true)
         try {
             api.deleteAccount(password)
+        } catch (error: RequestNotSent) {
+            // Nothing of the request left the phone, so the server can not have deleted the account (fifth check, P1).
+            // The mark is what it was before it.
+            markDeletion(sent, unanswered = earlier)
+            throw error
         } catch (error: ApiException) {
             when {
                 error.code != "AUTH_REQUIRED" -> {
@@ -1273,8 +1278,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         // The server found the session and refused: the account is still there.
                         error.code in ANSWERS_OF_A_LIVE_SESSION -> markDeletion(sent, unanswered = false)
                         // A refusal that comes before the server acts on the account (a 422 for a password of more than
-                        // 1024 characters, say) says nothing about this deletion. The mark is what it was before it.
-                        error.status in 400..499 -> markDeletion(sent, unanswered = earlier)
+                        // 1024 characters, say) says nothing about this deletion. The mark is what it was before it. Only the
+                        // API's own envelope makes a 4xx the server's refusal: a 4xx without it (HTTP_404 from a proxy's HTML
+                        // page, say) is an answer the app can not read, and the mark stays (fifth check, P4).
+                        error.status in 400..499 && !error.code.startsWith("HTTP_") -> markDeletion(sent, unanswered = earlier)
                         // A 5xx may come after the deletion: the mark stays, as for a missing answer.
                     }
                     throw error

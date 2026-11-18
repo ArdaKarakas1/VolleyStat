@@ -245,6 +245,13 @@ class AuthApiTest {
             assertEquals("the form says no more than before", AuthProblem.Unreachable, AuthProblem.of(error!!))
             assertFalse("the server can not have acted on it", outcomeUnknownAfter(error))
         }
+        // The fifth check's P5: an address the phone can not even read (a build without a server address) sends nothing either.
+        listOf("", "not a url").forEach { address ->
+            val error = runCatching { ApiClient(address).register("ali", "Ali", "uzun bir şifre 42", null) }.exceptionOrNull()
+            assertTrue("'$address': $error", error is RequestNotSent)
+            assertEquals(AuthProblem.Unreachable, AuthProblem.of(error!!))
+            assertFalse(outcomeUnknownAfter(error))
+        }
     }
 
     @Test fun aRequestWhoseAnswerWasLostIsOneThatLeftThePhone() {

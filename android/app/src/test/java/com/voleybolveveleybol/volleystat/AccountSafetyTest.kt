@@ -288,6 +288,45 @@ class AccountSafetyTest {
         assertEquals(UnconfirmedDeletion(user.userId, user.username), vm.state.value.account.unconfirmedDeletion)
     }
 
+    // ----- the fifth check's P1: a deletion that never left the phone -----
+
+    /** An address where nothing listens: the connection is refused, and no request leaves the phone (RequestNotSent). */
+    private fun closedAddress() = "http://127.0.0.1:${java.net.ServerSocket(0).use { it.localPort }}/v1"
+
+    /**
+     * The phone can not connect (the server is off): no request of the deletion reached any server. The mark goes back to
+     * what it was, so a later Yine de Çıkış Yap offers no Telefondan Sil for an account no request could have deleted.
+     */
+    @Test fun aDeletionThatNeverLeftThePhoneLeavesNoOfferOfTelefondanSil() {
+        seedAccountWithData()
+        val vm = viewModel().also { it.baseUrlOverride = closedAddress() }
+        vm.deleteAccount(password)
+        await("the deletion") { !vm.state.value.account.busy && vm.state.value.account.problem != null }
+        assertEquals(AuthProblem.Unreachable, vm.state.value.account.problem)
+        assertFalse("no request could have deleted the account", marked())
+        vm.logout(evenWithoutAnswer = true)
+        await("the logout") { !vm.state.value.account.busy && vm.state.value.account.user == null }
+        assertEquals("no request reached any server", 0, seen.size)
+        assertNull("no offer of Telefondan Sil", vm.state.value.account.unconfirmedDeletion)
+        assertTrue(File(folder, "volleystat.json").exists())
+    }
+
+    /** After an earlier lost answer, a repeat that never left the phone keeps the mark: the first deletion may still have happened. */
+    @Test fun aRepeatThatNeverLeftThePhoneKeepsTheMarkOfAnEarlierLostAnswer() {
+        seedAccountWithData()
+        val vm = viewModel()
+        vm.deleteAndLoseTheAnswer()
+        vm.baseUrlOverride = closedAddress()
+        vm.deleteAccount(password)
+        await("the repeat") { !vm.state.value.account.busy }
+        assertEquals(AuthProblem.Unreachable, vm.state.value.account.problem)
+        assertEquals(1, seen.size)
+        assertTrue("the first deletion may still have happened", marked())
+        vm.logout(evenWithoutAnswer = true)
+        await("the logout") { !vm.state.value.account.busy && vm.state.value.account.user == null }
+        assertEquals(UnconfirmedDeletion(user.userId, user.username), vm.state.value.account.unconfirmedDeletion)
+    }
+
     // ----- the second review's follow-up of S1: a 204 is the server's word that the account is gone -----
 
     /**
@@ -360,7 +399,13 @@ class AccountSafetyTest {
      */
     @Test fun aDeletionAnswerTheAppCanNotReadKeepsTheMark() {
         seedAccountWithData()
-        listOf(ok(JSONObject().put("deleted", true)), MockResponse().setResponseCode(302)).forEach { answer ->
+        listOf(
+            ok(JSONObject().put("deleted", true)), MockResponse().setResponseCode(302),
+            // The fifth check's P4: a 4xx without the API's envelope (a proxy's HTML page) is an answer the app can not read.
+            MockResponse().setResponseCode(404).setHeader("Content-Type", "text/html").setBody("<html>Not Found</html>"),
+            // A proxy's 401 that names no Bearer scheme: the app can not tell it from the API's AUTH_REQUIRED, so it reads none.
+            MockResponse().setResponseCode(401).setHeader("Content-Type", "text/html").setBody("<html>Unauthorized</html>"),
+        ).forEach { answer ->
             on("POST /me/delete") { answer }
             val sessions = SessionStore(File(files, "session.bin"), PlainSessionCipher)
             sessions.save(sessions.load()!!.copy(deletionUnanswered = false))
@@ -399,6 +444,10 @@ class AccountSafetyTest {
         vm.logout(evenWithoutAnswer = true)
         await("the logout") { !vm.state.value.account.busy && vm.state.value.account.user == null }
         assertEquals(UnconfirmedDeletion(user.userId, user.username), vm.state.value.account.unconfirmedDeletion)
+        // The fifth check's P2: the form said a moment before that the server reported an error. The offer never says that no answer came.
+        val offer = context.getString(R.string.deletion_unconfirmed, user.username, context.getString(R.string.action_delete_from_phone))
+        assertFalse("the offer says that no answer came, after the server's 500: $offer", offer.contains("yanıtını alamadı"))
+        assertTrue(offer, offer.startsWith("Uygulama sunucunun ${user.username} hesabını silip silmediğini bilmiyor."))
     }
 
     // ----- the fourth review's D5: SERVER_BUSY on the deletion -----

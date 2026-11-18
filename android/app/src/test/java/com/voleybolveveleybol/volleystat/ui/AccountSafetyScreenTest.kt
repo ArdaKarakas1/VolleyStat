@@ -112,7 +112,7 @@ class AccountSafetyScreenTest {
         show { LoginScreen(account, onLogin = { _, _ -> }, onCreateAccount = {}, onDeletePhoneData = { deletions++ }) }
 
         val button = text(R.string.action_delete_from_phone)
-        val offer = "Uygulama bir hesabı silme isteğinin yanıtını alamadı ve sunucunun hesabı silip silmediğini bilmiyor. " +
+        val offer = "Uygulama sunucunun bir hesabı silip silmediğini bilmiyor. " +
             "Uygulama bu hesabın kullanıcı adını da okuyamadı. Sunucu hesabı silmediyse giriş yapınca maçlarını yeniden görürsün. " +
             "Sunucu hesabı sildiyse bu telefondaki verilerini Telefondan Sil düğmesiyle silebilirsin."
         assertEquals(offer, text(R.string.deletion_unconfirmed_unnamed, button))
@@ -369,6 +369,33 @@ class AccountSafetyScreenTest {
         assertEquals(1, committed.autofill.commits)
         assertEquals(emptyList<PasswordNotHandedOver>(), committed.toldWhenGone)
         assertEquals(emptyList<PasswordNotHandedOver>(), committed.toldAtConfirmation)
+    }
+
+    /**
+     * The fifth check's P3: a screen that stays and gets an answer that leaves the outcome open hands nothing over either.
+     * The missing confirmation is why nothing went to the password manager, and the profile's note names that reason, not
+     * the leaving of the screen.
+     */
+    @Test fun aScreenThatStaysAndGetsNoConfirmationHandsOverNothingEither() {
+        val probe = PasswordChangeProbe()
+        passwordChange(probe)
+        probe.send()
+        listOf(AuthProblem.Unreachable, AuthProblem.ServerFailed(500, withEnvelope = true), AuthProblem.UnexpectedAnswer).forEachIndexed { index, answer ->
+            if (index > 0) {
+                // The user sends the same change again from the screen that stayed.
+                confirm.performClick()
+                compose.waitForIdle()
+                assertTrue(probe.account.busy)
+            }
+            probe.account = probe.account.copy(busy = false, problem = answer)
+            compose.waitForIdle()
+            assertEquals("$answer: the screen that stayed commits nothing", 0, probe.autofill.commits)
+            assertEquals(emptyList<PasswordNotHandedOver>(), probe.toldAtConfirmation)
+        }
+        assertEquals("the screen is still open", emptyList<PasswordNotHandedOver>(), probe.toldWhenGone)
+        val note = text(R.string.password_left_outcome_unknown)
+        assertFalse("the note names leaving as the reason nothing was handed over: $note", note.contains("çıktın. Bu yüzden"))
+        assertTrue(note, note.contains("bir onay almadığı için şifre yöneticisine hiçbir şifre iletmedi."))
     }
 
     @Test fun aNewPasswordEditedWhileTheChangeWaitsIsNeverCommitted() {

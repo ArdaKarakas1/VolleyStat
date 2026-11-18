@@ -594,12 +594,13 @@
     <!-- 401 AUTH_REQUIRED. The app keeps an upload's place, and the user resumes it after the next login. -->
     <string name="session_ended">Sunucu oturumunu kapattı. Yeniden giriş yapınca yarım kalan bir yüklemeyi kaldığı yerden sürdürebilirsin.</string>
     <string name="account_deleted">Sunucu hesabını sildi. Uygulama bu telefondaki maç kayıtlarını, kadroları ve kamerayla çektiğin videoları da sildi.</string>
-    <!-- A deletion got no answer, and the session then left the phone without a sign that the account is still there.
-         %1$s is the username, %2$s the label of action_delete_from_phone. -->
-    <string name="deletion_unconfirmed">Uygulama %1$s hesabını silme isteğinin yanıtını alamadı ve sunucunun hesabı silip silmediğini bilmiyor. Sunucu hesabı silmediyse giriş yapınca maçlarını yeniden görürsün. Sunucu hesabı sildiyse bu telefondaki verilerini %2$s düğmesiyle silebilirsin.</string>
+    <!-- A deletion got no answer, a 5xx or an answer the app can not read (or the process ended while it was on its way), and the
+         session then left the phone without a sign that the account is still there. The text holds in each of these states, so it
+         does not say that no answer came (fifth check, P2). %1$s is the username, %2$s the label of action_delete_from_phone. -->
+    <string name="deletion_unconfirmed">Uygulama sunucunun %1$s hesabını silip silmediğini bilmiyor. Sunucu hesabı silmediyse giriş yapınca maçlarını yeniden görürsün. Sunucu hesabı sildiyse bu telefondaki verilerini %2$s düğmesiyle silebilirsin.</string>
     <!-- The same offer when the phone can no longer read the username (a new keystore key, a damaged deletions.bin).
          %1$s is the label of action_delete_from_phone. -->
-    <string name="deletion_unconfirmed_unnamed">Uygulama bir hesabı silme isteğinin yanıtını alamadı ve sunucunun hesabı silip silmediğini bilmiyor. Uygulama bu hesabın kullanıcı adını da okuyamadı. Sunucu hesabı silmediyse giriş yapınca maçlarını yeniden görürsün. Sunucu hesabı sildiyse bu telefondaki verilerini %1$s düğmesiyle silebilirsin.</string>
+    <string name="deletion_unconfirmed_unnamed">Uygulama sunucunun bir hesabı silip silmediğini bilmiyor. Uygulama bu hesabın kullanıcı adını da okuyamadı. Sunucu hesabı silmediyse giriş yapınca maçlarını yeniden görürsün. Sunucu hesabı sildiyse bu telefondaki verilerini %1$s düğmesiyle silebilirsin.</string>
     <string name="action_delete_from_phone">Telefondan Sil</string>
     <string name="delete_from_phone_title">Bu telefondaki verileri silmek istiyor musun?</string>
     <!-- %1$s is the username. -->
@@ -688,8 +689,10 @@
     <!-- The change goes from the button or from the keyboard's Done key, so the text names the sending, not the button (fourth review, D3). -->
     <string name="password_not_handed_over_edited">Uygulama sunucunun yanıtını beklerken sen yeni şifre alanındaki yazıyı değiştirdin. Sen değişikliği gönderdiğinde sunucu alanda o an yazan şifreyi yeni şifre olarak kaydetti. Alanda artık bu şifre yazmadığı için uygulama şifre yöneticisine hiçbir şifre iletmedi. Şifre yöneticin bu hesabın eski şifresini tutuyorsa sunucunun kaydettiği şifreyi oraya sen yazabilirsin.</string>
     <!-- The user left Şifreyi Değiştir while the change was on its way, and the answer leaves the outcome open (no answer, a 5xx,
-         an unreadable answer). The profile shows it below the text of that answer. -->
-    <string name="password_left_outcome_unknown">Şifre değiştirme ekranından sunucunun yanıtı gelmeden çıktın. Bu yüzden uygulama şifre yöneticisine hiçbir şifre iletmedi. Uygulama sunucunun şifreni değiştirip değiştirmediğini bilmiyor. Sunucu şifreni değiştirdiyse şifre yöneticin bu hesabın eski şifresini tutuyor olabilir.</string>
+         an unreadable answer). The profile shows it below the text of that answer. A screen that stays hands nothing over either:
+         the missing confirmation is the reason, not the leaving (fifth check, P3). An unreadable answer may have been the server's
+         confirmation, so the text says that the app got none it could read, not that none came. -->
+    <string name="password_left_outcome_unknown">Şifre değiştirme ekranından sunucunun yanıtı gelmeden çıktın. Uygulama sunucunun şifreni değiştirip değiştirmediğini bilmiyor. Uygulama sunucudan okuyabildiği bir onay almadığı için şifre yöneticisine hiçbir şifre iletmedi. Sunucu şifreni değiştirdiyse şifre yöneticin bu hesabın eski şifresini tutuyor olabilir.</string>
     <string name="action_logout">Çıkış Yap</string>
     <string name="logout_title">Çıkış yapmak istiyor musun?</string>
     <string name="logout_body">Uygulama bu hesabın maçlarını, kadrolarını ve kamera kayıtlarını bu telefonda saklar. Yeniden giriş yapınca hepsini yerinde bulursun.</string>

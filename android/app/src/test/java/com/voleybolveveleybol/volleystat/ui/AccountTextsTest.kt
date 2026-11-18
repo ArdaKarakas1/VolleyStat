@@ -263,4 +263,44 @@ class AccountTextsTest {
         assertTrue(note, note.contains("Sunucu şifreni değiştirdiyse şifre yöneticin bu hesabın eski şifresini tutuyor olabilir."))
         listOf(" - ", " – ", " — ", "--").forEach { assertFalse(note, note.contains(it)) }
     }
+
+    /**
+     * The fifth check's P3: the profile shows the note only when no confirmation the app could read came (no answer, a 5xx, an
+     * answer the app can not read), and a screen that stays and gets the same answer hands nothing over either. The note names
+     * the missing confirmation as the reason the password manager got nothing, not the leaving of the screen. After an answer
+     * the app could not read, that answer may have been the server's confirmation: the note does not say that none came.
+     */
+    @Test fun theNoteAboutALeftPasswordChangeNamesTheMissingConfirmationAsTheReasonNothingWasHandedOver() {
+        val note = string(R.string.password_left_outcome_unknown)
+        assertFalse("the note names leaving as the reason: $note", note.contains("Bu yüzden"))
+        assertTrue(note, note.contains("Uygulama sunucudan okuyabildiği bir onay almadığı için şifre yöneticisine hiçbir şifre iletmedi."))
+        assertFalse("after an unreadable answer the app does not know that no confirmation came: $note", note.contains("onayı gelmediği"))
+        assertEquals(
+            "Şifre değiştirme ekranından sunucunun yanıtı gelmeden çıktın. Uygulama sunucunun şifreni değiştirip değiştirmediğini bilmiyor. " +
+                "Uygulama sunucudan okuyabildiği bir onay almadığı için şifre yöneticisine hiçbir şifre iletmedi. " +
+                "Sunucu şifreni değiştirdiyse şifre yöneticin bu hesabın eski şifresini tutuyor olabilir.",
+            note,
+        )
+    }
+
+    /**
+     * The fifth check's P2: the offer of Telefondan Sil stands after every state that leaves the mark: no answer, a 5xx, an
+     * answer the app can not read, a process that ended while the deletion was on its way. After a 5xx the form said a moment
+     * before that the server reported an error, so the offer never says that no answer came. It says what the app does not know.
+     */
+    @Test fun theOfferOfTelefondanSilNeverSaysThatNoAnswerCame() {
+        val button = string(R.string.action_delete_from_phone)
+        val named = string(R.string.deletion_unconfirmed, "ali", button)
+        val unnamed = string(R.string.deletion_unconfirmed_unnamed, button)
+        assertTrue(named, named.startsWith("Uygulama sunucunun ali hesabını silip silmediğini bilmiyor. "))
+        assertTrue(unnamed, unnamed.startsWith("Uygulama sunucunun bir hesabı silip silmediğini bilmiyor. Uygulama bu hesabın kullanıcı adını da okuyamadı. "))
+        listOf(named, unnamed).forEach { offer ->
+            listOf("yanıt", "alamadı", "isteğinin").forEach { assertFalse("the offer says that no answer came: $offer", offer.contains(it)) }
+            assertTrue(
+                offer,
+                offer.endsWith("Sunucu hesabı silmediyse giriş yapınca maçlarını yeniden görürsün. Sunucu hesabı sildiyse bu telefondaki verilerini Telefondan Sil düğmesiyle silebilirsin."),
+            )
+            listOf(" - ", " – ", " — ", "--").forEach { assertFalse(offer, offer.contains(it)) }
+        }
+    }
 }
