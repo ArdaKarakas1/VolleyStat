@@ -332,7 +332,9 @@
     <string name="rallies_title">Ralli Listesi</string>
     <string name="rallies_loading">Uygulama ralli listesini alıyor</string>
     <string name="rallies_load_failed">Uygulama ralli listesini sunucudan alamadı.</string>
-    <string name="rallies_outdated_server">Sunucu ralli listesini bu uygulamanın okuyabildiği biçimde vermedi. Sunucunun güncel sürümle çalıştığını denetle.</string>
+    <!-- A 2xx the app can not read as a rally list: an older server sends it, but so may something else at that address (an empty
+         2xx, another service's JSON), so the text does not name the server as its sender (eighth checker, S2). The same for the report. -->
+    <string name="rallies_outdated_server">Uygulama isteğe gelen yanıtı ralli listesi olarak okuyamadı. Sunucunun güncel sürümle çalıştığını denetle.</string>
     <string name="rallies_help">Bir ralliyi düzeltmek için o ralliye dokun. Kaçan bir ralliyi eklemek için iki ralli arasındaki boşluğa dokun.</string>
     <string name="rallies_count">Listede %1$d ralli var.</string>
     <string name="rallies_count_rejected">Listede %1$d ralli ve ralli saymadığın %2$d aralık var.</string>
@@ -456,7 +458,7 @@
     <string name="report_unavailable_title">Rapor henüz yok</string>
     <string name="report_unavailable_body">Bu maç için analiz işi yok.</string>
     <string name="report_load_failed">Uygulama raporu sunucudan alamadı.</string>
-    <string name="report_outdated_server">Sunucu raporu bu uygulamanın okuyabildiği biçimde vermedi. Sunucunun güncel sürümle çalıştığını denetle.</string>
+    <string name="report_outdated_server">Uygulama isteğe gelen yanıtı rapor olarak okuyamadı. Sunucunun güncel sürümle çalıştığını denetle.</string>
     <string name="value_not_measured">Ölçüm yok</string>
     <string name="value_partial_note">Artı işareti alt sınırı gösterir. Sayı doğrulama sürdükçe artabilir.</string>
     <string name="value_missing_note">Kesik çizgili kutu ölçüm olmadığını gösterir. Uygulama eksik ölçümü sıfır yazmaz.</string>
@@ -648,17 +650,19 @@
     <string name="password_wrong">Sunucu yazdığın şifreyi hesabının şu anki şifresiyle eşleştiremedi. Şifreni kontrol edip yeniden deneyebilirsin.</string>
     <!-- No answer arrived: the request may have reached the server, so the text says no more than that. -->
     <string name="net_no_answer">Uygulama sunucudan yanıt alamadı. Biraz sonra yeniden deneyebilirsin.</string>
-    <string name="account_unexpected">Uygulama sunucunun yanıtını okuyamadı. Sunucu seçimini kontrol edip yeniden deneyebilirsin.</string>
+    <!-- An answer the app can not read (a 3xx, a 4xx without the API's envelope, a gateway's Bearer 401, a 2xx HTML page) may come
+         from something on the way, so this text and the two below do not name the server as its sender (eighth checker, S2). -->
+    <string name="account_unexpected">Uygulama isteğe gelen yanıtı okuyamadı. Sunucu seçimini kontrol edip yeniden deneyebilirsin.</string>
     <string name="account_server_changed">Uygulama bu isteği şu an seçili olmayan bir sunucuya gönderdi ve gelen yanıtla oturum açmadı. Yeniden deneyebilirsin.</string>
     <string name="account_server_older">Sunucunun sürümü bu uygulamadan eski. Uygulama bu sunucuda hesap açamaz ve giriş yapamaz.</string>
     <string name="account_refused">Sunucu bu isteği kabul etmedi ve hiçbir şeyi değiştirmedi.</string>
     <string name="account_outcome_unknown">Sunucu bir hata bildirdi. Uygulama sunucunun bu isteği yerine getirip getirmediğini bilmiyor. Biraz sonra yeniden deneyebilirsin.</string>
-    <string name="account_unexpected_change">Uygulama sunucunun yanıtını okuyamadı ve sunucunun bu isteği yerine getirip getirmediğini bilmiyor. Sunucu seçimini kontrol edip yeniden deneyebilirsin.</string>
+    <string name="account_unexpected_change">Uygulama isteğe gelen yanıtı okuyamadı ve sunucunun bu isteği yerine getirip getirmediğini bilmiyor. Sunucu seçimini kontrol edip yeniden deneyebilirsin.</string>
     <!-- A 5xx without the API's envelope (HTTP_5xx): a gateway on the way may have sent it, so the text does not name the server as the sender. -->
     <string name="account_outcome_unknown_on_the_way">Uygulama sunucudan ya da sunucuya giden yoldan bir hata yanıtı aldı. Uygulama sunucunun bu isteği yerine getirip getirmediğini bilmiyor. Biraz sonra yeniden deneyebilirsin.</string>
     <!-- An unreadable answer to the display name change, the password change or the deletion. The app locks the server choice
          while a session is open, so the text gives no advice about it. -->
-    <string name="account_unexpected_change_signed_in">Uygulama sunucunun yanıtını okuyamadı ve sunucunun bu isteği yerine getirip getirmediğini bilmiyor. Biraz sonra yeniden deneyebilirsin.</string>
+    <string name="account_unexpected_change_signed_in">Uygulama isteğe gelen yanıtı okuyamadı ve sunucunun bu isteği yerine getirip getirmediğini bilmiyor. Biraz sonra yeniden deneyebilirsin.</string>
     <!-- 503 SERVER_BUSY after the app's own repeats. %1$d is the number of times it sent the request. -->
     <string name="server_busy_gave_up">Uygulama isteği %1$d kez gönderdi ve sunucu her seferinde çok sayıda istek işlediğini bildirdi. Biraz sonra yeniden deneyebilirsin.</string>
 

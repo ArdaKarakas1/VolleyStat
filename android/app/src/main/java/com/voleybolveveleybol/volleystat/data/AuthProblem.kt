@@ -109,9 +109,11 @@ sealed interface AuthProblem {
                 "UNEXPECTED_ANSWER" -> UnexpectedAnswer
                 else -> when {
                     // The server, or something on the way to it, failed while it had the request: it may have made the change.
-                    // Only the API's own envelope says that the server itself reported it (fourth review, D4).
-                    error.status >= 500 -> ServerFailed(error.status, withEnvelope = !error.code.startsWith("HTTP_"))
-                    // No envelope, or an envelope with a status this API never sends with one (a 3xx): not this API's refusal.
+                    // Only the API's own envelope says that the server itself reported it (fourth review, D4). The API never
+                    // sends a 511 (a captive portal's status), so an envelope on one does not say that either (ninth checker).
+                    error.status in 500..599 -> ServerFailed(error.status, withEnvelope = !error.code.startsWith("HTTP_") && error.status != 511)
+                    // No envelope, or an envelope with a status this API never sends with one (a 3xx, or 600 and above):
+                    // not this API's refusal.
                     error.status !in 400..499 || error.code.startsWith("HTTP_") -> UnexpectedAnswer
                     else -> Refused(error.status, error.code)
                 }
@@ -130,12 +132,14 @@ sealed interface AuthProblem {
  * API's envelope: a gateway on the way may have sent it, and the app can not tell whether the server got
  * the request (sixth checker, Q2). A 401 that names the Bearer scheme reads as AUTH_REQUIRED for a request
  * that carried the session, and is not one of them. The registration keeps the narrower
- * [ApiException.leavesOutcomeUnknown], which leaves out the 3xx and the 4xx: its mark sends a login to the
- * account that holds the username (seventh checker, R1). A request that never left the phone leaves nothing
- * open (fourth review, D2), nor does an answer from another address, whose session the app closed again.
+ * [ApiException.leavesOutcomeUnknown], which leaves out the 3xx, the 4xx, the 511 and a 2xx that is not
+ * JSON: its mark sends a login to the account that holds the username (seventh checker, R1; eighth
+ * checker, S1 and S3). A request that never left the phone leaves nothing open (fourth review, D2), nor does
+ * an answer from another address, whose session the app closed again.
  */
 fun outcomeUnknownAfter(error: Throwable): Boolean = when (error) {
-    is ApiException -> error.leavesOutcomeUnknown || error.status in 300..399 || error.code.startsWith("HTTP_")
+    is ApiException -> (error.status >= 500 && error.code != "SERVER_BUSY") || error.code == "UNEXPECTED_ANSWER" ||
+        error.status in 300..399 || error.code.startsWith("HTTP_")
     is RequestNotSent -> false
     is AnswerFromAnotherServer -> false
     else -> true

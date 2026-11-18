@@ -354,7 +354,7 @@ class AuthApiTest {
      */
     @Test fun aRegistrationMarksItsUsernameOnlyAfterA5xxOrASuccessTheAppCanNotRead() {
         fun failure(status: Int, code: String) = ApiException(status, code, code, JSONObject())
-        listOf(failure(500, "INTERNAL"), failure(502, "HTTP_502"), failure(200, "UNEXPECTED_ANSWER")).forEach { marked ->
+        listOf(failure(500, "INTERNAL"), failure(502, "HTTP_502")).forEach { marked ->
             assertTrue("${marked.status} ${marked.code}", marked.leavesOutcomeUnknown)
         }
         val redirects = listOf(failure(302, "HTTP_302"), failure(307, "HTTP_307"), failure(301, "INTERNAL"))
@@ -369,6 +369,93 @@ class AuthApiTest {
         assertFalse(portal.leavesOutcomeUnknown)
         assertEquals(AuthProblem.UnexpectedAnswer, AuthProblem.of(portal))
         assertEquals("one request, no second one to the portal", 1, server.requestCount)
+        // A success the app can not read marks the username when it came as JSON (the ninth round: the Content-Type decides).
+        server.enqueue(json(201, JSONObject().put("ok", true)))
+        val unreadable = runCatching { client().register("ali", "Ali", "uzun bir şifre 42", null) }.exceptionOrNull() as ApiException
+        assertEquals("UNEXPECTED_ANSWER", unreadable.code)
+        assertTrue(unreadable.leavesOutcomeUnknown)
+    }
+
+    private fun registrationFailure(answer: MockResponse): ApiException {
+        server.enqueue(answer)
+        return runCatching { client().register("ali", "Ali", "uzun bir şifre 42", null) }.exceptionOrNull() as? ApiException
+            ?: throw AssertionError("the registration must fail with an ApiException")
+    }
+
+    /**
+     * The eighth checker's S1: the registration marks a username after UNEXPECTED_ANSWER only when that code stands for a
+     * success the app can not read. An envelope that names the code with a 4xx or a 3xx is no success: the API never sends
+     * that code, and a 4xx or a 3xx comes before the server opens an account or from something on the way. A change of
+     * the user's own account still leaves its outcome open after it.
+     */
+    @Test fun anEnvelopeThatNamesUnexpectedAnswerWithA4xxOrA3xxMarksNoRegistration() {
+        val failures = listOf(409, 422, 429).map { status ->
+            registrationFailure(error(status, "UNEXPECTED_ANSWER")).also { assertEquals(status to "UNEXPECTED_ANSWER", it.status to it.code) }
+        } + listOf(302, 409).map { status ->
+            // The rule ties the code to a success even when the failure names a JSON Content-Type.
+            ApiException(status, "UNEXPECTED_ANSWER", "UNEXPECTED_ANSWER", JSONObject(), contentType = "application/json")
+        }
+        failures.forEach { failure ->
+            assertFalse("${failure.status} UNEXPECTED_ANSWER marks no username", failure.leavesOutcomeUnknown)
+            assertTrue("${failure.status}: a change of the user's own account stays open", outcomeUnknownAfter(failure))
+        }
+    }
+
+    /**
+     * The eighth checker's S3: a captive portal answers in two more ways than a redirect, and the API answers a registration
+     * in neither. RFC 6585's 511 Network Authentication Required marks no username, with the API's envelope or without it.
+     * A 2xx marks one only when its Content-Type is JSON, as the API's own 201 is: a portal's HTML page, a 2xx without a
+     * Content-Type and a 204 mark nothing. A JSON success the app can not read (a 201 without "user", say) and a 502 still
+     * mark, because the server may have opened the account. A change of the user's own account leaves its outcome open
+     * after every one of these answers, as before.
+     */
+    @Test fun aCaptivePortalsAnswerMarksNoRegistrationAndAJsonSuccessTheAppCanNotReadStillDoes() {
+        fun page(status: Int, type: String? = "text/html") = MockResponse().setResponseCode(status).setBody("<html>Otel Wi-Fi girişi</html>")
+            .apply { if (type != null) setHeader("Content-Type", type) }
+        val unmarked = mapOf(
+            "511 page" to page(511),
+            "511 envelope" to error(511, "INTERNAL"),
+            "200 html" to page(200),
+            "201 html" to page(201),
+            "200 without a type" to page(200, type = null),
+            "200 html that reads as JSON" to page(200).setBody("{}"),
+            "200 blank html" to page(200).setBody(""),
+            "204" to MockResponse().setResponseCode(204),
+            "200 text/plain JSON" to json(200, JSONObject().put("ok", true)).setHeader("Content-Type", "text/plain"),
+            // Only application/json is the API's type: a problem+json body comes from something else (ninth checker, B6).
+            "200 problem+json" to json(200, JSONObject()).setHeader("Content-Type", "application/problem+json"),
+            // HTTP has no status of 600 or above; the API never sends one, but a filter on the way may (ninth checker).
+            "600 page" to page(600),
+            "999 page" to page(999),
+            "999 envelope" to error(999, "INTERNAL"),
+        )
+        unmarked.forEach { (label, answer) ->
+            val failure = registrationFailure(answer)
+            assertFalse("$label marks no username: ${failure.status} ${failure.code}", failure.leavesOutcomeUnknown)
+            assertTrue("$label: a change of the user's own account stays open", outcomeUnknownAfter(failure))
+        }
+        // The form names neither the server nor a server error for an answer this API never sends.
+        listOf(page(600), page(999), error(999, "INTERNAL")).forEach { answer ->
+            assertEquals(AuthProblem.UnexpectedAnswer, AuthProblem.of(registrationFailure(answer)))
+        }
+        // A 511 with an envelope is not the server's own report either: the form takes the text for an error on the way.
+        assertEquals(AuthProblem.ServerFailed(511, withEnvelope = false), AuthProblem.of(registrationFailure(error(511, "INTERNAL"))))
+        val marked = mapOf(
+            "201 JSON without user" to json(201, JSONObject().put("session", JSONObject().put("token", "t").put("expiresAt", "2026-12-17T10:00:00Z"))),
+            "201 empty JSON" to json(201, JSONObject()),
+            "201 JSON with a charset, not JSON" to MockResponse().setResponseCode(201).setHeader("Content-Type", "Application/JSON; charset=utf-8").setBody("<html>"),
+            "201 JSON with a space before its parameter" to json(201, JSONObject()).setHeader("Content-Type", "application/json ; charset=utf-8"),
+            "201 blank JSON" to MockResponse().setResponseCode(201).setHeader("Content-Type", "application/json"),
+            "502 page" to page(502),
+            "500 envelope" to error(500, "INTERNAL"),
+        )
+        marked.forEach { (label, answer) ->
+            val failure = registrationFailure(answer)
+            assertTrue("$label marks the username: ${failure.status} ${failure.code}", failure.leavesOutcomeUnknown)
+            assertTrue(outcomeUnknownAfter(failure))
+        }
+        // The exception of a success the app can not read carries the answer's own status, not a fixed 200.
+        assertEquals(201, registrationFailure(json(201, JSONObject())).status)
     }
 
     @Test fun aClosedSignUpNamesItsReason() {

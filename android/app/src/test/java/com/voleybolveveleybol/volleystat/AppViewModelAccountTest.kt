@@ -773,8 +773,11 @@ class AppViewModelAccountTest {
     @Test fun aRegistrationThatMeetsAServerErrorWithoutTheEnvelopeIsLookedForAtTheNextTry() =
         aRegistrationLooksForItsAccountAfter(MockResponse().setResponseCode(502).setBody("Bad Gateway"), AuthProblem.ServerFailed(502))
 
+    /** The API's own 201 comes as JSON. One without "user" may still come after the server opened the account (eighth checker, S3). */
     @Test fun aRegistrationWhoseSuccessTheAppCanNotReadIsLookedForAtTheNextTry() =
-        aRegistrationLooksForItsAccountAfter(MockResponse().setResponseCode(201).setHeader("Content-Type", "text/html").setBody("<html></html>"), AuthProblem.UnexpectedAnswer)
+        aRegistrationLooksForItsAccountAfter(
+            ok(JSONObject().put("session", JSONObject().put("token", "t").put("expiresAt", "2026-12-17T10:00:00Z")), status = 201), AuthProblem.UnexpectedAnswer,
+        )
 
     /** SERVER_BUSY comes before the server counts or writes anything: the app asks again, and no mark sends a login later. */
     @Test fun aRegistrationThatMeetsABusyServerIsAskedAgainAndNotLookedFor() {
@@ -875,6 +878,53 @@ class AppViewModelAccountTest {
         )
         assertNull(account.user)
         assertFalse("no session was there to end", account.sessionEnded)
+        assertFalse(File(files, "registrations.bin").exists())
+        vm.registerAndWait(operatorCode = null)
+        assertEquals(AuthProblem.UsernameTaken, vm.state.value.account.problem)
+        assertEquals("no login goes to the account that holds the username", List(2) { "POST /auth/register" }, seen.map { it.key })
+    }
+
+    /**
+     * The eighth checker's S3: a captive portal answers in two more ways than a redirect. RFC 6585's 511 Network Authentication
+     * Required and a 2xx whose Content-Type is not JSON (a portal's HTML page, a 204 without a body) never come from the API,
+     * which answers a registration with JSON or a 5xx. They mark no username, and the repeat sends no login to the account that
+     * holds it. The form still says that the app does not know the outcome.
+     */
+    @Test fun aRegistrationAnsweredByACaptivePortalsPageIsNotLookedFor() {
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        val first = mapOf(
+            "ali" to (page(511) to AuthProblem.ServerFailed(511)),
+            "veli" to (MockResponse().setResponseCode(200).setHeader("Content-Type", "text/html").setBody("<html>Otel Wi-Fi girişi</html>") to AuthProblem.UnexpectedAnswer),
+            "ayse.yilmaz" to (MockResponse().setResponseCode(204) to AuthProblem.UnexpectedAnswer),
+        )
+        val answered = mutableSetOf<String>()
+        on("POST /auth/register") {
+            val name = JSONObject(seen.last().body).getString("username")
+            if (answered.add(name)) first.getValue(name).first else refuse(409, "USERNAME_TAKEN")
+        }
+        val vm = viewModel()
+        first.forEach { (name, answer) ->
+            vm.registerAndWait(name, operatorCode = null)
+            assertEquals(name, answer.second, vm.state.value.account.problem)
+            assertFalse("$name: no mark", File(files, "registrations.bin").exists())
+            vm.registerAndWait(name, operatorCode = null)
+            assertEquals(name, AuthProblem.UsernameTaken, vm.state.value.account.problem)
+        }
+        assertEquals("no login goes to the account that holds the username", List(6) { "POST /auth/register" }, seen.map { it.key })
+        assertFalse(File(files, "registrations.bin").exists())
+    }
+
+    /**
+     * The eighth checker's S1: the API never sends the code UNEXPECTED_ANSWER. A 4xx envelope that names it is a 4xx all the
+     * same, which comes before the server changes anything or from something on the way, so it marks no username.
+     */
+    @Test fun aRegistrationAnsweredByA4xxEnvelopeThatNamesUnexpectedAnswerIsNotLookedFor() {
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        var registrations = 0
+        on("POST /auth/register") { if (++registrations == 1) refuse(409, "UNEXPECTED_ANSWER") else refuse(409, "USERNAME_TAKEN") }
+        val vm = viewModel()
+        vm.registerAndWait(operatorCode = null)
+        assertEquals(AuthProblem.UnexpectedAnswer, vm.state.value.account.problem)
         assertFalse(File(files, "registrations.bin").exists())
         vm.registerAndWait(operatorCode = null)
         assertEquals(AuthProblem.UsernameTaken, vm.state.value.account.problem)

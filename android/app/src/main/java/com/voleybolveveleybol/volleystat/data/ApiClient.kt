@@ -24,22 +24,33 @@ import java.net.URL
 
 /**
  * A reply the server sent with an error status. [code] is the server's error code. [retryAfterSeconds]
- * is the server's Retry-After header, when it sent one (429 and 503).
+ * is the server's Retry-After header, when it sent one (429 and 503). [contentType] is the Content-Type
+ * of a 2xx answer the app could not read (UNEXPECTED_ANSWER), as it came; the registration's rule reads it.
  */
-class ApiException(val status: Int, val code: String, message: String, val details: JSONObject, val retryAfterSeconds: Int? = null) : IOException(message) {
+class ApiException(
+    val status: Int, val code: String, message: String, val details: JSONObject, val retryAfterSeconds: Int? = null, val contentType: String? = null,
+) : IOException(message) {
     /**
      * The registration's own rule: the answer may come after the server opened the account, so the app
      * marks the username, and the next try looks for the account with a login. Only a 5xx other than
-     * SERVER_BUSY and a success the app can not read (UNEXPECTED_ANSWER) mark; no answer to a request that
-     * left the phone marks too (AppViewModel.register). A 4xx comes before the server changes anything, and SERVER_BUSY before it
-     * counts or writes anything (third review, B3). A 4xx without the API's envelope marks none, nor does a
-     * 3xx, which the API never sends to a registration (seventh checker, R1): such an answer most likely
-     * comes from a gateway or a captive portal that never passed the request on, and the mark would send a
-     * login with the typed password to the account that holds the username. The changes of the user's own
-     * account read the wider [outcomeUnknownAfter], which leaves the outcome open after a 3xx as well.
+     * SERVER_BUSY and 511, and a 2xx with a JSON Content-Type that the app can not read (UNEXPECTED_ANSWER),
+     * mark; no answer to a request that left the phone marks too (AppViewModel.register). A 4xx comes before
+     * the server changes anything, and SERVER_BUSY before it counts or writes anything (third review, B3). A 4xx
+     * without the API's envelope marks none, nor does a 3xx (seventh checker, R1), nor a 4xx or a 3xx whose
+     * envelope names UNEXPECTED_ANSWER (eighth checker, S1). The API answers a registration with JSON or a 5xx,
+     * never with a 3xx, RFC 6585's 511 Network Authentication Required or a 2xx of another Content-Type: such
+     * an answer most likely comes from a gateway or a captive portal that never passed the request on
+     * (eighth checker, S3), and the mark would send a login with the typed password to the account that holds
+     * the username. The changes of the user's own account read the wider [outcomeUnknownAfter], which leaves
+     * the outcome open after all of these answers. HTTP has no status of 600 or above and the API never sends
+     * one, so such a status marks nothing either (ninth checker).
      */
-    val leavesOutcomeUnknown: Boolean get() = (status >= 500 && code != "SERVER_BUSY") || code == "UNEXPECTED_ANSWER"
+    val leavesOutcomeUnknown: Boolean
+        get() = (status in 500..599 && status != 511 && code != "SERVER_BUSY") || (status in 200..299 && code == "UNEXPECTED_ANSWER" && namesJson(contentType))
 }
+
+/** Whether a Content-Type header names JSON, as the API's answers do: application/json, with any parameters. */
+private fun namesJson(contentType: String?): Boolean = contentType?.substringBefore(';')?.trim().equals("application/json", ignoreCase = true)
 
 /**
  * The request never left the phone: the app could not open a connection to the server's address (the
@@ -102,7 +113,9 @@ class ApiClient(
     /** Opens an account. [operatorCode] is the operator's one-time sign-up code; null sends none. */
     fun register(username: String, displayName: String, password: String, operatorCode: String?): SignedIn {
         val body = JSONObject().put("username", username).put("displayName", displayName).put("password", password).putOpt("operatorCode", operatorCode)
-        return readable { parseSignedIn(request("POST", "/auth/register", body.toString().toByteArray())) }
+        // The registration's rule reads the status and the Content-Type of a success the app can not read (ApiException.leavesOutcomeUnknown).
+        val received = Received()
+        return readable(received) { parseSignedIn(request("POST", "/auth/register", body.toString().toByteArray(), received = received)) }
     }
 
     /** Opens a session. [deviceToken] is the token this phone got at an earlier login of [username], if any (design 3.2). */
@@ -141,11 +154,20 @@ class ApiClient(
         return SignedIn(parseUser(json.getJSONObject("user")), session.getString("token"), session.getString("expiresAt"), json.optStringOrNull("deviceToken"))
     }
 
-    /** An answer that came but lacks what this call reads is a failed call, not a crash. */
-    private fun <T> readable(read: () -> T): T = try {
+    /**
+     * An answer that came but lacks what this call reads is a failed call, not a crash. A call that passes
+     * [received] gives the failure the status and the Content-Type of the answer it got.
+     */
+    private fun <T> readable(received: Received? = null, read: () -> T): T = try {
         read()
     } catch (error: org.json.JSONException) {
-        throw ApiException(200, "UNEXPECTED_ANSWER", "The answer is not the one this call expects", JSONObject())
+        throw ApiException(received?.status ?: 200, "UNEXPECTED_ANSWER", "The answer is not the one this call expects", JSONObject(), contentType = received?.contentType)
+    }
+
+    /** The status and the Content-Type of the 2xx answer a request got, filled by [request]. */
+    private class Received {
+        var status = 200
+        var contentType: String? = null
     }
 
     fun health(): Health {
@@ -407,6 +429,7 @@ class ApiClient(
         timeoutMs: Int = 60_000,
         headers: Map<String, String> = emptyMap(),
         expectedStatus: Int? = null,
+        received: Received? = null,
     ): JSONObject {
         // An address the phone can not even read (a build without a server address) sends nothing either.
         val connection = try {
@@ -455,12 +478,14 @@ class ApiClient(
             if (expectedStatus != null && status != expectedStatus) {
                 throw ApiException(status, "UNEXPECTED_ANSWER", "HTTP $status where $expectedStatus was expected", JSONObject())
             }
+            received?.status = status
+            received?.contentType = connection.contentType
             // An answer that is not JSON comes from something that is not this API. It is a failed
             // call like any other, not a crash.
             return if (text.isBlank()) JSONObject() else try {
                 JSONObject(text)
             } catch (error: org.json.JSONException) {
-                throw ApiException(status, "UNEXPECTED_ANSWER", "The answer is not JSON", JSONObject())
+                throw ApiException(status, "UNEXPECTED_ANSWER", "The answer is not JSON", JSONObject(), contentType = connection.contentType)
             }
         } finally {
             connection.disconnect()

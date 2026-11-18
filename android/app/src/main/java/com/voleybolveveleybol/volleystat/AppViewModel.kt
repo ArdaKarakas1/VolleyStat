@@ -228,10 +228,10 @@ enum class JobLoad { LOADING, READY, NO_JOB, NO_ANALYZER, VIDEO_MISSING, UNREACH
 
 enum class ReviewProblem { STALE, SAVE_FAILED, LOAD_FAILED }
 
-/** OUTDATED: the server answered, but not with a report this app can read. A server before 0.7 answers that way. */
+/** OUTDATED: an answer came, but not one this app can read as a report. A server before 0.7 answers that way, and so may something else at its address. */
 enum class ReportLoad { LOADING, READY, NONE, UNREACHABLE, OUTDATED }
 
-/** OUTDATED: the server answered, but not with a rally list this app can read. An older server answers that way. */
+/** OUTDATED: an answer came, but not one this app can read as a rally list. An older server answers that way, and so may something else at its address. */
 enum class RalliesLoad { LOADING, READY, UNREACHABLE, OUTDATED }
 
 /**
@@ -1108,7 +1108,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * The SHA-256 of each username whose registration went out and got no answer, or an answer that leaves
-     * the outcome unknown (a 5xx, or a success the app can not read), with the time of the mark: the server
+     * the outcome unknown (a 5xx, or a JSON success the app can not read), with the time of the mark: the server
      * may have opened that account all the same (third review, A1 and B3). A registration that never left
      * the phone gets no mark (fourth review, D2). registrations.bin keeps them sealed through a restart; a
      * phone that can not seal the file keeps them in memory until the app ends. A sign-in of that username,
@@ -1135,8 +1135,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val result = try {
                 api.register(name, displayName.trim(), password, code)
             } catch (error: ApiException) {
-                // A 5xx, or a success the app can not read, may come after the server opened the account, as a lost
-                // answer may (third review, B3): the mark makes the next try look for it. A 3xx or a 4xx marks nothing (R1).
+                // A 5xx, or a JSON success the app can not read, may come after the server opened the account, as a lost
+                // answer may (third review, B3): the mark makes the next try look for it. A 3xx, a 4xx, a 511 or a 2xx that
+                // is not JSON marks nothing (R1, S1, S3).
                 if (error.leavesOutcomeUnknown) {
                     markRegistration(name)
                     throw error

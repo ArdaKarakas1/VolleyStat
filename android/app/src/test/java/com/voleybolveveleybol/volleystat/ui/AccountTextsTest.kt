@@ -303,4 +303,25 @@ class AccountTextsTest {
             listOf(" - ", " – ", " — ", "--").forEach { assertFalse(offer, offer.contains(it)) }
         }
     }
+
+    /**
+     * The eighth checker's S2: an answer the app can not read may come from something other than the server (a 3xx, a 4xx
+     * without the API's envelope, a gateway's Bearer 401 to a request without a session, a 2xx HTML page, an empty 2xx). The
+     * app can not know who sent it, so no text names the server as its sender. Each text opens with the answer that came to
+     * the request. The rally list and the report fail the same way when a 2xx comes that the app can not read as the list or
+     * the report.
+     */
+    @Test fun noTextOfAnAnswerTheAppCouldNotReadNamesTheServerAsItsSender() {
+        listOf(R.string.account_unexpected, R.string.account_unexpected_change, R.string.account_unexpected_change_signed_in).forEach { id ->
+            val shown = string(id)
+            assertTrue(shown, shown.startsWith("Uygulama isteğe gelen yanıtı okuyamadı"))
+        }
+        assertTrue(string(R.string.rallies_outdated_server).startsWith("Uygulama isteğe gelen yanıtı ralli listesi olarak okuyamadı."))
+        assertTrue(string(R.string.report_outdated_server).startsWith("Uygulama isteğe gelen yanıtı rapor olarak okuyamadı."))
+        // No text of the app says that the server sent an answer the app could not read.
+        val claims = listOf("sunucunun yanıtını okuyamadı", "okuyabildiği biçimde vermedi")
+        val texts = R.string::class.java.fields.map { it.name to context.resources.getString(it.getInt(null)) }
+        assertTrue("the app's own texts are there", texts.size > 300)
+        texts.forEach { (name, shown) -> claims.forEach { assertFalse("$name: $shown", shown.contains(it, ignoreCase = true)) } }
+    }
 }
