@@ -1,7 +1,7 @@
 """Run the local development API: python -m app [--port 8000] [--analyzer demo].
 
-The server binds to the loopback interface only. It has no TLS and most routes do not ask for a
-session yet, so it must not be reachable from another machine. It writes no access log, so no
+The server binds to the loopback interface only. It has no TLS, so neither a session token nor a
+video may travel to it over a network, and it must not be reachable from another machine. It writes no access log, so no
 address or path of a request reaches the disk, and it ignores X-Forwarded-For.
 """
 import argparse

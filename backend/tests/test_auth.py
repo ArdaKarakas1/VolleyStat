@@ -486,10 +486,16 @@ def test_logout_closes_only_that_session(api):
     assert api.post("/v1/auth/logout", headers=bearer(first), json={}).status_code == 401
 
 
-def test_the_routes_of_matches_still_answer_without_a_session(api):
-    # Enforcement comes with its own slice (B3). Until then the app of version 0.7 keeps working.
-    created = api.post("/v1/matches", json={"homeTeamName": "A Takımı", "awayTeamName": "B Takımı"})
-    assert created.status_code == 201
+def test_the_routes_of_matches_need_a_session(api, storage):
+    # From server 0.9 on (B3) every route but health, register and login needs a session.
+    teams = {"homeTeamName": "A Takımı", "awayTeamName": "B Takımı"}
+    for headers in ({}, bearer("yok"), {"Authorization": "Basic eA=="}):
+        refused = api.post("/v1/matches", json=teams, headers=headers)
+        assert (refused.status_code, error(refused)["code"]) == (401, "AUTH_REQUIRED")
+        assert refused.headers["www-authenticate"] == "Bearer"
+    assert rows(storage, "SELECT COUNT(*) FROM matches") == [(0,)]
+    created = api.post("/v1/matches", json=teams, headers=bearer(token_of(register(api))))
+    assert created.status_code == 201 and created.json()["status"] == "PERSONAL"
 
 
 # --- the /v1/me routes --------------------------------------------------------------------------

@@ -16,10 +16,11 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from fastapi import APIRouter, Header
+from fastapi import APIRouter, Depends, Header
 from fastapi.responses import JSONResponse
 
-from . import media
+from . import access, media
+from .access import READ, REVIEW
 from .analyzers.base import AWAY, HOME, MOCK, MODEL, UNKNOWN, Analyzer, AnalyzerError, ProgressReporter, RallyProposal
 from .db import find_video, new_id, utc_now
 from .errors import fail
@@ -433,15 +434,20 @@ class JobWorker:
                 _close(db, run.job_id, NEEDS_REVIEW)
 
 
-def router(connect, analyzer: Analyzer | None, worker: JobWorker) -> APIRouter:
+def router(connect, analyzer: Analyzer | None, worker: JobWorker, current_user) -> APIRouter:
     api = APIRouter()
 
     @api.post("/v1/videos/{video_id}/analyses", responses={202: {"description": "A new job was queued"}})
     def request_analysis(
         video_id: str,
         idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", min_length=1, max_length=128),
+        caller=Depends(current_user),
     ):
         with connect(write=True) as db:
+            access.session_user(db, caller)
+            # Before VIDEO_NOT_READY (it names the video's status) and before the key is looked up.
+            # Keys are kept per video, so this check also covers every job a key can return.
+            access.require(db, caller, "video", video_id, REVIEW)
             video = find_video(db, video_id)
             if video["status"] != media.READY:
                 fail("VIDEO_NOT_READY", "Video did not pass media validation and can not be analysed", 409,
@@ -485,22 +491,26 @@ def router(connect, analyzer: Analyzer | None, worker: JobWorker) -> APIRouter:
         return JSONResponse(status_code=202, content=payload)
 
     @api.get("/v1/videos/{video_id}/analyses/latest")
-    def latest_analysis(video_id: str):
+    def latest_analysis(video_id: str, caller=Depends(current_user)):
         with connect() as db:
-            find_video(db, video_id)
+            access.require(db, caller, "video", video_id, READ)
             job = db.execute("SELECT * FROM analysis_jobs WHERE video_id=? ORDER BY rowid DESC LIMIT 1", (video_id,)).fetchone()
             if not job:
                 fail("ANALYSIS_NOT_FOUND", "This video has no analysis job", 404)
             return job_payload(db, job)
 
     @api.get("/v1/analyses/{job_id}")
-    def get_analysis(job_id: str):
+    def get_analysis(job_id: str, caller=Depends(current_user)):
         with connect() as db:
+            access.require(db, caller, "job", job_id, READ)
             return job_payload(db, find_job(db, job_id))
 
     @api.post("/v1/analyses/{job_id}/cancel")
-    def cancel_analysis(job_id: str):
+    def cancel_analysis(job_id: str, caller=Depends(current_user)):
         with connect(write=True) as db:
+            access.session_user(db, caller)
+            # Before JOB_FINISHED, which names the job's state.
+            access.require(db, caller, "job", job_id, REVIEW)
             job = find_job(db, job_id)
             if job["state"] not in ACTIVE_STATES:
                 # Once the run has ended there is nothing left to stop, and review decisions may exist.

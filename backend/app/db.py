@@ -29,14 +29,22 @@ CREATE TABLE IF NOT EXISTS matches (
   name TEXT, played_on TEXT, venue TEXT, kind TEXT NOT NULL DEFAULT 'TRAINING',
   -- The rule the sets of this match are counted with (report.MatchRules). The defaults are FIVB.
   sets_to_win INTEGER NOT NULL DEFAULT 3, set_target INTEGER NOT NULL DEFAULT 25,
-  deciding_set_target INTEGER NOT NULL DEFAULT 15
+  deciding_set_target INTEGER NOT NULL DEFAULT 15,
+  -- PERSONAL for a match an account opened or LEGACY for a row stored before accounts
+  status TEXT NOT NULL DEFAULT 'LEGACY',
+  -- The account that owns a PERSONAL match. No foreign key: account deletion removes the matches itself
+  owner_user_id TEXT
 );
 CREATE TABLE IF NOT EXISTS uploads (
   id TEXT PRIMARY KEY, match_id TEXT NOT NULL REFERENCES matches(id),
   file_name TEXT NOT NULL, mime_type TEXT NOT NULL, expected_size INTEGER NOT NULL,
   next_offset INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'UPLOADING',
   video_id TEXT UNIQUE, created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  client_sha256 TEXT, finalize_started_at REAL
+  client_sha256 TEXT, finalize_started_at REAL,
+  -- Seconds since 1970 of the last initiate or stored chunk. The sweep aborts an upload idle for 24 h
+  touched_at REAL,
+  -- The account that started the upload or NULL once that account is deleted
+  started_by TEXT
 );
 CREATE TABLE IF NOT EXISTS videos (
   id TEXT PRIMARY KEY, match_id TEXT NOT NULL REFERENCES matches(id),
@@ -222,14 +230,27 @@ ADDED_COLUMNS = (
                  ("kind", "TEXT NOT NULL DEFAULT 'TRAINING'"),
                  # Version 0.5 counted every match with the FIVB rule, so the defaults keep its counts.
                  ("sets_to_win", "INTEGER NOT NULL DEFAULT 3"), ("set_target", "INTEGER NOT NULL DEFAULT 25"),
-                 ("deciding_set_target", "INTEGER NOT NULL DEFAULT 15"))),
-    ("uploads", (("client_sha256", "TEXT"), ("finalize_started_at", "REAL"))),
+                 ("deciding_set_target", "INTEGER NOT NULL DEFAULT 15"),
+                 # Every row stored before accounts becomes LEGACY: it belongs to no account (ADR-0119, B3).
+                 ("status", "TEXT NOT NULL DEFAULT 'LEGACY'"), ("owner_user_id", "TEXT"))),
+    ("uploads", (("client_sha256", "TEXT"), ("finalize_started_at", "REAL"), ("touched_at", "REAL"),
+                 ("started_by", "TEXT"))),
     ("videos", (("reject_code", "TEXT"), ("media_json", "TEXT"), ("warnings_json", "TEXT"),
                 ("probe_version", "TEXT"), ("storage_key", "TEXT"))),
     ("analysis_jobs", (("rally_list_version", "INTEGER NOT NULL DEFAULT 0"), ("list_confirmed_version", "INTEGER"),
                        ("list_confirmed_at", "TEXT"))),
     ("rallies", (("proposal_id", "TEXT"),)),
     ("review_decisions", (("correction_id", "TEXT"),)),
+)
+
+# Indexes on added columns. They can not go into SCHEMA: migrate() runs SCHEMA before it adds the
+# columns, and on older storage an index on a column that does not exist yet stops the start-up. These
+# are the first indexes on added columns; a rebuild test drops them before it drops their columns.
+ADDED_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS matches_owner ON matches(owner_user_id) WHERE owner_user_id IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS matches_status ON matches(status)",
+    "CREATE INDEX IF NOT EXISTS uploads_touched ON uploads(touched_at) WHERE status = 'UPLOADING'",
+    "CREATE INDEX IF NOT EXISTS uploads_started_by ON uploads(started_by) WHERE started_by IS NOT NULL",
 )
 
 
@@ -259,6 +280,8 @@ def migrate(db_path: Path) -> None:
             for column, kind in columns:
                 if column not in present:
                     setup.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
+        for statement in ADDED_INDEXES:
+            setup.execute(statement)
         if any(row[1] == "idempotency_key" for row in setup.execute("PRAGMA table_info(analysis_jobs)")):
             # Earlier storage kept the key in a column of the job that the request created.
             setup.execute(

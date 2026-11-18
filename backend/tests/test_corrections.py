@@ -10,8 +10,6 @@ import sqlite3
 import pytest
 
 from app.analyzers.base import MOCK, MODEL, AnalyzerInfo, RallyProposal
-from app.main import create_app
-from fastapi.testclient import TestClient
 from tests.helpers import ScriptedAnalyzer, card_of, cards, decide, one_match, only_sets, proposals, request_job, rows, run_pending, serve, without_statistics
 from tests.test_media import store
 
@@ -796,7 +794,7 @@ def test_storage_written_by_version_0_4_gets_its_new_columns_and_its_proposals_a
             "ALTER TABLE analysis_jobs DROP COLUMN list_confirmed_at;"
         )
 
-    with TestClient(create_app(storage, analyzer="none")) as client:
+    with serve(storage, "none") as client:
         found = listing(client, job_id)
         assert [(item["startMs"], item["endMs"], item["origin"]) for item in found["rallies"]] == [(start, end, "ANALYZER") for start, end in SPANS]
         assert (found["rallyListVersion"], found["listConfirmed"], found["rallies"][0]["winner"]) == (0, False, "HOME")
@@ -806,7 +804,7 @@ def test_storage_written_by_version_0_4_gets_its_new_columns_and_its_proposals_a
     assert [(row["start_ms"], row["end_ms"]) for row in rows(storage, "SELECT * FROM rally_proposals ORDER BY start_ms")] == list(SPANS)
 
     # The start-up after that one finds nothing left to do. A rally the user made is not turned into a proposal.
-    with TestClient(create_app(storage, analyzer="none")) as client:
+    with serve(storage, "none") as client:
         assert len(rows(storage, "SELECT 1 FROM rally_proposals")) == 4
         assert [item["origin"] for item in listing(client, job_id)["rallies"]] == ["ANALYZER", "USER", "ANALYZER", "ANALYZER", "ANALYZER"]
         counts = report_of(client, job_id)["rallies"]

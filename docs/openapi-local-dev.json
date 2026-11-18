@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "VolleyStat Local Development API",
-    "description": "LOCAL TEST DATA ONLY. Accounts exist, but the routes of matches do not ask for a session yet. No trained AI. Never expose to the internet.",
-    "version": "0.8.0"
+    "description": "LOCAL TEST DATA ONLY. Every route except health, register and login needs a session. No trained AI. Never expose to the internet.",
+    "version": "0.9.0"
   },
   "paths": {
     "/v1/health": {
@@ -55,14 +55,24 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/v1/matches/{match_id}": {
       "put": {
         "summary": "Put Match",
-        "description": "Create the match under an id the client chose, or return the match that already has it.\n\nA client that picks the id before its first request can address the match whatever happens\nto the answer: it repeats this call, or deletes the match, with the id it already holds.\nWith POST the id exists only in the answer, and a lost answer leaves a match nobody can\ndelete. A repeat never changes what the first request stored.",
+        "description": "Create the match under an id the client chose, or return the match that already has it.\n\nA client that picks the id before its first request can address the match whatever happens\nto the answer: it repeats this call, or deletes the match, with the id it already holds.\nWith POST the id exists only in the answer, and a lost answer leaves a match nobody can\ndelete. A repeat never changes what the first request stored, and only an account that may\nread the match gets it back; any other account gets 403 NOT_A_MEMBER.",
         "operationId": "put_match_v1_matches__match_id__put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "match_id",
@@ -111,6 +121,11 @@
       "get": {
         "summary": "Get Match",
         "operationId": "get_match_v1_matches__match_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "match_id",
@@ -145,8 +160,13 @@
       },
       "delete": {
         "summary": "Delete Match",
-        "description": "Remove a match and everything the server holds for it: its record, uploads, videos, analyses and bytes.\n\nDeleting a video leaves the match record and the upload rows behind. This is the call a\nclient makes when the user removes the match itself, so that nothing of it stays.",
+        "description": "Remove a match and everything the server holds for it: its record, uploads, videos, analyses and bytes.\n\nDeleting a video leaves the match record and the upload rows behind. This is the call a\nclient makes when the user removes the match itself, so that nothing of it stays. A match\nthat belongs to no account (LEGACY) answers 403; the operator deletes it (`legacy --delete`).",
         "operationId": "delete_match_v1_matches__match_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "match_id",
@@ -180,6 +200,11 @@
         "summary": "Put Match Rules",
         "description": "Set the rule the server counts the sets of this match with.\n\nA rule that differs from the stored one moves the rally list of every analysis of the match\nthat has rallies one version on, in the same transaction. The user confirmed those lists\nwhile looking at set scores of the old rule, so each confirmation lapses, and a confirmation\nor a correction still on its way with the old version is refused as stale. Answers, cards and\ncorrections stay as they are.\n\nThe rule the match already has changes nothing, so a repeated request lands once. Any other\nrequest must name the rule the match has now (expectedRules). A request that names another rule\nwas sent before a later change, and it is refused as stale instead of undoing that change.\nOnly the rules are compared: a late request lands when the match is back at the rule it names.",
         "operationId": "put_match_rules_v1_matches__match_id__rules_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "match_id",
@@ -226,7 +251,13 @@
     "/v1/matches/{match_id}/uploads": {
       "post": {
         "summary": "Initiate Upload",
+        "description": "Start an upload of a video of the match. The quotas, the server-wide pool and the free-disk\nfloor are checked in the transaction that inserts the row (docs/API_V1.md, section 10).",
         "operationId": "initiate_upload_v1_matches__match_id__uploads_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "match_id",
@@ -274,6 +305,11 @@
       "get": {
         "summary": "Get Upload",
         "operationId": "get_upload_v1_uploads__upload_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "upload_id",
@@ -310,6 +346,11 @@
         "summary": "Abort Upload",
         "description": "Give up an unfinished upload and free its bytes.",
         "operationId": "abort_upload_v1_uploads__upload_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "upload_id",
@@ -342,6 +383,11 @@
       "put": {
         "summary": "Upload Chunk",
         "operationId": "upload_chunk_v1_uploads__upload_id__chunks_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "upload_id",
@@ -388,6 +434,11 @@
       "post": {
         "summary": "Complete Upload",
         "operationId": "complete_upload_v1_uploads__upload_id__complete_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "upload_id",
@@ -425,6 +476,11 @@
       "get": {
         "summary": "Video Status",
         "operationId": "video_status_v1_videos__video_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "video_id",
@@ -460,6 +516,11 @@
       "delete": {
         "summary": "Delete Video",
         "operationId": "delete_video_v1_videos__video_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "video_id",
@@ -492,6 +553,11 @@
       "get": {
         "summary": "Video Quality",
         "operationId": "video_quality_v1_videos__video_id__quality_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "video_id",
@@ -528,6 +594,11 @@
         "summary": "Recheck Quality",
         "description": "Run the file check again for a video that could not be validated earlier.",
         "operationId": "recheck_quality_v1_videos__video_id__quality_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "video_id",
@@ -564,8 +635,13 @@
     "/v1/videos/{video_id}/content": {
       "get": {
         "summary": "Video Content",
-        "description": "Evidence playback: the client plays the clip of a review card from these bytes.",
+        "description": "Evidence playback: the client plays the clip of a review card from these bytes.\n\nThe player sends the session in the Authorization header too; no address carries a token.",
         "operationId": "video_content_v1_videos__video_id__content_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "video_id",
@@ -639,6 +715,11 @@
       "post": {
         "summary": "Request Analysis",
         "operationId": "request_analysis_v1_videos__video_id__analyses_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "video_id",
@@ -697,6 +778,11 @@
       "get": {
         "summary": "Latest Analysis",
         "operationId": "latest_analysis_v1_videos__video_id__analyses_latest_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "video_id",
@@ -734,6 +820,11 @@
       "get": {
         "summary": "Get Analysis",
         "operationId": "get_analysis_v1_analyses__job_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "job_id",
@@ -771,6 +862,11 @@
       "post": {
         "summary": "Cancel Analysis",
         "operationId": "cancel_analysis_v1_analyses__job_id__cancel_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "job_id",
@@ -808,6 +904,11 @@
       "get": {
         "summary": "List Rallies",
         "operationId": "list_rallies_v1_analyses__job_id__rallies_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "job_id",
@@ -844,6 +945,11 @@
         "summary": "Add Rally",
         "description": "Add a rally that the analyzer missed.",
         "operationId": "add_rally_v1_analyses__job_id__rallies_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "job_id",
@@ -891,6 +997,11 @@
       "get": {
         "summary": "List Cards",
         "operationId": "list_cards_v1_analyses__job_id__review_cards_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "job_id",
@@ -943,6 +1054,11 @@
       "post": {
         "summary": "Decide",
         "operationId": "decide_v1_review_cards__card_id__decisions_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "card_id",
@@ -990,6 +1106,11 @@
       "post": {
         "summary": "Reopen",
         "operationId": "reopen_v1_review_cards__card_id__reopen_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "card_id",
@@ -1037,6 +1158,11 @@
       "get": {
         "summary": "Match Report",
         "operationId": "match_report_v1_matches__match_id__report_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "match_id",
@@ -1075,6 +1201,11 @@
         "summary": "Move Rally",
         "description": "Set the start and the end of a rally. A changed end asks for the winner again.",
         "operationId": "move_rally_v1_rallies__rally_id__move_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "rally_id",
@@ -1123,6 +1254,11 @@
         "summary": "Split Rally",
         "description": "Cut a rally that holds two. The later part is the rally whose end the user may already have judged.",
         "operationId": "split_rally_v1_rallies__rally_id__split_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "rally_id",
@@ -1171,6 +1307,11 @@
         "summary": "Merge Previous",
         "description": "Join a rally with the one before it. The earlier one was no rally of its own, so its answers go.",
         "operationId": "merge_previous_v1_rallies__rally_id__merge_previous_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "rally_id",
@@ -1219,6 +1360,11 @@
         "summary": "Confirm List",
         "description": "Record that the user declares the list complete: it holds every rally of the video.",
         "operationId": "confirm_list_v1_analyses__job_id__rally_list_confirm_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "job_id",
@@ -1459,7 +1605,7 @@
     "/v1/me/delete": {
       "post": {
         "summary": "Delete Account",
-        "description": "Delete the account: the user row, its sessions and its phones. Nothing of it stays in the file.",
+        "description": "Delete the account with its personal matches: their uploads, videos, analyses and bytes,\nthen the user row, its sessions and its phones. Nothing of it stays in the file.\n\nMatches that belong to no account (LEGACY) stay; the operator deletes them.",
         "operationId": "delete_account_v1_me_delete_post",
         "requestBody": {
           "content": {

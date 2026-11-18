@@ -6,10 +6,8 @@ and the scores are made up by the tests and describe no real match.
 import sqlite3
 
 import pytest
-from fastapi.testclient import TestClient
 
 from app.analyzers.base import MOCK, AnalyzerInfo
-from app.main import create_app
 from tests.helpers import ScriptedAnalyzer, cards, decide, one_match, only_sets, proposals, request_job, rows, run_pending, serve, tiny_clip, without_statistics
 from tests.test_api import create_match
 from tests.test_media import store
@@ -432,7 +430,7 @@ def test_a_match_stored_by_version_0_5_reads_the_fivb_rule_and_keeps_its_report(
     for _ in range(2):
         # The start-up adds the rule as FIVB, the way version 0.5 counted. Nothing moves and the
         # confirmation stands. A second start-up finds nothing left to do.
-        with TestClient(create_app(storage, analyzer="none")) as client:
+        with serve(storage, "none") as client:
             after = (client.get(f"/v1/matches/{match_id}").json(), listing(client, job_id), report_of(client, match_id))
             assert after == before
             assert after[0]["rules"] == payload(FIVB) and after[1]["listConfirmed"] is True

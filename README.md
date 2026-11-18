@@ -6,7 +6,7 @@ Hedef: Kullanıcı maçı telefonla kaydeder ya da galeriden seçer. Sunucu vide
 
 Bu depo yalnızca Android uygulamasını ve onun arka ucunu içerir. Web sitesi ayrı bir depodadır (`voleybolveveleybol`) ve bu projeyle kod paylaşmaz.
 
-## Bugünkü durum (uygulama 0.8.0, sunucu 0.8.0)
+## Bugünkü durum (uygulama 0.8.0, sunucu 0.9.0)
 
 | Parça | Durum |
 | --- | --- |
@@ -19,7 +19,7 @@ Bu depo yalnızca Android uygulamasını ve onun arka ucunu içerir. Web sitesi 
 | Maç kuralı | Var, testli. Kullanıcı maçı açarken kuralı seçer ve FIVB kuralı seçili gelir. Sunucu set skorlarını bu kurala göre sayar. Kullanıcı kuralı ralli listesinden de değiştirir. |
 | Ralli baseline'ı (`ml/`, hareket enerjisi) | Var. **Kimse gerçek maçta doğruluğunu ölçmedi.** |
 | Eğitilmiş yapay zekâ modeli | **Yok.** Uygulama bugün kendiliğinden istatistik çıkarmaz. Kullanıcı her rallinin kazananını kendisi seçer. |
-| Hesaplar (uygulama ve sunucu 0.8) | Var, testli: kayıt, giriş, çıkış, görünen ad, şifre değişikliği ve hesap silme. Uygulama giriş yapmamış kişiye yalnız karşılama, başlangıç, giriş ve kayıt ekranlarını gösterir. Telefon her hesabın maçlarını, kadrolarını ve kayıtlarını ayrı klasörde tutar ve oturumu telefonun anahtar deposundaki bir anahtarla şifreler. Kayıt için operatörün kayıt kodu gerekir. Maç uçları oturum istemez ve sunucu maçları henüz hesaplara bağlamaz. Kimse giriş ekranlarını gerçek telefonda denemedi. |
+| Hesaplar (uygulama 0.8, sunucu 0.9) | Var, testli: kayıt, giriş, çıkış, görünen ad, şifre değişikliği ve hesap silme. Uygulama giriş yapmamış kişiye yalnız karşılama, başlangıç, giriş ve kayıt ekranlarını gösterir. Telefon her hesabın maçlarını, kadrolarını ve kayıtlarını ayrı klasörde tutar ve oturumu telefonun anahtar deposundaki bir anahtarla şifreler. Kayıt için operatörün kayıt kodu gerekir. Sunucu sağlık, kayıt ve giriş dışındaki her uçta oturum ister ve her maçı yalnız onu açan hesaba gösterir. Sunucu bir hesabın kişisel videolarına 8 GiB, bütün hesaplarınkine 40 GiB ayırır ve bir gün boyunca parça almayan yüklemeyi siler. Kimse giriş ekranlarını gerçek telefonda denemedi. |
 | HTTPS, bulut | Yok. Sunucu yalnızca geliştirme bilgisayarında çalışır. |
 
 Özellik bazında tam döküm: [docs/GAP_ANALYSIS.md](docs/GAP_ANALYSIS.md). Yapay zekâ planı: [docs/AI_PLAN.md](docs/AI_PLAN.md). Mimari kararlar: [docs/ADR.md](docs/ADR.md).
@@ -38,7 +38,11 @@ python -m app      # 127.0.0.1:8000, yalnız bu bilgisayardan erişilir
 pytest -q          # başka bir terminalde
 ```
 
-Sunucuda TLS yoktur ve maç uçları henüz oturum istemez. İnternete açmayın. Kayıt için operatör kodu `python -m app.admin signup-code` ile çıkar. Yalnızca sentetik ya da kullanım izni açık test videoları yükleyin.
+Sunucuda TLS yoktur. İnternete açmayın. Kayıt için operatör kodu `python -m app.admin signup-code` ile çıkar. Yalnızca sentetik ya da kullanım izni açık test videoları yükleyin.
+
+Sunucu diskte en az 20 GiB boş yer bırakır. Bu sınırın altına inecek bir yüklemeye sunucu `507 STORAGE_FULL` döner. Diskiniz küçükse sınırı GiB olarak değiştirin: `VOLLEYSTAT_DISK_FLOOR_GIB=5 python -m app`.
+
+Sunucuyu 0.8'den 0.9'a yükselttiyseniz önceki maçların hiçbiri bir hesaba bağlı değildir. Uygulama 0.8'in giriş yapmış bir hesapla yüklediği maçlar da buna dahildir. Uygulama bu maçlara erişemez. Önce `python -m app.admin legacy --list` ile maçları listeleyin. Sonra `python -m app.admin legacy --assign <kullanıcı adı>` ile maçları bir hesaba bağlayın ya da `python -m app.admin legacy --delete` ile silin. İki komut da `--match <maç kimliği>` ile yalnız adı geçen maçlara dokunur.
 
 Sunucu varsayılan olarak analizör olmadan başlar ve analiz isteğine `503 MODEL_NOT_CONFIGURED` yanıtını verir. Analiz, inceleme ve rapor ekranlarını denemek için sunucuyu demo analizörle başlatın:
 
@@ -74,7 +78,7 @@ cd android
 
 # Uygulamanın istemcisini ve ekranlarını çalışan sunucuya karşı sürer.
 # Sunucu 127.0.0.1:8000 adresinde demo analizörle ve açık kayıt kapısıyla çalışmalıdır:
-# VOLLEYSTAT_SIGNUP=open python -m app --analyzer demo. Testler kendi e2e_ hesaplarını açar ve siler.
+# VOLLEYSTAT_SIGNUP=open VOLLEYSTAT_DISK_FLOOR_GIB=1 python -m app --analyzer demo. Testler kendi e2e_ hesaplarını açar ve siler.
 VOLLEYSTAT_E2E_URL=http://127.0.0.1:8000/v1 VOLLEYSTAT_E2E_VIDEO=/yol/ornek.mp4 \
   ./gradlew :app:testDebugUnitTest --tests '*E2eTest*'
 
@@ -109,7 +113,7 @@ VolleyStat kapalı bir ticari ürünün kaynağıdır. `LICENSE` dosyası bütü
 
 - [docs/GAP_ANALYSIS.md](docs/GAP_ANALYSIS.md): Gereksinim ve kod farkı, sıradaki işler
 - [docs/AI_PLAN.md](docs/AI_PLAN.md): Maçı analiz edecek yapay zekâ için plan
-- [docs/API_V1.md](docs/API_V1.md): Analiz, doğrulama, ralli düzeltme, maç kuralı, rapor ve hesap sözleşmesi (API 0.8)
+- [docs/API_V1.md](docs/API_V1.md): Analiz, doğrulama, ralli düzeltme, maç kuralı, rapor, hesap, erişim ve depolama sözleşmesi (API 0.9)
 - [docs/API.md](docs/API.md): Yükleme ve dosya doğrulama uçları
 - [docs/UI_V1_PLAN.md](docs/UI_V1_PLAN.md): UI Tasarım V1 uygulama planı
 - [docs/design.md](docs/design.md): Tasarım sistemi

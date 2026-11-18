@@ -5,8 +5,8 @@ import uuid
 
 import pytest
 
-from app.main import create_app
-from fastapi.testclient import TestClient
+from app import admin
+from tests.helpers import OWNER, serve
 
 TEAMS = {"homeTeamName": "A Takımı", "awayTeamName": "B Takımı"}
 FIVB = {"setsToWin": 3, "setTarget": 25, "decidingSetTarget": 15, "winBy": 2, "decidingSetNumber": 5}
@@ -29,7 +29,7 @@ def test_metadata_is_stored_trimmed_and_read_back(client):
     assert body == {
         "id": body["id"], "homeTeamName": "A Takımı", "awayTeamName": "B Takımı",
         "name": "Salı antrenman maçı", "playedOn": "2026-11-12", "venue": "Okul salonu", "kind": "OFFICIAL",
-        "rules": FIVB, "status": "DRAFT",
+        "rules": FIVB, "status": "PERSONAL",
     }
     assert client.get(f"/v1/matches/{body['id']}").json() == body
 
@@ -69,8 +69,13 @@ def test_a_match_stored_by_version_0_3_gets_the_new_fields(storage):
         old.execute("CREATE TABLE matches (id TEXT PRIMARY KEY, home_team TEXT NOT NULL, away_team TEXT NOT NULL,"
                     " created_at TEXT NOT NULL DEFAULT (datetime('now')))")
         old.execute("INSERT INTO matches(id, home_team, away_team) VALUES('m1', 'A Takımı', 'B Takımı')")
-    with TestClient(create_app(storage)) as client:
+    with serve(storage, None) as client:
+        # Stored before accounts, the match belongs to no account until the operator gives it to one.
+        refused = client.get("/v1/matches/m1")
+        assert (refused.status_code, refused.json()["error"]["code"]) == (403, "NOT_A_MEMBER")
+        assert admin.main(["--storage", str(storage), "legacy", "--assign", OWNER]) == 0
         body = client.get("/v1/matches/m1").json()
+        assert body["status"] == "PERSONAL"
         assert (body["name"], body["playedOn"], body["venue"], body["kind"]) == (None, None, None, "TRAINING")
         assert body["rules"] == FIVB
         assert client.post("/v1/matches", json={**TEAMS, "kind": "OFFICIAL"}).json()["kind"] == "OFFICIAL"

@@ -45,6 +45,10 @@ Uygulama kamera kaydı için CameraX, klip oynatma için Media3 kullanır. Uygul
 | Dosya | Görev |
 |---|---|
 | `main.py` | FastAPI uygulaması, maç ve yükleme uçları, hata zarfı |
+| `access.py` | Erişim: her nesneyi maçına çözer, maçın sahibini denetler (`404` ve `403 NOT_A_MEMBER`), yazma işleminde oturumu yeniden okur |
+| `quotas.py` | Kişisel kota, sunucunun kişisel video havuzu ve boş disk sınırı (`VOLLEYSTAT_DISK_FLOOR_GIB`) |
+| `sweep.py` | Dakikalık tarama: bir gün boyunca parça almayan yüklemeyi ve bir gün önce başlayıp bitmeyen doğrulamayı kapatır |
+| `deletion.py` | Yüklemelerin ve videoların dosya yolları, bir maçın satırlarını ve dosyalarını silen ortak kod |
 | `media.py` | ffprobe ile dosya doğrulaması. Sunucu kapsayıcıya, video akışına ve dosyanın sonunun okunabilirliğine bakar. Sunucu görüntünün içeriğini ölçmez. |
 | `db.py` | SQLite şeması ve bağlantı |
 | `jobs.py` | Analiz işi, işçi iş parçacığı, durum makinesi, iptal ve kurtarma |
@@ -53,8 +57,8 @@ Uygulama kamera kaydı için CameraX, klip oynatma için Media3 kullanır. Uygul
 | `corrections.py` | Ralli listesinin düzeltmeleri (ekleme, taşıma, bölme, birleştirme) ve liste onayı |
 | `report.py` | Kararlardan rapor üreten saf fonksiyon |
 | `content.py` | Videoyu `Range` isteğiyle sunma |
-| `accounts.py` | Hesaplar: kayıt, giriş, oturum, şifre özeti havuzu, deneme sınırı, `/v1/me` uçları |
-| `admin.py` | Operatör komutları: kayıt kodu ve geçici şifre (`python -m app.admin`) |
+| `accounts.py` | Hesaplar: kayıt, giriş, oturum (`current_user`), şifre özeti havuzu, deneme sınırı, `/v1/me` uçları, hesap silme |
+| `admin.py` | Operatör komutları: kayıt kodu, geçici şifre ve hiçbir hesaba bağlı olmayan maçlar (`python -m app.admin legacy`) |
 | `wordlists/` | Yaygın şifre listesi ve lisansı |
 
 Sunucu yalnız geliştirme bilgisayarında çalışır. Sunucuda hesaplar var, ama maç uçları henüz oturum istemez ve TLS yoktur. Sunucu `127.0.0.1` adresini dinler.

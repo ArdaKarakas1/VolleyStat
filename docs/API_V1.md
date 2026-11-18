@@ -1,4 +1,4 @@
-# Analiz, inceleme, rapor ve hesap sözleşmesi (API 0.8)
+# Analiz, inceleme, rapor ve hesap sözleşmesi (API 0.9)
 
 Bu belge arka uç, Android istemcisi ve analiz modülleri arasındaki tek sözleşmedir. Bir taraf bu belgeyi değiştirmeden davranışını değiştirmez. Kök: `/v1`. Yükleme uçları [API.md](API.md) içindedir ve aynen geçerlidir.
 
@@ -13,6 +13,7 @@ Değişmez kurallar:
 - Kullanıcının düzeltmeleri ve düzelttiği liste denetim kaydıdır. Bu kayıtlar altın etiket değildir ve eğitim verisi değildir. Ekip bu kayıtları ayrı izin ve ikinci etiketçi kontrolü olmadan hiçbir model ölçümüne sokmaz. Sunucu bu kayıtları dışa aktaran bir uç sunmaz.
 - `mock: true` taşıyan iş gerçek analiz değildir. İstemci bu işi her ekranda DEMO olarak işaretler.
 - Sunucu kişinin kendisi için seçtiği kullanıcı adını ve görünen adı tutar (bölüm 10). Rapor oyuncuyu taraf ve forma numarasıyla anar. Telefon kadrosundaki adlar telefonda kalır.
+- Sunucu her maçı tek bir hesaba bağlar ve maçı yalnız o hesaba gösterir (bölüm 10, Erişim).
 
 ## 1. Maç
 
@@ -24,6 +25,8 @@ Değişmez kurallar:
 ```
 
 `homeTeamName` ve `awayTeamName` zorunludur. `name` (en çok 80), `playedOn` (`YYYY-AA-GG`), `venue` (en çok 80) isteğe bağlıdır. `kind` `TRAINING` ya da `OFFICIAL` olur, varsayılan `TRAINING`. `kind` yalnızca etikettir; sunucu resmî maç iddiası üretmez. `GET /v1/matches/{id}` aynı alanları döner.
+
+`POST /v1/matches` ve yeni bir kimlikle gelen `PUT /v1/matches/{id}` isteği gönderen hesabın kişisel maçını açar. Yanıttaki `status` alanı `PERSONAL` olur. Sunucu maçı yalnız o hesaba gösterir (bölüm 10, Erişim).
 
 `rules` da isteğe bağlıdır. Bu alan, sunucunun maçın setlerini hangi kuralla sayacağını söyler (ADR-0115):
 
@@ -38,6 +41,7 @@ Değişmez kurallar:
 - Sunucu maç isteğinin bilinmeyen alanını da `422 VALIDATION_ERROR` ile reddeder. Kural `rules` nesnesinin dışında ya da başka bir adla gelirse sunucu onu sessizce düşürmez.
 - Alan yoksa ya da `null` ise sunucu FIVB kuralını yazar: `{"setsToWin": 3, "setTarget": 25, "decidingSetTarget": 15}`. Sunucu 0.6 sürümünden önce açılan her maçı da bu kuralla sayar.
 - `PUT /v1/matches/{id}` maçı yalnız ilk istekte yazar. Kimliği aynı olan sonraki istek başka bir kural taşısa bile sunucu ilk isteğin kuralını korur.
+- Kimliği var olan bir maça gelen `PUT` isteğine sunucu maçın sahibine `200` ile maçı döner ve hiçbir şeyi değiştirmez. Başka bir hesap `403 NOT_A_MEMBER` alır. Sunucu hiçbir hesaba bağlı olmayan bir maçta (`LEGACY`) da aynı yanıtı verir.
 
 Yanıt kuralı iki alanla daha verir: `{"setsToWin": 2, "setTarget": 25, "decidingSetTarget": 15, "winBy": 2, "decidingSetNumber": 3}`. Her set iki farkla biter. Sunucu bu nesneyi maçta, ralli listesinde (bölüm 4) ve raporda (bölüm 7) aynı biçimde verir.
 
@@ -55,7 +59,7 @@ Gövde kural nesnesidir ve istemcinin sunucudan son okuduğu kuralı da taşır 
 - Maçın kuralı `expectedRules` ile aynı değilse sunucu `409 MATCH_RULES_STALE` döner, maçın şimdiki kuralını `details.currentRules` alanında verir ve hiçbir şey yazmaz. İstemcinin beklemekten vazgeçtiği bir istek sonradan gelirse sunucu böylece kullanıcının başka bir kurala yaptığı sonraki değişikliği geri almaz. Sunucu yalnız kuralları karşılaştırır: Kural sonradan değişip isteğin `expectedRules` değerine geri döndüyse sunucu geç gelen isteği de uygular.
 - `expectedRules` zorunludur ve kural nesnesinin kurallarına uyar. Sunucu eksik ya da geçersiz `expectedRules` alanını `422 VALIDATION_ERROR` ile reddeder.
 - `expectedRules` yalnız üç giriş alanını taşır. İstemci, sunucunun yanıtlarda verdiği kural nesnesindeki `winBy` ve `decidingSetNumber` alanlarını geri göndermez.
-- Sunucu kuralı işin durumuna ve liste onayına bakmadan kabul eder. Maç yoksa sunucu `404 MATCH_NOT_FOUND` döner ve hiçbir şey yazmaz.
+- Sunucu kuralı işin durumuna ve liste onayına bakmadan kabul eder. Maç yoksa sunucu `404 MATCH_NOT_FOUND` döner ve hiçbir şey yazmaz. Maç başka bir hesabınsa sunucu `403 NOT_A_MEMBER` döner. Sunucu bu denetimi kural karşılaştırmasından önce yapar, bu yüzden başka bir hesap `MATCH_RULES_STALE` yanıtından maçın kuralını öğrenemez.
 
 ## 2. Analizör
 
@@ -177,6 +181,7 @@ Bir videonun aynı anda tek süren işi olur. `Idempotency-Key` başlığı iste
 - `200` → `{"decisionId", "card": Card, "job": Job, "reportRevision": 4}`
 - `409 REVIEW_STALE_VERSION` (`details.currentVersion`).
 - Aynı `idempotencyKey` aynı kart, aynı seçim ve aynı `expectedVersion` ile gelirse sunucu saklı yanıtı döner ve ikinci kayıt oluşturmaz. Aynı anahtar başka bir kart, seçim ya da `expectedVersion` ile gelirse sunucu `409 IDEMPOTENCY_KEY_REUSED` döner ve hiçbir şeyi değiştirmez. İstemci her karar için yeni bir anahtar üretir.
+- Yinelenen istekte sunucu önce anahtarla saklı kararı bulur, sonra kararın işinden maçı bulur ve erişimi denetler. Sunucu saklı yanıtı ancak bu denetimden sonra döner. Bir anahtar sunucunun bütününde tek bir karar isteğini adlandırır. Anahtarı başka bir hesap kullandıysa sunucu `403 NOT_A_MEMBER` döner ve saklı yanıtı göstermez. İstek kişinin kendi kartını adlandırdığında da yanıt aynıdır. Anahtar yoksa ya da sunucu anahtarı ilk kez görüyorsa sunucu erişimi kartın sürümünden ve seçimden önce denetler.
 - `422 INVALID_SELECTION`: Seçim kartın `options` listesinde yok.
 - Yanıtlanmış karta yeni karar verilebilir (düzeltme). Kazanan değişirse sunucu o rallinin `DETAIL` kartlarını ve yanıtlarını kaldırır.
 - Kart zaten bu yanıtı taşıyorsa ve `expectedVersion` güncelse sunucu `200` döner, hiçbir şey yazmaz ve hiçbir sürümü artırmaz. `decisionId` `null` gelir. Kullanıcının seçili yanıta yeniden dokunması böylece liste onayını düşürmez.
@@ -240,7 +245,7 @@ Bir videonun aynı anda tek süren işi olur. `Idempotency-Key` başlığı iste
 
 ## 8. Hata kodları
 
-`VIDEO_NOT_READY`, `VIDEO_FILE_MISSING`, `MODEL_NOT_CONFIGURED`, `ANALYSIS_NOT_FOUND`, `JOB_FINISHED`, `CARD_NOT_FOUND`, `REVIEW_STALE_VERSION`, `IDEMPOTENCY_KEY_REUSED`, `INVALID_SELECTION`, `REPORT_NOT_AVAILABLE`, `RANGE_NOT_SATISFIABLE`, `PAYLOAD_TOO_LARGE`. Ralli düzeltme uçları şu kodları da kullanır: `RALLY_NOT_FOUND`, `JOB_NOT_REVIEWABLE`, `RALLY_LIST_STALE`, `INVALID_INTERVAL`, `RALLY_OVERLAP`, `SPLIT_POINT_OUTSIDE`, `NO_PREVIOUS_RALLY`, `LIST_NOT_READY`, `MOCK_LIST_NOT_CONFIRMABLE`. Maç kuralı ucu (`PUT /v1/matches/{id}/rules`, bölüm 1) `MATCH_RULES_STALE` kodunu da kullanır. Hesap uçları (bölüm 10) şu kodları kullanır: `AUTH_REQUIRED`, `SIGNUP_CLOSED`, `SIGNUP_CODE_INVALID`, `LINK_NOT_FOUND`, `USERNAME_INVALID`, `DISPLAY_NAME_INVALID`, `PASSWORD_REJECTED`, `USERNAME_TAKEN`, `LOGIN_FAILED`, `PASSWORD_WRONG`, `TOO_MANY_ATTEMPTS`, `SERVER_BUSY`. Hepsi [API.md](API.md) içindeki hata zarfıyla döner.
+`VIDEO_NOT_READY`, `VIDEO_FILE_MISSING`, `MODEL_NOT_CONFIGURED`, `ANALYSIS_NOT_FOUND`, `JOB_FINISHED`, `CARD_NOT_FOUND`, `REVIEW_STALE_VERSION`, `IDEMPOTENCY_KEY_REUSED`, `INVALID_SELECTION`, `REPORT_NOT_AVAILABLE`, `RANGE_NOT_SATISFIABLE`, `PAYLOAD_TOO_LARGE`. Ralli düzeltme uçları şu kodları da kullanır: `RALLY_NOT_FOUND`, `JOB_NOT_REVIEWABLE`, `RALLY_LIST_STALE`, `INVALID_INTERVAL`, `RALLY_OVERLAP`, `SPLIT_POINT_OUTSIDE`, `NO_PREVIOUS_RALLY`, `LIST_NOT_READY`, `MOCK_LIST_NOT_CONFIRMABLE`. Maç kuralı ucu (`PUT /v1/matches/{id}/rules`, bölüm 1) `MATCH_RULES_STALE` kodunu da kullanır. Hesap uçları (bölüm 10) şu kodları kullanır: `AUTH_REQUIRED`, `SIGNUP_CLOSED`, `SIGNUP_CODE_INVALID`, `LINK_NOT_FOUND`, `USERNAME_INVALID`, `DISPLAY_NAME_INVALID`, `PASSWORD_REJECTED`, `USERNAME_TAKEN`, `LOGIN_FAILED`, `PASSWORD_WRONG`, `TOO_MANY_ATTEMPTS`, `SERVER_BUSY`. Hesap silme ucu `409 UPLOAD_FINALIZING` kodunu da kullanır. Sürüm 0.9'dan sonra her uç oturumsuz isteğe `401 AUTH_REQUIRED`, hesabın göremediği bir kayda `403 NOT_A_MEMBER` döner (bölüm 10, Erişim). Yükleme uçları `409 QUOTA_EXCEEDED` ve `507 STORAGE_FULL` kodlarını da kullanır (bölüm 10, Depolama sınırları). Hepsi [API.md](API.md) içindeki hata zarfıyla döner.
 
 JSON gövdesi alan uçlar en çok 64 KiB gövde kabul eder. Daha büyük gövdeye sunucu gövdeyi ayrıştırmadan `413 PAYLOAD_TOO_LARGE` döner. Parça yükleme ucu (`PUT /v1/uploads/{id}/chunks`) kendi sınırını uygular.
 
@@ -295,7 +300,7 @@ Kullanıcı maçın kuralını seçer (bölüm 1). Sunucu süreyle biten seti ta
 
 ## 10. Hesap
 
-Bir kişi kullanıcı adı, şifre ve görünen adla hesap açar (ADR-0119). Sunucu e-posta ve telefon numarası istemez. Oturum isteyen her uç `Authorization: Bearer <token>` başlığını okur. Başlık yoksa ya da oturum bittiyse sunucu `401 AUTH_REQUIRED` ve `WWW-Authenticate: Bearer` döner. Sürüm 0.8'de yalnız bu bölümün `/auth/logout` ve `/me` uçları oturum ister. OpenAPI belgesi bu uçları `HTTPBearer` güvenlik şemasıyla işaretler.
+Bir kişi kullanıcı adı, şifre ve görünen adla hesap açar (ADR-0119). Sunucu e-posta ve telefon numarası istemez. Oturum isteyen her uç `Authorization: Bearer <token>` başlığını okur. Başlık yoksa ya da oturum bittiyse sunucu `401 AUTH_REQUIRED` ve `WWW-Authenticate: Bearer` döner. Sürüm 0.9'dan sonra `GET /v1/health`, `POST /v1/auth/register` ve `POST /v1/auth/login` dışındaki her uç oturum ister. OpenAPI belgesi bu uçları `HTTPBearer` güvenlik şemasıyla işaretler.
 
 | Uç | Gövde | Başarı | Hatalar |
 |---|---|---|---|
@@ -305,7 +310,7 @@ Bir kişi kullanıcı adı, şifre ve görünen adla hesap açar (ADR-0119). Sun
 | `GET /v1/me` | | `200 {user, teams}` | `401 AUTH_REQUIRED` |
 | `PUT /v1/me/display-name` | `{displayName}` | `200 {user}` | `401`, `422 DISPLAY_NAME_INVALID` |
 | `PUT /v1/me/password` | `{currentPassword, newPassword}` | `200 {user}` | `401`, `403 PASSWORD_WRONG`, `422 PASSWORD_REJECTED`, `429`, `503` |
-| `POST /v1/me/delete` | `{password}` | `204` | `401`, `403 PASSWORD_WRONG`, `429`, `503` |
+| `POST /v1/me/delete` | `{password}` | `204` | `401`, `403 PASSWORD_WRONG`, `409 UPLOAD_FINALIZING`, `429`, `503` |
 
 - `user`: `{id, username, displayName, createdAt, passwordTemporary}`. Operatör şifreyi sıfırlayınca sunucu `passwordTemporary` alanını `true` yapar. Kişi yeni şifre seçince sunucu alanı `false` yapar. `teams` takım dilimi gelene kadar boş bir listedir.
 - `session`: `{token, expiresAt}`. `expiresAt` oturumun kullanılmazsa biteceği andır. Sunucu oturumu 30 gün kullanılmayınca, her durumda da açıldıktan 180 gün sonra kapatır. Sunucu kullanımı en çok saatte bir yazar.
@@ -323,7 +328,33 @@ Bir kişi kullanıcı adı, şifre ve görünen adla hesap açar (ADR-0119). Sun
 - Şifre değişikliği ve hesap silme yanlış şifreyi hesabın kendi sayacında sayar (`ACCOUNT`). O sayaca yalnız hesabın bir oturumunu tutan kişi ulaşır, bu yüzden giriş ekranındaki bir yabancı sahibin şifre değişikliğini ve hesap silmesini engelleyemez.
 - Sunucu şifre özetlerini ayrı bir havuzda hesaplar. Havuzda iki özet çalışır ve en çok 16 özet bekler. Sunucu fazlasına `503 SERVER_BUSY` ve `Retry-After: 1` döner.
 - Çıkış yalnız o oturumu kapatır. Şifre değişikliği o andaki oturum dışındaki bütün oturumları kapatır. Yazan her uç oturumu kendi yazma işleminin içinde yeniden okur. Bir oturum özet hesaplanırken kapandıysa uç `401 AUTH_REQUIRED` döner ve hiçbir şey yazmaz. Şifre aynı sırada değiştiyse şifre değişikliği ve hesap silme `403 PASSWORD_WRONG` döner ve hiçbir şey yazmaz.
-- Hesap silme kullanıcıyı, oturumlarını ve telefon anahtarlarını siler. Sunucu silmeden sonra günlük dosyasını boşaltır. Bir okuyucu o sırada işlem içindeyse sunucu bir saniyeye kadar yeniden dener. Okuyucu daha uzun sürerse günlük bir sonraki silmede ya da son bağlantı kapanınca boşalır.
+- Sunucu hesabı silerken önce oturumu ve şifreyi yazma işleminin içinde yeniden denetler. Sonra hesaba ait kişisel maçları yüklemeleri, videoları, analizleri ve baytlarıyla siler. En son kullanıcıyı, oturumlarını ve telefon anahtarlarını siler. Silinen dosyalar geri gelmez, bu yüzden sunucu şifreyi her silmeden önce denetler. Şifre özet hesaplanırken değiştiyse sunucu `403 PASSWORD_WRONG` döner ve hiçbir baytı silmez. Sunucu o anda hesabın bir yüklemesini doğruluyorsa `409 UPLOAD_FINALIZING` döner ve hiçbir şey silmez. Sunucu 15 dakikadan eski bir doğrulamayı terk edilmiş sayar. Sunucu çalışan analiz işlerini durdurur. Hiçbir hesaba bağlı olmayan maçlar (`LEGACY`) sunucuda kalır ve operatör onları siler.
+- Sunucu silmeden sonra günlük dosyasını boşaltır. Bir okuyucu o sırada işlem içindeyse sunucu bir saniyeye kadar yeniden dener. Okuyucu daha uzun sürerse günlük bir sonraki silmede ya da son bağlantı kapanınca boşalır.
 - Operatör `python -m app.admin reset-password <kullanıcı adı>` ile 7 gün geçerli bir geçici şifre verir. Sunucu o hesabın bütün oturumlarını kapatır.
 - Sunucu şifre özetinin maliyetini özetin içine yazar. Sunucu maliyeti değiştirirse eski bir özet girişte yine doğrulanır ve sunucu o girişte özeti yeni maliyetle yeniden yazar.
 - Sunucu oturum anahtarının, telefon anahtarının ve operatör kodunun yalnız SHA-256 özetini, şifrenin de yalnız scrypt özetini tutar.
+
+### Erişim
+
+- Bir hesabın açtığı maç o hesabın kişisel maçıdır (`status: "PERSONAL"`, bölüm 1). Sunucu maçı, yüklemelerini, videolarını, analizlerini, kartlarını, rallilerini ve raporunu yalnız maçın sahibine gösterir. Maçın sahibi bu uçları sürüm 0.8'deki gibi kullanır. Kişisel maç hiçbir takım ya da kişi istatistiğine girmez.
+- Sunucu oturumu gövdenin, sorgunun ve başlıkların alanlarını denetlemeden önce okur. Parça yükleme ucu oturumu gövdeyi okumadan önce denetler. İki ret oturumdan önce gelir: Sunucu 64 KiB üstündeki bir JSON gövdesine `413 PAYLOAD_TOO_LARGE`, JSON olarak okunamayan bir gövdeye `422 VALIDATION_ERROR` döner. Sunucu bu iki ret için veritabanını okumaz ve hiçbir kaydı adlandırmaz.
+- Oturumdan sonraki sıra şudur: alanların biçimi (`422`), kayıt (`404`), erişim (`403`), sonra ucun öteki denetimleri. Sunucu var olmayan bir kaydı kaydın kendi koduyla bildirir: `404 MATCH_NOT_FOUND`, `UPLOAD_NOT_FOUND`, `VIDEO_NOT_FOUND`, `ANALYSIS_NOT_FOUND`, `CARD_NOT_FOUND` ya da `RALLY_NOT_FOUND`. Sunucu hesabın göremediği bir kayda `403 NOT_A_MEMBER` döner. Bu yanıtın `details` alanı boştur. Sunucu var olan bir kaydı hiçbir zaman `404` ile bildirmez, çünkü uygulama `404` yanıtını silinmiş kayıt diye okur.
+- Sunucu erişimi sürüm, durum, offset, anahtar ve kota denetimlerinden önce yapar. Başka bir hesap bu yüzden `REVIEW_STALE_VERSION`, `RALLY_LIST_STALE`, `MATCH_RULES_STALE`, `OFFSET_MISMATCH`, `JOB_FINISHED`, `VIDEO_NOT_READY` ya da `SPLIT_POINT_OUTSIDE` yanıtından bir kaydın sürümünü, durumunu ya da sınırını öğrenemez. Parça ucunun `400 INVALID_OFFSET` ve `413 CHUNK_SIZE_INVALID` yanıtları erişimden önce gelir, çünkü bu iki yanıt yalnız isteğin kendisini anar.
+- Yazan her uç oturumu kendi yazma işleminin içinde yeniden okur. Oturum arada kapandıysa uç `401 AUTH_REQUIRED` döner ve hiçbir şey yazmaz. Yükleme tamamlama ucu (`POST /v1/uploads/{id}/complete`) dosyayı doğrularken oturum kapanırsa sunucu video kaydı yazmaz ve yüklemeyi yeniden `UPLOADING` durumuna alır.
+- Sunucu 0.9 öncesi sürümlerin sakladığı maçları hiçbir hesaba bağlamaz (`LEGACY`). Bu maçlara her uç `403 NOT_A_MEMBER` döner. Uygulama 0.8'in giriş yapmış bir hesapla yüklediği maçlar da bunlara dahildir, çünkü sunucu 0.8 maç uçlarında oturumu okumuyordu. Sunucu bir maçı istekle sahiplenmeye izin vermez, çünkü maç kimliği gizli değildir. Sunucu sırada bekleyen bir analiz işini maç `LEGACY` olsa da çalıştırır, ama sonucu kimse okuyamaz.
+- Operatör bu maçları `python -m app.admin legacy --list` komutuyla listeler. `legacy --assign <kullanıcı adı>` komutu maçları o hesabın kişisel maçı yapar. `legacy --delete` komutu maçları yüklemeleri, videoları, analizleri ve baytlarıyla siler. İki komut da `--match <kimlik>` ile yalnız adı geçen maçlara dokunur. Komut adı geçen bir maç `LEGACY` değilse ya da kullanıcı adını hiçbir hesap taşımıyorsa hiçbir şeyi değiştirmez ve `1` ile çıkar. Silme komutu sunucu maçın bir yüklemesini doğrularken de hiçbir şeyi değiştirmez. Komutlar sunucu çalışırken de çalışır.
+
+### Depolama sınırları
+
+- Sunucu bir yüklemeyi istemcinin bildirdiği boyutla (`sizeBytes`) sayar. Sunucu yüklemeyi `UPLOADING`, `FINALIZING` ya da `COMPLETED` durumundayken sayar. Sunucu karantinadaki videoyu da sayar, çünkü baytları diskte durur. Sunucu silinen videoyu (`DELETED`), bırakılan yüklemeyi (`ABORTED`) ve silinen maçı saymaz. Sunucu bildirilen boyuttan fazlasını kabul etmez (`413 UPLOAD_OVERFLOW`), bu yüzden küçük bir boyut bildiren istemci sınırı aşamaz.
+- Sunucu bir hesabın kişisel maç videolarına ve yarım yüklemelerine en çok 8 GiB ayırır. Davet bağlantısıyla ya da açık maç bağlantısıyla açılacak bir hesap 2 GiB ve aynı anda tek bir yarım yükleme alır. Sunucu tanımadığı bir açılış yolunu da bu küçük sınırla sayar. Bu sürümde kişi hesabı yalnız operatörün koduyla açar. Testler kapıyı açık tutar. Bu iki yoldan açılan her hesap 8 GiB alır.
+- Sunucu bütün hesapların kişisel maç videolarına en çok 40 GiB ayırır. Sunucu `LEGACY` maçların baytlarını bu sayıya katmaz. Operatörün bir hesaba bağladığı `LEGACY` maç o hesabın sayısına girer.
+- Sunucu sınırı aşan bir yüklemeye `409 QUOTA_EXCEEDED` döner ve hiçbir kayıt yazmaz. Sunucu sınırları şu sırayla denetler: önce yarım yüklemelerin sayısını (`details: {scope: "PERSONAL", reason: "UNFINISHED_UPLOAD", usedBytes, limitBytes}`), sonra hesabın sınırını (`{scope: "PERSONAL", usedBytes, limitBytes}`), sonra sunucunun sınırını (`{scope: "SERVER", pool: "PERSONAL", usedBytes, limitBytes}`). Sunucunun sınırında `usedBytes` bütün hesapların toplamıdır. `usedBytes` ile `sizeBytes` toplamı sınıra eşitse sunucu yüklemeyi kabul eder.
+- Boş disk sınırı: Yükleme diskteki boş yeri `VOLLEYSTAT_DISK_FLOOR_GIB` sınırının altına indirecekse sunucu `507 STORAGE_FULL` döner (`details.floorBytes`). Sınır varsayılan olarak 20 GiB'tır. Bir parça boş yeri bu sınırın yarısının altına indirecekse sunucu o parçayı yazmaz ve `507 STORAGE_FULL` döner. Bu yanıtta `details.floorBytes` sınırın yarısıdır ve `nextOffset` değişmez. Sunucu boş yerin kendisini istemciye göndermez. Ayar sıfır ya da daha büyük bir tam sayıdır. Sunucu başka bir değerle başlamaz.
+- Sunucu bu denetimleri yükleme kaydını yazan işlemin içinde yapar. Aynı anda başlayan iki yükleme bu yüzden aynı boş yeri ikisi birden alamaz. Sunucu `409` sınırlarını yalnız yükleme başlarken denetler. Süren bir yükleme bildirdiği boyutla zaten sayılıdır. Sunucu disk sınırını her parçada da denetler.
+
+### Yarım yüklemeler
+
+- Sunucu her yüklemenin son dokunuş zamanını tutar. Sunucu bu zamanı yükleme başlarken ve her parçayı yazınca günceller.
+- Sunucu bir gün boyunca parça almayan yarım yüklemeyi kapatır (`ABORTED`) ve aldığı baytları siler. Sunucu bir gün önce başlayıp bitmeyen bir doğrulamayı da (`FINALIZING`) kapatır. Sunucu bu taramayı açılışta ve sonra dakikada bir yapar. Yükleme kaydı kalır, bu yüzden `GET /v1/uploads/{id}` yüklemenin durumunu yine gösterir.
+- Kapanan bir yüklemeye gelen parça ve `complete` çağrısı `409 UPLOAD_CLOSED` alır. Uygulama böyle bir yüklemeyi sonraki denemede baştan başlatır.
