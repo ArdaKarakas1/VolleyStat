@@ -57,7 +57,7 @@ class AppViewModelAccountTest {
     private val script = ConcurrentHashMap<String, (RecordedRequest) -> MockResponse>()
 
     /** The accounts the stand-in server knows, by username: (user id, display name). */
-    private val accounts = mapOf("ali" to ("user-ali" to "Ali Yılmaz"), "veli" to ("user-veli" to "Veli Kaya"))
+    private val accounts = mapOf("ali" to ("user-ali" to "Ali Yılmaz"), "veli" to ("user-veli" to "Veli Kaya"), "ayse.yilmaz" to ("user-ayse" to "Ayşe Yılmaz"))
 
     @Before fun start() {
         server.dispatcher = object : Dispatcher() {
@@ -321,6 +321,41 @@ class AppViewModelAccountTest {
         assertNull(vm.state.value.account.user)
     }
 
+    /**
+     * The third review's A4: the app waits the Retry-After the server names, but never more than 10
+     * seconds (ADR-0119). The test counts each wait on a clock of its own instead of waiting it out.
+     */
+    private fun AppViewModel.loginAfterBusyAnswers(vararg retryAfter: String?): List<Long> {
+        val clock = java.util.concurrent.atomic.AtomicLong()
+        val times = CopyOnWriteArrayList<Long>()
+        var calls = 0
+        on("POST /auth/login") { request ->
+            times += clock.get()
+            val busy = retryAfter.getOrNull(calls++)
+            when {
+                calls > retryAfter.size -> signedIn("ali", request)
+                busy == null -> refuse(503, "SERVER_BUSY")
+                else -> refuse(503, "SERVER_BUSY").setHeader("Retry-After", busy)
+            }
+        }
+        waitAfterBusy = { millis -> clock.addAndGet(millis) }
+        login("ali", "uzun bir şifre 42")
+        await("the login") { state.value.account.user != null }
+        assertEquals(retryAfter.size + 1, calls)
+        return times.zipWithNext { first, next -> next - first }
+    }
+
+    @Test fun aBusyServerThatNamesAMinuteIsAskedAgainAfterTenSeconds() {
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        val waits = viewModel().loginAfterBusyAnswers("60")
+        assertEquals("the second try goes out 10 s after the busy answer, not 60 s", listOf(10_000L), waits)
+    }
+
+    @Test fun aShorterWaitIsWaitedAsTheServerNamesItAndNoneNamedIsOneSecond() {
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        assertEquals(listOf(3_000L, 1_000L, 0L, 10_000L), viewModel().loginAfterBusyAnswers("3", null, "0", "10"))
+    }
+
     // ----- the end of a session -----
 
     @Test fun anEndedSessionClearsTheSessionAndLeadsToTheLoginWithTheReason() {
@@ -429,6 +464,47 @@ class AppViewModelAccountTest {
         await("the new name") { vm.state.value.account.user?.displayName == "Yeni Ad" }
         assertTrue(vm.state.value.account.user!!.passwordTemporary)
         assertEquals("Yeni Ad", storedSession()!!.displayName)
+    }
+
+    // The third review's A2: a temporary password outlives a restart, as the display name does.
+
+    private fun seededUser(temporary: Boolean) = JSONObject().put("id", TestAccounts.SESSION.userId).put("username", TestAccounts.SESSION.username)
+        .put("displayName", TestAccounts.SESSION.displayName).put("createdAt", "2026-11-17T10:00:00Z").put("passwordTemporary", temporary)
+
+    @Test fun aTemporaryPasswordIsStillNamedAfterARestart() {
+        TestAccounts.device(context, Settings(welcomeSeen = true, accountSeen = true, legacyHandled = true))
+        // The operator reset the password, and the user logs in with the temporary one.
+        on("POST /auth/login") {
+            ok(
+                JSONObject().put("user", userJson("ali").put("passwordTemporary", true)).put("deviceToken", "device-ali")
+                    .put("session", JSONObject().put("token", "token-ali").put("expiresAt", "2026-12-17T10:00:00Z"))
+            )
+        }
+        val vm = viewModel()
+        vm.loginAndWait("ali")
+        assertTrue(vm.state.value.account.user!!.passwordTemporary)
+        val restarted = viewModel()
+        assertEquals(Entry.HOME, restarted.state.value.entry)
+        assertTrue("Home still says that the password is temporary", restarted.state.value.account.user!!.passwordTemporary)
+        assertEquals("the phone asked the server nothing for it", listOf("POST /auth/login"), seen.map { it.key })
+    }
+
+    @Test fun everyAnswerAboutTheUserSetsTheTemporaryPasswordForTheNextStart() {
+        TestAccounts.seed(context)
+        on("GET /me") { ok(JSONObject().put("user", seededUser(temporary = true)).put("teams", org.json.JSONArray())) }
+        val vm = viewModel()
+        assertFalse(vm.state.value.account.user!!.passwordTemporary)
+        // The operator reset the password while this phone was signed in; the profile reads the account.
+        vm.refreshAccount()
+        await("the read") { vm.state.value.account.user!!.passwordTemporary }
+        assertTrue(storedSession()!!.passwordTemporary)
+        assertTrue(viewModel().state.value.account.user!!.passwordTemporary)
+
+        on("PUT /me/password") { ok(JSONObject().put("user", seededUser(temporary = false))) }
+        vm.changePassword("geçici şifre 12345", "yeni şifre 67890")
+        await("the new password") { !vm.state.value.account.busy && vm.state.value.account.confirmed == AccountChange.PASSWORD }
+        assertFalse(vm.state.value.account.user!!.passwordTemporary)
+        assertFalse("the next start knows that the password is no longer temporary", viewModel().state.value.account.user!!.passwordTemporary)
     }
 
     // ----- one folder per account -----
@@ -580,6 +656,247 @@ class AppViewModelAccountTest {
         assertNull(vm.state.value.account.user)
     }
 
+    // The third review's A1: the mark of a registration without an answer stays until a login gives a definite answer.
+
+    private val code = "ABCD-EFGH-JKMN-PQRS"
+    private fun lost() = MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST)
+
+    /** Registers [username] with the operator code and waits for the answer. */
+    private fun AppViewModel.registerAndWait(username: String = "ali", operatorCode: String? = code) {
+        val before = seen.size
+        register("Ali Yılmaz", username, "uzun bir şifre 42", operatorCode)
+        await("the answer to the registration of $username") { !state.value.account.busy && seen.size > before }
+        settle()
+    }
+
+    @Test fun aLostRegistrationStaysMarkedWhenTheLoginThatLooksForItGetsNoAnswer() {
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        var registrations = 0
+        on("POST /auth/register") { if (++registrations == 1) lost() else refuse(403, "SIGNUP_CODE_INVALID") }
+        var logins = 0
+        on("POST /auth/login") { request -> if (++logins == 1) lost() else signedIn("ali", request) }
+        val vm = viewModel()
+        vm.registerAndWait()
+        assertEquals(AuthProblem.Unreachable, vm.state.value.account.problem)
+
+        // The server opened the account. The repeat meets the spent code, and the login that looks for the account gets no answer.
+        vm.registerAndWait()
+        assertEquals("the login that got no answer says so itself", AuthProblem.Unreachable, vm.state.value.account.problem)
+        assertNull(vm.state.value.account.user)
+
+        // The mark stays, so the next try looks for the account again and finds it.
+        vm.registerAndWait()
+        assertEquals(listOf("POST /auth/register", "POST /auth/register", "POST /auth/login", "POST /auth/register", "POST /auth/login"), seen.map { it.key })
+        assertEquals("ali", vm.state.value.account.user?.username)
+        assertNull(vm.state.value.account.problem)
+        assertEquals(Entry.HOME, vm.state.value.entry)
+    }
+
+    @Test fun aBusyServerAtTheLoginThatLooksForALostRegistrationIsAskedAgainAndTheAccountIsFound() {
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        var registrations = 0
+        on("POST /auth/register") { if (++registrations == 1) lost() else refuse(403, "SIGNUP_CODE_INVALID") }
+        var logins = 0
+        on("POST /auth/login") { request -> if (++logins == 1) refuse(503, "SERVER_BUSY").setHeader("Retry-After", "0") else signedIn("ali", request) }
+        val vm = viewModel()
+        vm.registerAndWait()
+        // The busy answer is no answer about the account: the app asks again, as after any SERVER_BUSY, and finds the account.
+        vm.registerAndWait()
+        assertEquals(listOf("POST /auth/register", "POST /auth/register", "POST /auth/login", "POST /auth/register", "POST /auth/login"), seen.map { it.key })
+        assertNull(vm.state.value.account.problem)
+        assertEquals("ali", vm.state.value.account.user?.username)
+    }
+
+    @Test fun aLockedLoginThatLooksForALostRegistrationShowsTheWaitAndTheNextTryLooksAgain() {
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        var registrations = 0
+        on("POST /auth/register") { if (++registrations == 1) lost() else refuse(403, "SIGNUP_CODE_INVALID") }
+        var logins = 0
+        on("POST /auth/login") { request ->
+            if (++logins == 1) refuse(429, "TOO_MANY_ATTEMPTS", JSONObject().put("retryAfterSeconds", 30).put("scope", "USER")).setHeader("Retry-After", "30")
+            else signedIn("ali", request)
+        }
+        val vm = viewModel()
+        vm.registerAndWait()
+        vm.registerAndWait()
+        assertEquals("the form names the wait, not a refused code", AuthProblem.TooManyAttempts(AttemptScope.USER, 30), vm.state.value.account.problem)
+        vm.registerAndWait()
+        assertEquals("ali", vm.state.value.account.user?.username)
+        assertEquals(5, seen.size)
+    }
+
+    @Test fun aLostRegistrationWithACodeIsLookedForAfterARestart() {
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        var registrations = 0
+        on("POST /auth/register") { if (++registrations == 1) lost() else refuse(403, "SIGNUP_CODE_INVALID") }
+        viewModel().registerAndWait()
+        // The user closes the app after "no answer" and opens it again.
+        val restarted = viewModel()
+        restarted.registerAndWait()
+        assertEquals(listOf("POST /auth/register", "POST /auth/register", "POST /auth/login"), seen.map { it.key })
+        assertEquals("ali", restarted.state.value.account.user?.username)
+        assertNull(restarted.state.value.account.problem)
+    }
+
+    @Test fun aLostRegistrationWithoutACodeIsLookedForAfterARestart() {
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        var registrations = 0
+        on("POST /auth/register") { if (++registrations == 1) lost() else refuse(409, "USERNAME_TAKEN") }
+        viewModel().registerAndWait(operatorCode = null)
+        val restarted = viewModel()
+        restarted.registerAndWait(operatorCode = null)
+        assertEquals(listOf("POST /auth/register", "POST /auth/register", "POST /auth/login"), seen.map { it.key })
+        assertEquals("the user keeps the username, and no second account opens", "ali", restarted.state.value.account.user?.username)
+    }
+
+    /**
+     * The third review's B3: a 5xx, or an answer the app can not read, may come after the server opened the
+     * account, as a lost answer may. The registration is marked, and the next try looks for the account.
+     */
+    private fun aRegistrationLooksForItsAccountAfter(first: MockResponse, problem: AuthProblem) {
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        var registrations = 0
+        on("POST /auth/register") { if (++registrations == 1) first else refuse(409, "USERNAME_TAKEN") }
+        val vm = viewModel()
+        vm.registerAndWait(operatorCode = null)
+        assertEquals(problem, vm.state.value.account.problem)
+        val restarted = viewModel()
+        restarted.registerAndWait(operatorCode = null)
+        assertEquals(listOf("POST /auth/register", "POST /auth/register", "POST /auth/login"), seen.map { it.key })
+        assertEquals("the user keeps the username, and no second account opens", "ali", restarted.state.value.account.user?.username)
+    }
+
+    @Test fun aRegistrationThatMeetsAServerErrorIsLookedForAtTheNextTry() =
+        aRegistrationLooksForItsAccountAfter(refuse(500, "INTERNAL"), AuthProblem.ServerFailed(500))
+
+    @Test fun aRegistrationThatMeetsAServerErrorWithoutTheEnvelopeIsLookedForAtTheNextTry() =
+        aRegistrationLooksForItsAccountAfter(MockResponse().setResponseCode(502).setBody("Bad Gateway"), AuthProblem.ServerFailed(502))
+
+    @Test fun aRegistrationWhoseSuccessTheAppCanNotReadIsLookedForAtTheNextTry() =
+        aRegistrationLooksForItsAccountAfter(MockResponse().setResponseCode(201).setHeader("Content-Type", "text/html").setBody("<html></html>"), AuthProblem.UnexpectedAnswer)
+
+    /** SERVER_BUSY comes before the server counts or writes anything: the app asks again, and no mark sends a login later. */
+    @Test fun aRegistrationThatMeetsABusyServerIsAskedAgainAndNotLookedFor() {
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        var registrations = 0
+        on("POST /auth/register") {
+            if (++registrations == 1) refuse(503, "SERVER_BUSY").setHeader("Retry-After", "0") else refuse(409, "USERNAME_TAKEN")
+        }
+        val vm = viewModel()
+        vm.registerAndWait(operatorCode = null)
+        assertEquals("the busy answer is asked again, and the taken username sends no login", listOf("POST /auth/register", "POST /auth/register"), seen.map { it.key })
+        assertEquals(AuthProblem.UsernameTaken, vm.state.value.account.problem)
+        assertFalse(File(files, "registrations.bin").exists())
+    }
+
+    @Test fun aRegistrationTheServerRefusedIsNotLookedFor() {
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        var registrations = 0
+        on("POST /auth/register") { if (++registrations == 1) refuse(422, "USERNAME_INVALID") else refuse(409, "USERNAME_TAKEN") }
+        val vm = viewModel()
+        vm.registerAndWait(operatorCode = null)
+        vm.registerAndWait(operatorCode = null)
+        assertEquals("a 4xx changed nothing, so no login goes out", listOf("POST /auth/register", "POST /auth/register"), seen.map { it.key })
+        assertEquals(AuthProblem.UsernameTaken, vm.state.value.account.problem)
+        assertFalse(File(files, "registrations.bin").exists())
+    }
+
+    @Test fun theMarkOfALostRegistrationIsSealedAndNoPlainFileNamesTheAccount() {
+        val sealing = ReplaceableKeyCipher()
+        TestApplication.cipher = sealing
+        try {
+            TestAccounts.device(context, Settings(welcomeSeen = true))
+            var registrations = 0
+            on("POST /auth/register") { if (++registrations == 1) lost() else refuse(403, "SIGNUP_CODE_INVALID") }
+            viewModel().registerAndWait("ayse.yilmaz")
+            val written = files.walkTopDown().filter { it.isFile }.toList()
+            assertTrue("the mark reaches the disk", written.any { it.name == "registrations.bin" })
+            val digest = com.voleybolveveleybol.volleystat.data.sha256Hex("ayse.yilmaz")
+            written.forEach { file ->
+                val text = String(file.readBytes(), Charsets.ISO_8859_1)
+                assertFalse("${file.name} names the username", text.contains("ayse.yilmaz"))
+                assertFalse("${file.name} holds the digest of the username", text.contains(digest))
+            }
+            val restarted = viewModel()
+            restarted.registerAndWait("ayse.yilmaz")
+            assertEquals("the sealed mark is read after the restart", "ayse.yilmaz", restarted.state.value.account.user?.username)
+            assertFalse("a sign-in of the username ends the mark", File(files, "registrations.bin").exists())
+        } finally {
+            TestApplication.cipher = PlainSessionCipher
+        }
+    }
+
+    @Test fun aMarkTheKeystoreCanNotSealLivesInMemoryUntilTheAppEnds() {
+        TestApplication.cipher = object : com.voleybolveveleybol.volleystat.data.SessionCipher {
+            override fun seal(plain: ByteArray): ByteArray = throw java.security.GeneralSecurityException("the keystore can not seal now")
+            override fun open(sealed: ByteArray): ByteArray = sealed.copyOf()
+        }
+        try {
+            TestAccounts.device(context, Settings(welcomeSeen = true))
+            var registrations = 0
+            on("POST /auth/register") { if (++registrations <= 2) lost() else refuse(403, "SIGNUP_CODE_INVALID") }
+            val vm = viewModel()
+            vm.registerAndWait()
+            assertFalse(File(files, "registrations.bin").exists())
+            vm.registerAndWait()
+            assertEquals("the second registration got no answer either", AuthProblem.Unreachable, vm.state.value.account.problem)
+            // The app restarts: a mark that never reached the disk is gone, and no login goes out without one.
+            val restarted = viewModel()
+            restarted.registerAndWait()
+            assertEquals(listOf("POST /auth/register", "POST /auth/register", "POST /auth/register"), seen.map { it.key })
+            assertEquals(AuthProblem.SignupCodeInvalid, restarted.state.value.account.problem)
+            // In the same run the mark in memory is enough.
+            vm.registerAndWait()
+            assertEquals(listOf("POST /auth/register", "POST /auth/register", "POST /auth/register", "POST /auth/register", "POST /auth/login"), seen.map { it.key })
+            assertEquals("ali", vm.state.value.account.user?.username)
+        } finally {
+            TestApplication.cipher = PlainSessionCipher
+        }
+    }
+
+    @Test fun theLoginThatLooksForALostRegistrationGoesOnlyForTheMarkedUsername() {
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        var registrations = 0
+        on("POST /auth/register") { if (++registrations == 1) lost() else refuse(409, "USERNAME_TAKEN") }
+        val vm = viewModel()
+        vm.registerAndWait("ali", operatorCode = null)
+        // Another username: a login of it would count a failed attempt against someone else's account.
+        vm.registerAndWait("veli", operatorCode = null)
+        assertEquals(listOf("POST /auth/register", "POST /auth/register"), seen.map { it.key })
+        assertEquals(AuthProblem.UsernameTaken, vm.state.value.account.problem)
+        assertEquals("veli", JSONObject(seen.last().body).getString("username"))
+    }
+
+    @Test fun aFailedLoginOfTheSearchEndsTheMarkAlsoForTheNextStart() {
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        var registrations = 0
+        on("POST /auth/register") { if (++registrations == 1) lost() else refuse(403, "SIGNUP_CODE_INVALID") }
+        on("POST /auth/login") { refuse(401, "LOGIN_FAILED") }
+        val vm = viewModel()
+        vm.registerAndWait()
+        vm.registerAndWait()
+        assertEquals(AuthProblem.SignupCodeInvalid, vm.state.value.account.problem)
+        // LOGIN_FAILED answered: no account of this name has this password. No later try asks again.
+        vm.registerAndWait()
+        viewModel().registerAndWait()
+        assertEquals(listOf("POST /auth/register", "POST /auth/register", "POST /auth/login", "POST /auth/register", "POST /auth/register"), seen.map { it.key })
+        assertFalse(File(files, "registrations.bin").exists())
+    }
+
+    @Test fun aLoginOfTheMarkedUsernameFromTheLoginScreenEndsTheMark() {
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        var registrations = 0
+        on("POST /auth/register") { if (++registrations == 1) lost() else refuse(409, "USERNAME_TAKEN") }
+        val vm = viewModel()
+        vm.registerAndWait(operatorCode = null)
+        // The user gives up on the form and logs in: the account is there, so the mark has done its work.
+        vm.loginAndWait("ali")
+        vm.logoutAndWait()
+        viewModel().registerAndWait(operatorCode = null)
+        assertEquals(listOf("POST /auth/register", "POST /auth/login", "POST /auth/logout", "POST /auth/register"), seen.map { it.key })
+        assertFalse(File(files, "registrations.bin").exists())
+    }
+
     // ----- the data of app 0.7 -----
 
     private fun writeLegacy(): File {
@@ -728,23 +1045,74 @@ class AppViewModelAccountTest {
         }
         val vm = viewModel()
         // Only a confirmed change can be one the password manager did not get.
-        vm.newPasswordNotHandedOver()
-        assertFalse(vm.state.value.account.newPasswordNotHandedOver)
+        vm.newPasswordNotHandedOver(PasswordNotHandedOver.SCREEN_REBUILT)
+        assertNull(vm.state.value.account.newPasswordNotHandedOver)
         vm.changePassword("eski şifre 12345", "yeni şifre 67890")
         await("the answer") { !vm.state.value.account.busy && vm.state.value.account.confirmed == AccountChange.PASSWORD }
-        vm.newPasswordNotHandedOver()
-        assertTrue(vm.state.value.account.newPasswordNotHandedOver)
+        vm.newPasswordNotHandedOver(PasswordNotHandedOver.SCREEN_REBUILT)
+        assertEquals(PasswordNotHandedOver.SCREEN_REBUILT, vm.state.value.account.newPasswordNotHandedOver)
         vm.clearAccountProblem()
-        assertFalse(vm.state.value.account.newPasswordNotHandedOver)
+        assertNull(vm.state.value.account.newPasswordNotHandedOver)
 
         vm.changePassword("yeni şifre 67890", "bir başka şifre 1")
         await("the second answer") { !vm.state.value.account.busy && vm.state.value.account.confirmed == AccountChange.PASSWORD }
-        vm.newPasswordNotHandedOver()
-        assertTrue(vm.state.value.account.newPasswordNotHandedOver)
+        vm.newPasswordNotHandedOver(PasswordNotHandedOver.SCREEN_REBUILT)
+        assertEquals(PasswordNotHandedOver.SCREEN_REBUILT, vm.state.value.account.newPasswordNotHandedOver)
         on("PUT /me/display-name") { refuse(422, "DISPLAY_NAME_INVALID") }
         vm.changeDisplayName("x")
         await("the next call") { !vm.state.value.account.busy && vm.state.value.account.problem != null }
-        assertFalse("the next call ends the note with the confirmation", vm.state.value.account.newPasswordNotHandedOver)
+        assertNull("the next call ends the note with the confirmation", vm.state.value.account.newPasswordNotHandedOver)
+    }
+
+    // ----- the third review's B1: the password screen was left while its change was on its way -----
+
+    private fun passwordAnswer() = ok(
+        JSONObject().put("user", JSONObject().put("id", TestAccounts.SESSION.userId).put("username", TestAccounts.SESSION.username)
+            .put("displayName", TestAccounts.SESSION.displayName).put("createdAt", "2026-11-17T10:00:00Z").put("passwordTemporary", false))
+    )
+
+    @Test fun aPasswordScreenLeftWhileTheChangeIsOnItsWayIsNamedOnceTheServerConfirmsIt() {
+        TestAccounts.seed(context)
+        val held = CountDownLatch(1)
+        on("PUT /me/password") { held.await(10, TimeUnit.SECONDS); passwordAnswer() }
+        val vm = viewModel()
+        vm.changePassword("eski şifre 12345", "yeni şifre 67890")
+        await("the request") { seen.any { it.key == "PUT /me/password" } }
+        // The screen goes: it says so and stops the call's busy repeats. The request itself goes on.
+        vm.newPasswordNotHandedOver(PasswordNotHandedOver.SCREEN_LEFT)
+        vm.cancelAccountCall()
+        assertNull("the server has not confirmed anything yet", vm.state.value.account.newPasswordNotHandedOver)
+        held.countDown()
+        await("the answer") { !vm.state.value.account.busy }
+        assertEquals(AccountChange.PASSWORD, vm.state.value.account.confirmed)
+        assertEquals(PasswordNotHandedOver.SCREEN_LEFT, vm.state.value.account.newPasswordNotHandedOver)
+        vm.clearAccountProblem()
+        assertNull(vm.state.value.account.newPasswordNotHandedOver)
+
+        // A screen that goes after the confirmation arrived, before it could commit, is named at once.
+        vm.changePassword("yeni şifre 67890", "bir başka şifre 1")
+        await("the second answer") { !vm.state.value.account.busy && vm.state.value.account.confirmed == AccountChange.PASSWORD }
+        vm.newPasswordNotHandedOver(PasswordNotHandedOver.SCREEN_LEFT)
+        assertEquals(PasswordNotHandedOver.SCREEN_LEFT, vm.state.value.account.newPasswordNotHandedOver)
+    }
+
+    @Test fun aPasswordScreenLeftBeforeARefusalNamesNeitherItNorALaterChange() {
+        TestAccounts.seed(context)
+        val held = CountDownLatch(1)
+        var changes = 0
+        on("PUT /me/password") { if (++changes == 1) { held.await(10, TimeUnit.SECONDS); refuse(403, "PASSWORD_WRONG") } else passwordAnswer() }
+        val vm = viewModel()
+        vm.changePassword("yanlış şifre 1234", "yeni şifre 67890")
+        await("the request") { seen.any { it.key == "PUT /me/password" } }
+        vm.newPasswordNotHandedOver(PasswordNotHandedOver.SCREEN_LEFT)
+        held.countDown()
+        await("the refusal") { !vm.state.value.account.busy }
+        assertEquals(AuthProblem.PasswordWrong, vm.state.value.account.problem)
+        assertNull(vm.state.value.account.newPasswordNotHandedOver)
+        // The next change comes from a new screen, which hands its password over itself.
+        vm.changePassword("eski şifre 12345", "yeni şifre 67890")
+        await("the confirmation") { !vm.state.value.account.busy && vm.state.value.account.confirmed == AccountChange.PASSWORD }
+        assertNull("the left screen speaks only for its own call", vm.state.value.account.newPasswordNotHandedOver)
     }
 
     @Test fun aWrongCurrentPasswordChangesNothing() {

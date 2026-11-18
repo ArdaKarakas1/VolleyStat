@@ -155,4 +155,57 @@ class AccountTextsTest {
             }
         }
     }
+
+    /**
+     * The third review's B3: account_refused says that the server changed nothing, which the app knows only for a
+     * 4xx. After a 5xx, or an answer the app can not read for a call that changes something, the app does not know
+     * whether the server made the change, and the text says so.
+     */
+    @Test fun anAnswerThatLeavesTheOutcomeUnknownNeverSaysThatTheServerChangedNothing() {
+        fun failure(status: Int, code: String) = AuthProblem.of(com.voleybolveveleybol.volleystat.data.ApiException(status, code, code, org.json.JSONObject()))
+        val unknown = string(R.string.account_outcome_unknown)
+        val changing = listOf(AccountAction.REGISTER, AccountAction.DISPLAY_NAME, AccountAction.PASSWORD, AccountAction.DELETE)
+        (changing + AccountAction.LOGIN).forEach { action ->
+            assertEquals("$action, a 500 with the envelope", unknown, text(failure(500, "INTERNAL"), action))
+            assertEquals("$action, a 502 without it", unknown, text(failure(502, "HTTP_502"), action))
+            assertEquals("$action, a 4xx changed nothing", string(R.string.account_refused), text(failure(409, "SOMETHING_NEW"), action))
+        }
+        changing.forEach { action ->
+            assertEquals("$action, an answer the app can not read", string(R.string.account_unexpected_change), text(AuthProblem.UnexpectedAnswer, action))
+        }
+        // A login changes nothing the user asked for: the old text stays.
+        assertEquals(string(R.string.account_unexpected), text(AuthProblem.UnexpectedAnswer, AccountAction.LOGIN))
+        // A logout keeps its own text: the session stays on the phone, whatever the server did.
+        assertEquals(string(R.string.logout_not_confirmed, string(R.string.action_logout_anyway)), text(failure(500, "INTERNAL"), AccountAction.LOGOUT))
+        listOf(unknown, string(R.string.account_unexpected_change)).forEach {
+            assertTrue(it.contains("bilmiyor"))
+            assertFalse(it.contains("değiştirmedi"))
+        }
+    }
+
+    /**
+     * The third review's B4: the login screen of a phone names an account whose deletion got no answer, to whoever
+     * holds the phone. The hint of the register form promises only what holds: the app shows the username on the
+     * phones the user logged in on, and the server sends it to no other user.
+     */
+    @Test fun theUsernameHintPromisesOnlyWhatTheAppAndTheServerKeep() {
+        val hint = string(R.string.register_username_hint)
+        assertFalse(hint, hint.contains("senden başka kimse"))
+        assertTrue(hint, hint.contains("yalnız giriş yaptığın telefonlarda"))
+        assertTrue(hint, hint.contains("Sunucu kullanıcı adını başka kullanıcılara göndermez."))
+        assertTrue("the rule of the characters stays", hint.endsWith("Kullanıcı adı küçük harf, rakam, nokta ve alt çizgi taşıyabilir."))
+        // The texts that name another account's username on the login screen are why the old promise did not hold.
+        assertTrue(string(R.string.deletion_unconfirmed, "ali", "x").contains("ali"))
+    }
+
+    /**
+     * The note about a new password edited while the change waited names who tapped the button. "Sunucu ... düğmesine
+     * dokunduğunda" would read as if the server had tapped it (turkce-insansi-metin: every sentence names its actor).
+     */
+    @Test fun theNoteAboutAnEditedNewPasswordSaysThatTheUserTappedTheButtonAndTheServerSavedThePassword() {
+        val button = string(R.string.action_change_password)
+        val note = string(R.string.password_not_handed_over_edited, button)
+        assertTrue(note, note.contains("Sen $button düğmesine dokunduğunda sunucu alanda yazan şifreyi yeni şifre olarak kaydetti."))
+        assertFalse(note, note.contains("Sunucu yeni şifre olarak $button"))
+    }
 }

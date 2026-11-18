@@ -221,7 +221,16 @@ class AuthApiTest {
         assertEquals(AuthProblem.DisplayNameInvalid, problemOf(error(422, "DISPLAY_NAME_INVALID")))
         assertEquals(AuthProblem.PasswordWrong, problemOf(error(403, "PASSWORD_WRONG")))
         assertEquals(AuthProblem.Refused(422, "VALIDATION_ERROR"), problemOf(error(422, "VALIDATION_ERROR")))
-        assertEquals(AuthProblem.Refused(500, "INTERNAL"), problemOf(error(500, "INTERNAL")))
+        // A 5xx may come after the server made the change, so it is no refusal that changed nothing (third review, B3).
+        assertEquals(AuthProblem.ServerFailed(500), problemOf(error(500, "INTERNAL")))
+    }
+
+    @Test fun aServerErrorWithOrWithoutTheEnvelopeLeavesTheOutcomeUnknown() {
+        assertEquals(AuthProblem.ServerFailed(500), problemOf(error(500, "INTERNAL")) { it.deleteAccount("uzun bir şifre 42") })
+        assertEquals(AuthProblem.ServerFailed(502), problemOf(MockResponse().setResponseCode(502).setBody("Bad Gateway")))
+        assertEquals(AuthProblem.ServerFailed(500), problemOf(MockResponse().setResponseCode(500)) { it.changePassword("eski bir şifre 1", "yeni bir şifre 2") })
+        // SERVER_BUSY comes before the server counts or writes anything: the view model asks again.
+        assertEquals(AuthProblem.ServerBusy(1), problemOf(error(503, "SERVER_BUSY", headers = mapOf("Retry-After" to "1"))))
     }
 
     @Test fun aClosedSignUpNamesItsReason() {

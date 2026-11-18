@@ -394,6 +394,8 @@ fun VolleyStatApp(
                 StartScreen(
                     onCreateAccount = { viewModel.clearAccountProblem(); go(Routes.REGISTER) },
                     onLogin = { viewModel.clearAccountProblem(); go(Routes.LOGIN) },
+                    // A release build has no server address until the hosting slice: no form of this screen can work there.
+                    serverConfigured = state.serverConfigured,
                 )
             }
             composable(Routes.LOGIN) {
@@ -467,11 +469,15 @@ fun VolleyStatApp(
             }
             composable(Routes.PASSWORD) {
                 StopAccountCallOnLeave(viewModel)
+                val activity = LocalActivity.current
                 // A confirmed change closes the screen, and the profile says what the server did.
                 LaunchedEffect(state.account.confirmed) { if (state.account.confirmed == AccountChange.PASSWORD) leave(Routes.PASSWORD) }
                 PasswordChangeScreen(
                     state.account, viewModel::changePassword, onBack = { viewModel.clearAccountProblem(); nav.popBackStack() },
                     onNewPasswordNotHandedOver = viewModel::newPasswordNotHandedOver,
+                    // A screen Android rebuilds comes back and speaks for itself at the confirmation (R2-D). A screen the user
+                    // left does not, so the view model names the change when it is confirmed (third review, B1).
+                    onGoneWithoutHandingOver = { reason -> if (activity?.isChangingConfigurations != true) viewModel.newPasswordNotHandedOver(reason) },
                 )
             }
             composable(Routes.DELETE_ACCOUNT) {

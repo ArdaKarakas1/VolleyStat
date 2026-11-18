@@ -16,7 +16,7 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-/** Seals the files that hold a secret or name an account (session.bin, device.bin, deletions.bin; design 10.3). */
+/** Seals the files that hold a secret or name an account (session.bin, device.bin, deletions.bin, registrations.bin; design 10.3). */
 interface SessionCipher {
     fun seal(plain: ByteArray): ByteArray
 
@@ -156,7 +156,7 @@ class KeystoreSessionCipher(private val alias: String = KEY_ALIAS) : SessionCiph
 /**
  * Whether [error] shows that the keystore can never use the session key again: the key was
  * permanently invalidated, is gone, or its blob is corrupted. Only such a failure costs the key and
- * with it session.bin, device.bin and the usernames of deletions.bin.
+ * with it session.bin, device.bin, the usernames of deletions.bin and the marks of registrations.bin.
  *
  * The framework's own isTransientFailure() is not asked: it calls SYSTEM_ERROR, BACKEND_BUSY and
  * OPERATION_BUSY not transient, and those are exactly the errors that pass. The public error code

@@ -252,7 +252,7 @@ class DeviceTokenStoreTest {
         assertEquals(listOf("u-1" to null), DeletionDoubtStore(file, cipher).load())
     }
 
-    @Test fun aKeystoreThatCanNotOpenTheUsernamesNowKeepsEveryDoubtAndLeavesTheSealedFileAsItIs() {
+    @Test fun aKeystoreThatCanNotOpenTheUsernamesNowKeepsEveryDoubtAndANewDoubtLeavesTheSealedFileAsItIs() {
         DeletionDoubtStore(file, cipher).add("user-ali", "ali")
         val sealed = file.readBytes()
         val flaky = FlakyCipher(cipher, failures = 2) { java.security.KeyStoreException("busy") }
@@ -263,11 +263,12 @@ class DeviceTokenStoreTest {
         assertEquals(listOf("user-veli" to null, "user-ali" to "ali"), DeletionDoubtStore(file, cipher).load())
         flaky.failures = 2
         assertEquals("a load that can not open the file gives the accounts without their usernames", listOf("user-veli" to null, "user-ali" to null), store.load())
-        // A doubt that ends leaves the list even while the keystore can not open the usernames.
+        // A doubt that ends leaves the list even while the keystore can not open the usernames. The sealed file
+        // still names ali and can not be rewritten now, so it goes (third checker's C1).
         flaky.failures = 2
         store.remove("user-ali")
         assertEquals(listOf("user-veli" to null), DeletionDoubtStore(file, cipher).load())
-        org.junit.Assert.assertArrayEquals(sealed, file.readBytes())
+        assertFalse("no sealed file stays behind that still names ali", file.exists())
     }
 
     @Test fun theListOfAPhoneThatKeptOnlyTheSealedFileIsStillRead() {
@@ -326,6 +327,119 @@ class DeviceTokenStoreTest {
         org.junit.Assert.assertArrayEquals(sealed, file.readBytes())
         assertEquals("{\"version\":1,\"accou", ids.readText())
         assertEquals("once the keystore opens it, every account is there", listOf("user-veli" to "veli", "user-ali" to "ali"), DeletionDoubtStore(file, cipher).load())
+    }
+
+    // The third checker's C1: a damaged deletions.ids falls back to deletions.bin, so deletions.bin must never name an
+    // account whose doubt already ended. Such an account is alive (it logged in again), and Telefondan Sil would
+    // delete its matches and recordings.
+
+    /** The real cipher, except that every open and seal fails while [failing] is true, as a keystore that can not work now. */
+    private class Switchable(private val inner: SessionCipher, @Volatile var failing: Boolean = false) : SessionCipher {
+        override fun seal(plain: ByteArray): ByteArray { if (failing) throw java.security.KeyStoreException("busy"); return inner.seal(plain) }
+        override fun open(sealed: ByteArray): ByteArray { if (failing) throw java.security.KeyStoreException("busy"); return inner.open(sealed) }
+    }
+
+    @Test fun aDoubtThatEndsWhileTheKeystoreCanNotOpenTheUsernamesNeverComesBackFromTheSealedList() {
+        val keystore = Switchable(cipher)
+        DeletionDoubtStore(file, keystore).apply {
+            add("user-ali", "ali")
+            add("user-veli", "veli")
+        }
+        // Ali logs in again, so his doubt ends; the keystore can not work at that moment.
+        keystore.failing = true
+        DeletionDoubtStore(file, keystore).remove("user-ali")
+        keystore.failing = false
+        assertFalse("no sealed list stays behind that still names ali", file.exists())
+        assertEquals("veli stays in doubt and loses only his username", listOf("user-veli" to null), DeletionDoubtStore(file, keystore).load())
+        ids.writeText("{\"version\":1,\"accou")
+        val afterDamage = DeletionDoubtStore(file, keystore).load()
+        assertTrue("ali's ended doubt never comes back", afterDamage.none { it.first == "user-ali" })
+        // The cost ADR-0119 names: with the plain list damaged as well, the phone no longer knows veli's doubt either.
+        assertEquals(emptyList<Pair<String, String?>>(), afterDamage)
+    }
+
+    @Test fun aDoubtThatEndsWhileTheKeystoreCanOpenButNotSealTheUsernamesNeverComesBackFromTheSealedList() {
+        DeletionDoubtStore(file, cipher).apply {
+            add("user-ali", "ali")
+            add("user-veli", "veli")
+        }
+        val sealFails = object : SessionCipher {
+            override fun seal(plain: ByteArray): ByteArray = throw java.security.KeyStoreException("busy")
+            override fun open(sealed: ByteArray): ByteArray = cipher.open(sealed)
+        }
+        DeletionDoubtStore(file, sealFails).remove("user-ali")
+        assertFalse("no sealed list stays behind that still names ali", file.exists())
+        assertEquals("veli stays in doubt and loses only his username", listOf("user-veli" to null), DeletionDoubtStore(file, cipher).load())
+        ids.writeText("{\"version\":1,\"accou")
+        assertTrue("ali's ended doubt never comes back", DeletionDoubtStore(file, cipher).load().none { it.first == "user-ali" })
+    }
+
+    @Test fun aDoubtThatEndsLeavesTheSealedListBeforeThePlainOneSoNoMomentLeavesItOnlyInTheSealedList() {
+        DeletionDoubtStore(file, cipher).apply {
+            add("user-ali", "ali")
+            add("user-veli", "veli")
+        }
+        // A process that ends between the two writes leaves the files as they were when the new sealed list was made.
+        val plainListAtTheSeal = mutableListOf<String>()
+        val witness = object : SessionCipher {
+            override fun seal(plain: ByteArray): ByteArray { plainListAtTheSeal += ids.readText(); return cipher.seal(plain) }
+            override fun open(sealed: ByteArray): ByteArray = cipher.open(sealed)
+        }
+        DeletionDoubtStore(file, witness).remove("user-ali")
+        assertEquals(1, plainListAtTheSeal.size)
+        assertTrue("deletions.ids still named ali while the sealed list was rewritten without him", plainListAtTheSeal.single().contains("user-ali"))
+        assertEquals(listOf("user-veli" to "veli"), DeletionDoubtStore(file, cipher).load())
+        assertFalse(ids.readText().contains("user-ali"))
+    }
+
+    // The third review's A1: registrations.bin keeps the usernames whose registration got no answer.
+
+    private val marks get() = File(folder.root, "registrations.bin")
+
+    @Test fun theMarksOfLostRegistrationsAreKeptSealedByDigestAndOneLeavesWithoutTheOthers() {
+        UnansweredRegistrationStore(marks, cipher).apply {
+            add("cagri.ozturk")
+            add("veli")
+            add("veli")
+        }
+        assertEquals(setOf(sha256Hex("cagri.ozturk"), sha256Hex("veli")), UnansweredRegistrationStore(marks, cipher).load())
+        val text = String(marks.readBytes(), Charsets.ISO_8859_1)
+        assertFalse(text.contains("cagri"))
+        assertFalse("the sealed file shows not even the digest", text.contains(sha256Hex("cagri.ozturk")))
+        UnansweredRegistrationStore(marks, cipher).remove("cagri.ozturk")
+        assertEquals(setOf(sha256Hex("veli")), UnansweredRegistrationStore(marks, cipher).load())
+        UnansweredRegistrationStore(marks, cipher).remove("ayse")
+        UnansweredRegistrationStore(marks, cipher).remove("veli")
+        assertFalse("the last mark takes the file with it", marks.exists())
+        assertTrue(UnansweredRegistrationStore(marks, cipher).load().isEmpty())
+    }
+
+    @Test fun aMarkIsKeptOnlyAsTheDigestOfTheUsername() {
+        UnansweredRegistrationStore(marks, com.voleybolveveleybol.volleystat.PlainSessionCipher).add("ali")
+        val text = marks.readText()
+        assertFalse(text.contains("\"ali\""))
+        assertTrue(text.contains(sha256Hex("ali")))
+    }
+
+    @Test fun aKeystoreThatCanNotOpenTheMarksNowLeavesTheFileAsItIs() {
+        UnansweredRegistrationStore(marks, cipher).add("ali")
+        val before = marks.readBytes()
+        val flaky = FlakyCipher(cipher, failures = 2) { java.security.KeyStoreException("busy") }
+        assertTrue("an open that fails twice reads as no mark", UnansweredRegistrationStore(marks, flaky).load().isEmpty())
+        flaky.failures = 2
+        assertTrue(runCatching { UnansweredRegistrationStore(marks, flaky).add("veli") }.isFailure)
+        flaky.failures = 2
+        assertTrue(runCatching { UnansweredRegistrationStore(marks, flaky).remove("ali") }.isFailure)
+        org.junit.Assert.assertArrayEquals(before, marks.readBytes())
+        flaky.failures = 1
+        assertEquals("one failed open is tried again", setOf(sha256Hex("ali")), UnansweredRegistrationStore(marks, flaky).load())
+    }
+
+    @Test fun aDamagedFileOfMarksHoldsNoneAndTheNextMarkStillGetsSaved() {
+        marks.writeBytes(ByteArray(30) { 7 })
+        assertTrue(UnansweredRegistrationStore(marks, cipher).load().isEmpty())
+        UnansweredRegistrationStore(marks, cipher).add("ali")
+        assertEquals(setOf(sha256Hex("ali")), UnansweredRegistrationStore(marks, cipher).load())
     }
 
     private fun sha256Hex(text: String) =

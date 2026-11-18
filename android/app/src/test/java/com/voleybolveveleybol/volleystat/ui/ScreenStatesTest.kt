@@ -715,6 +715,28 @@ class ScreenStatesTest {
         assertFalse(shown("Kod Gir"))
     }
 
+    /** The third review's B5: a release build has no server address, so the start screen says what that means and opens no form. */
+    @Test fun aStartScreenWithoutAServerSaysSoAndItsButtonsOpenNoForm() {
+        var created = 0
+        var login = 0
+        show { StartScreen(onCreateAccount = { created++ }, onLogin = { login++ }, serverConfigured = false) }
+        compose.onNodeWithText(text(R.string.server_none)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.start_no_server)).assertIsDisplayed()
+        assertFalse("no promise of an account or a login", shown(text(R.string.start_body)))
+        compose.onNode(hasClickAction() and hasText(text(R.string.action_create_account))).assertIsNotEnabled().performClick()
+        compose.onNode(hasClickAction() and hasText(text(R.string.action_login))).assertIsNotEnabled().performClick()
+        assertEquals(0 to 0, created to login)
+    }
+
+    @Test fun aStartScreenWithAServerSaysNothingAboutAMissingOne() {
+        show { StartScreen(onCreateAccount = {}, onLogin = {}, serverConfigured = true) }
+        compose.onNodeWithText(text(R.string.start_body)).assertIsDisplayed()
+        assertFalse(shown(text(R.string.server_none)))
+        assertFalse(shown(text(R.string.start_no_server)))
+        compose.onNode(hasClickAction() and hasText(text(R.string.action_create_account))).assertIsEnabled()
+        compose.onNode(hasClickAction() and hasText(text(R.string.action_login))).assertIsEnabled()
+    }
+
     @Test fun theLoginSendsWhatWasTypedOnlyWithBothFieldsAndCommitsTheAutofill() {
         val sent = mutableListOf<Pair<String, String>>()
         val autofill = CountingAutofill()

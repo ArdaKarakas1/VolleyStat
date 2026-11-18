@@ -26,7 +26,14 @@ import java.net.URL
  * A reply the server sent with an error status. [code] is the server's error code. [retryAfterSeconds]
  * is the server's Retry-After header, when it sent one (429 and 503).
  */
-class ApiException(val status: Int, val code: String, message: String, val details: JSONObject, val retryAfterSeconds: Int? = null) : IOException(message)
+class ApiException(val status: Int, val code: String, message: String, val details: JSONObject, val retryAfterSeconds: Int? = null) : IOException(message) {
+    /**
+     * The answer leaves open whether the server made the change: a 5xx other than SERVER_BUSY, a 3xx,
+     * or a success the app can not read (UNEXPECTED_ANSWER). A 4xx comes before the server changes
+     * anything, and SERVER_BUSY before it counts or writes anything (third review, B3).
+     */
+    val leavesOutcomeUnknown: Boolean get() = status !in 400..499 && code != "SERVER_BUSY"
+}
 
 /** An account as the server describes it (docs/API_V1.md, section 10). */
 data class AccountUser(val id: String, val username: String, val displayName: String, val passwordTemporary: Boolean = false)

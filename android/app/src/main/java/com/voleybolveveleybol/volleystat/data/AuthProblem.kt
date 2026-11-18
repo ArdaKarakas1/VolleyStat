@@ -60,8 +60,14 @@ sealed interface AuthProblem {
     data object DisplayNameInvalid : AuthProblem
     /** 403 PASSWORD_WRONG: the current password given for a password change or a deletion is wrong. */
     data object PasswordWrong : AuthProblem
-    /** Any other refusal. The server answered and changed nothing. */
+    /** Any other refusal, a 4xx: the server answered before it changed anything. */
     data class Refused(val status: Int, val code: String) : AuthProblem
+    /**
+     * A 5xx other than SERVER_BUSY, with the API's envelope or without it: the server, or something on
+     * the way to it, failed while it had the request. The server may have made the change before it
+     * failed, so the app does not know what changed (third review, B3).
+     */
+    data class ServerFailed(val status: Int) : AuthProblem
 
     companion object {
         fun of(error: Throwable): AuthProblem = when (error) {
@@ -95,7 +101,13 @@ sealed interface AuthProblem {
                 "NOT_FOUND", "METHOD_NOT_ALLOWED" -> ServerOutdated
                 // No envelope, or an answer that is not JSON: something else answered on that address.
                 "UNEXPECTED_ANSWER" -> UnexpectedAnswer
-                else -> if (error.code.startsWith("HTTP_")) UnexpectedAnswer else Refused(error.status, error.code)
+                else -> when {
+                    // The server, or something on the way to it, failed while it had the request: it may have made the change.
+                    error.status >= 500 -> ServerFailed(error.status)
+                    // No envelope, or an envelope with a status this API never sends with one (a 3xx): not this API's refusal.
+                    error.status !in 400..499 || error.code.startsWith("HTTP_") -> UnexpectedAnswer
+                    else -> Refused(error.status, error.code)
+                }
             }
         }
 

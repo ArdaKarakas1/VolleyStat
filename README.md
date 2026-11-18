@@ -59,7 +59,7 @@ ffmpeg -f lavfi -i testsrc2=size=1280x720:rate=30 -t 5 -c:v libx264 -pix_fmt yuv
 1. `android/` klasörünü Android Studio ile açın (JDK 17, Android SDK 36).
 2. Arka ucu `python -m app --analyzer demo` komutuyla başlatın. Emülatör bu sunucuya `10.0.2.2:8000` adresinden ulaşır. USB ile bağlı telefon için önce `adb reverse tcp:8000 tcp:8000` komutunu çalıştırın ve giriş ya da kayıt ekranının altındaki "USB ile bağlı telefon" seçeneğini seçin.
 3. Uygulama 0.8 açılışta bir hesap ister. Hesap oluşturmak için `python -m app.admin signup-code` komutuyla bir kayıt kodu çıkarın ve kodu kayıt ekranındaki "Kayıt kodu" alanına yazın.
-4. `app` modülünün **debug** sürümünü çalıştırın. Release sürümünde sunucu adresi bilerek boştur.
+4. `app` modülünün **debug** sürümünü çalıştırın. Release sürümünde sunucu adresi bilerek boştur. Bu yüzden kişi release sürümünde hesap açamaz, giriş yapamaz ve başlangıç ekranını geçemez. Ekip sunucuyu internete açan dilimde release sürümüne bir sunucu adresi verene kadar bu sınır sürer. Uygulama 0.7'nin release sürümü maçları, kadroları ve kamera kayıtlarını telefonda hesapsız tutuyordu. Bu veri telefonda kalır, ama kişi 0.8'in release sürümünde veriye uygulamadan ulaşamaz.
 
 Demo analizörle gördüğünüz ralli aralıkları uydurmadır. Uygulama bu veriyi her ekranda DEMO etiketiyle gösterir.
 

@@ -75,6 +75,9 @@ class AccountStandIn : AutoCloseable {
 
     fun exists(username: String) = accounts.containsKey(username)
 
+    /** Whether [password] is the password the stand-in now holds for [username]. */
+    fun hasPassword(username: String, password: String) = accounts[username]?.password == password
+
     private fun route(request: RecordedRequest): MockResponse {
         val path = request.requestUrl!!.encodedPath.removePrefix("/v1")
         val authorization = request.getHeader("Authorization")

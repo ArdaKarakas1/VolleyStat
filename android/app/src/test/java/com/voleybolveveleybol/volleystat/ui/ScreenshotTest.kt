@@ -392,6 +392,12 @@ class ScreenshotTest {
         }
         shot("14a_baslangic") { StartScreen({}, {}) }
         shot("14a_baslangic_koyu", dark = true) { StartScreen({}, {}) }
+        // A build without a server address (a release build) can neither open an account nor log in (third review, B5).
+        shot("14a_baslangic_sunucusuz") { StartScreen({}, {}, serverConfigured = false) }
+        shot("14a_baslangic_sunucusuz_koyu", dark = true) { StartScreen({}, {}, serverConfigured = false) }
+        shotOn("kucuk_buyuk_yazi_14a_baslangic_sunucusuz", "+w320dp-h568dp-port", fontScale = 1.5f) { StartScreen({}, {}, serverConfigured = false) }
+        // The same width and text size in a tall window: the whole text, below the fold of a small phone.
+        shotOn("kucuk_buyuk_yazi_14a_baslangic_sunucusuz_tamami", "+w320dp-h900dp-port", fontScale = 1.5f) { StartScreen({}, {}, serverConfigured = false) }
         shot("14_giris", content = login())
         shot("14_giris_koyu", dark = true, content = login())
         shot("14_giris_hata", content = login(AccountUi(problem = AuthProblem.LoginFailed)))
@@ -445,9 +451,18 @@ class ScreenshotTest {
         }
         shotOn("profil_hesap_koyu", "+w411dp-h1100dp-port", dark = true) { ProfileScreen(state, "0.8.0", {}, {}, {}, { true }) }
         // A password change confirmed after Android rebuilt its screen: the password manager did not get it (second review, R2-D).
-        val notHandedOver = state.copy(account = state.account.copy(confirmed = AccountChange.PASSWORD, newPasswordNotHandedOver = true))
+        val notHandedOver = state.copy(account = state.account.copy(confirmed = AccountChange.PASSWORD, newPasswordNotHandedOver = com.voleybolveveleybol.volleystat.PasswordNotHandedOver.SCREEN_REBUILT))
         shotOn("profil_sifre_iletilemedi", "+w411dp-h1300dp-port") { ProfileScreen(notHandedOver, "0.8.0", {}, {}, {}, { true }) }
         shotOn("profil_sifre_iletilemedi_koyu", "+w411dp-h1300dp-port", dark = true) { ProfileScreen(notHandedOver, "0.8.0", {}, {}, {}, { true }) }
         shotOn("kucuk_buyuk_yazi_profil_sifre_iletilemedi", "+w320dp-h1900dp-port", fontScale = 1.5f) { ProfileScreen(notHandedOver, "0.8.0", {}, {}, {}, { true }) }
+        // The user left the screen while the change was on its way, or edited the new password meanwhile (third review, B1 and B2).
+        fun notHandedOver(reason: com.voleybolveveleybol.volleystat.PasswordNotHandedOver) =
+            state.copy(account = state.account.copy(confirmed = AccountChange.PASSWORD, newPasswordNotHandedOver = reason))
+        val left = notHandedOver(com.voleybolveveleybol.volleystat.PasswordNotHandedOver.SCREEN_LEFT)
+        val edited = notHandedOver(com.voleybolveveleybol.volleystat.PasswordNotHandedOver.PASSWORD_EDITED)
+        shotOn("profil_sifre_iletilemedi_cikildi", "+w411dp-h1300dp-port") { ProfileScreen(left, "0.8.0", {}, {}, {}, { true }) }
+        shotOn("profil_sifre_iletilemedi_degistirildi", "+w411dp-h1300dp-port") { ProfileScreen(edited, "0.8.0", {}, {}, {}, { true }) }
+        shotOn("profil_sifre_iletilemedi_degistirildi_koyu", "+w411dp-h1300dp-port", dark = true) { ProfileScreen(edited, "0.8.0", {}, {}, {}, { true }) }
+        shotOn("kucuk_buyuk_yazi_profil_sifre_iletilemedi_degistirildi", "+w320dp-h2200dp-port", fontScale = 1.5f) { ProfileScreen(edited, "0.8.0", {}, {}, {}, { true }) }
     }
 }

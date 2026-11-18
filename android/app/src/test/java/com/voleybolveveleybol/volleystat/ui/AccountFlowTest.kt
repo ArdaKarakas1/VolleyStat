@@ -3,6 +3,7 @@ package com.voleybolveveleybol.volleystat.ui
 import android.app.Application
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
@@ -376,5 +377,106 @@ class AccountFlowTest {
         waitFor(text(R.string.password_changed))
         compose.onNodeWithText(text(R.string.password_not_handed_over)).performScrollTo().assertIsDisplayed()
         assertFalse("the password screen closed", shown(text(R.string.field_current_password)))
+    }
+
+    /**
+     * The wiring tells the view model nothing when Android rebuilds the password screen: the user did not leave it, and the
+     * rebuilt screen names its own reason at the confirmation (R2-D). The test reads the view model at the moment the
+     * server's confirmation reached it, before the main thread runs the rebuilt screen again: no reason stands there yet.
+     */
+    @Test fun aPasswordScreenThatAndroidRebuildsNeverTellsTheViewModelThatTheUserLeft() {
+        val (vm, held) = sendAHeldPasswordChange()
+        scenario!!.recreate()
+        compose.waitForIdle()
+        held.countDown()
+        // The confirmation reaches the view model off the main thread; the test thread is the main thread and only waits.
+        val deadline = System.currentTimeMillis() + 10_000
+        while (vm.state.value.account.confirmed != com.voleybolveveleybol.volleystat.AccountChange.PASSWORD && System.currentTimeMillis() < deadline) Thread.sleep(20)
+        assertEquals(com.voleybolveveleybol.volleystat.AccountChange.PASSWORD, vm.state.value.account.confirmed)
+        assertNull("the rebuild said that the user left", vm.state.value.account.newPasswordNotHandedOver)
+        // The rebuilt screen then names the rebuild.
+        waitFor(text(R.string.password_changed))
+        compose.onNodeWithText(text(R.string.password_not_handed_over)).performScrollTo().assertIsDisplayed()
+        assertEquals(com.voleybolveveleybol.volleystat.PasswordNotHandedOver.SCREEN_REBUILT, vm.state.value.account.newPasswordNotHandedOver)
+    }
+
+    /** Opens Şifreyi Değiştir from the profile and sends a change the stand-in holds until the test lets it go. */
+    private fun sendAHeldPasswordChange(newPassword: String = "yeni ve uzun şifre 77"): Pair<AppViewModel, java.util.concurrent.CountDownLatch> {
+        standIn.add(TestAccounts.SESSION.username, TestAccounts.SESSION.displayName, PASSWORD, token = TestAccounts.SESSION.token, id = TestAccounts.SESSION.userId)
+        TestAccounts.seed(context)
+        val held = java.util.concurrent.CountDownLatch(1)
+        standIn.hold["PUT /me/password"] = held
+        val vm = launch()
+        tap(R.string.nav_profile)
+        button(R.string.action_change_password).performScrollTo().performClick()
+        field(R.string.field_current_password).performTextInput(PASSWORD)
+        field(R.string.field_new_password).performTextInput(newPassword)
+        button(R.string.action_change_password).performClick()
+        compose.waitUntil(10_000) { standIn.requests.any { it.first == "PUT /me/password" } }
+        return vm to held
+    }
+
+    /**
+     * The third review's B1: the user goes back while the change is on its way. The request goes on and the server
+     * changes the password. The screen that could commit it is gone, and the profile says so.
+     */
+    @Test fun aPasswordChangeLeftBySystemBackWhileOnItsWaySaysThePasswordManagerDidNotGetIt() {
+        val (vm, held) = sendAHeldPasswordChange()
+        scenario!!.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+        compose.waitForIdle()
+        assertFalse("the password screen is gone", shown(text(R.string.field_current_password)))
+        held.countDown()
+        waitFor(text(R.string.password_changed))
+        compose.onNodeWithText(text(R.string.password_not_handed_over_left)).performScrollTo().assertIsDisplayed()
+        assertFalse(shown(text(R.string.password_not_handed_over)))
+        assertEquals(com.voleybolveveleybol.volleystat.PasswordNotHandedOver.SCREEN_LEFT, vm.state.value.account.newPasswordNotHandedOver)
+        assertEquals("the server changed the password once", 1, standIn.requests.count { it.first == "PUT /me/password" })
+    }
+
+    @Test fun aPasswordChangeLeftByTheBackArrowWhileOnItsWaySaysThePasswordManagerDidNotGetIt() {
+        val (vm, held) = sendAHeldPasswordChange()
+        compose.onNode(hasClickAction() and androidx.compose.ui.test.hasContentDescription(text(R.string.action_back))).performClick()
+        compose.waitForIdle()
+        assertFalse("the password screen is gone", shown(text(R.string.field_current_password)))
+        held.countDown()
+        waitFor(text(R.string.password_changed))
+        compose.onNodeWithText(text(R.string.password_not_handed_over_left)).performScrollTo().assertIsDisplayed()
+        assertEquals(com.voleybolveveleybol.volleystat.PasswordNotHandedOver.SCREEN_LEFT, vm.state.value.account.newPasswordNotHandedOver)
+    }
+
+    /** The third review's B2: the new password is edited while the change waits. The server got the first text, so nothing is committed. */
+    @Test fun aNewPasswordEditedWhileTheChangeWaitsIsNamedOnTheProfile() {
+        val (vm, held) = sendAHeldPasswordChange("yeni ve uzun şifre 77")
+        field(R.string.field_new_password).performTextReplacement("başka ve uzun şifre 88")
+        held.countDown()
+        waitFor(text(R.string.password_changed))
+        compose.onNodeWithText(text(R.string.password_not_handed_over_edited, text(R.string.action_change_password))).performScrollTo().assertIsDisplayed()
+        assertEquals(com.voleybolveveleybol.volleystat.PasswordNotHandedOver.PASSWORD_EDITED, vm.state.value.account.newPasswordNotHandedOver)
+        assertTrue("the server holds the text that was sent", standIn.hasPassword(TestAccounts.SESSION.username, "yeni ve uzun şifre 77"))
+    }
+
+    /**
+     * The third review's B5: a release build has no server address (fail closed), so it can neither open an account
+     * nor log in. The start screen says so instead of the promise, and its buttons open no form that can not work.
+     */
+    @Test fun aBuildWithoutAServerSaysSoOnTheStartScreenAndOpensNoForm() {
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        val vm = launch()
+        compose.onNodeWithText(text(R.string.start_body)).assertIsDisplayed()
+        scenario!!.onActivity {
+            vm.baseUrlOverride = ""
+            vm.setServerTarget(com.voleybolveveleybol.volleystat.model.ServerTarget.EMULATOR)
+        }
+        compose.waitForIdle()
+        assertFalse(vm.state.value.serverConfigured)
+        compose.onNodeWithText(text(R.string.server_none)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.start_no_server)).assertIsDisplayed()
+        assertFalse("the start screen promises nothing the build can not do", shown(text(R.string.start_body)))
+        button(R.string.action_create_account).assertIsNotEnabled().performClick()
+        button(R.string.action_login).assertIsNotEnabled().performClick()
+        compose.waitForIdle()
+        assertFalse(shown(text(R.string.register_data)))
+        assertFalse(shown(text(R.string.login_intro)))
+        compose.onNodeWithText(text(R.string.start_no_server)).assertIsDisplayed()
     }
 }

@@ -8,6 +8,11 @@ import com.voleybolveveleybol.volleystat.Entry
 import com.voleybolveveleybol.volleystat.PlainSessionCipher
 import com.voleybolveveleybol.volleystat.TestAccounts
 import com.voleybolveveleybol.volleystat.model.Settings
+import okhttp3.mockwebserver.Dispatcher
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
+import okhttp3.mockwebserver.SocketPolicy
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -25,6 +30,8 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import java.io.File
 import java.io.IOException
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -155,5 +162,82 @@ class AccountE2eTest {
         assertFalse(folder.exists())
         token = null
         assertEquals(AuthProblem.LoginFailed, problemOf { api().login(username, password, null) })
+    }
+
+    /**
+     * The third review's A1 against the real server. A stand-in between the app and the server passes
+     * every request on and drops the first answer of the registration and of the login after the
+     * server acted on them. The registration opens the account and its answer is lost. The repeat
+     * meets the taken username, and the login that looks for the account loses its answer too. That
+     * says nothing about the account, so the third try looks again and finds it.
+     */
+    @Test fun aLostRegistrationIsFoundEvenWhenTheLoginThatLooksForItLosesItsAnswerToo() {
+        val context = ApplicationProvider.getApplicationContext<Application>()
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        val toDrop = mutableSetOf("POST /auth/register", "POST /auth/login")
+        val seen = CopyOnWriteArrayList<String>()
+        val proxy = MockWebServer()
+        proxy.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                val path = request.requestUrl!!.encodedPath.removePrefix("/v1")
+                val key = "${request.method} $path"
+                val (status, answer) = forward(request, path)
+                val drop = synchronized(toDrop) { toDrop.remove(key) }
+                seen += "$key $status${if (drop) " dropped" else ""}"
+                return if (drop) MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST) else answer
+            }
+        }
+        proxy.start()
+        try {
+            val vm = AppViewModel(context).also { it.baseUrlOverride = proxy.url("/v1").toString() }
+            repeat(3) { attempt ->
+                val before = seen.size
+                vm.register("E2E Kullanıcı", username, password, null)
+                val end = System.currentTimeMillis() + 20_000
+                while (vm.state.value.account.busy || seen.size == before) {
+                    check(System.currentTimeMillis() < end) { "timed out waiting for the answer to try ${attempt + 1}" }
+                    shadowOf(Looper.getMainLooper()).idle()
+                    Thread.sleep(20)
+                }
+                if (attempt < 2) assertEquals("try ${attempt + 1}", AuthProblem.Unreachable, vm.state.value.account.problem)
+            }
+            vm.state.value.account.user?.let { token = SessionStore(File(context.filesDir, "session.bin"), PlainSessionCipher).load()?.token }
+            assertEquals(
+                listOf(
+                    "POST /auth/register 201 dropped", "POST /auth/register 409", "POST /auth/login 200 dropped",
+                    "POST /auth/register 409", "POST /auth/login 200",
+                ),
+                seen,
+            )
+            assertEquals("the user keeps the username, and no second account opens", username, vm.state.value.account.user?.username)
+            assertNull(vm.state.value.account.problem)
+        } finally {
+            proxy.shutdown()
+            // The account goes at the end of the run, also when the app did not find it.
+            if (token == null) token = runCatching { api().login(username, password, null).token }.getOrNull()
+        }
+    }
+
+    /** Sends [request] on to the real server and returns its status and its answer, as the stand-in passes it back. */
+    private fun forward(request: RecordedRequest, path: String): Pair<Int, MockResponse> {
+        val connection = URL(url!!.trimEnd('/') + path).openConnection() as HttpURLConnection
+        try {
+            connection.requestMethod = request.method
+            connection.instanceFollowRedirects = false
+            request.getHeader("Authorization")?.let { connection.setRequestProperty("Authorization", it) }
+            val body = request.body.readByteArray()
+            if (request.method != "GET") {
+                connection.doOutput = true
+                connection.setRequestProperty("Content-Type", request.getHeader("Content-Type") ?: "application/json")
+                connection.outputStream.use { it.write(body) }
+            }
+            val status = connection.responseCode
+            val text = (if (status >= 400) connection.errorStream else connection.inputStream)?.use { it.readBytes() } ?: ByteArray(0)
+            val answer = MockResponse().setResponseCode(status).setBody(okio.Buffer().write(text))
+            listOf("Content-Type", "WWW-Authenticate", "Retry-After").forEach { name -> connection.getHeaderField(name)?.let { answer.setHeader(name, it) } }
+            return status to answer
+        } finally {
+            connection.disconnect()
+        }
     }
 }

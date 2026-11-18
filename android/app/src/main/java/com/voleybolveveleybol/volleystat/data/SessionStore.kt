@@ -21,10 +21,16 @@ data class Session(
      * session alive clears it (review finding S1).
      */
     val deletionUnanswered: Boolean = false,
+    /**
+     * The operator reset the password and the user signed in with the temporary one: Home says so
+     * until the user picks a new one (design 3.4). Every answer of the server about the user sets it.
+     */
+    val passwordTemporary: Boolean = false,
 ) {
     /** A session that reaches a log or a crash report never carries its token. */
     override fun toString() =
-        "Session(userId=$userId, username=$username, displayName=$displayName, expiresAt=$expiresAt, deletionUnanswered=$deletionUnanswered, token=<hidden>)"
+        "Session(userId=$userId, username=$username, displayName=$displayName, expiresAt=$expiresAt, deletionUnanswered=$deletionUnanswered, " +
+            "passwordTemporary=$passwordTemporary, token=<hidden>)"
 }
 
 /** Writes [bytes] to a temporary file next to [file] and then puts it in place, so a crash leaves the old file or the new one. */
@@ -61,6 +67,8 @@ class SessionStore(private val file: File, private val cipher: SessionCipher) {
             Session(
                 json.getString("token"), json.getString("userId"), json.getString("username"),
                 json.getString("displayName"), json.getString("expiresAt"), json.optBoolean("deletionUnanswered", false),
+                // A session.bin of the first rounds of this slice has no such field: its password counts as an ordinary one.
+                passwordTemporary = json.optBoolean("passwordTemporary", false),
             ).takeIf { it.token.isNotEmpty() && it.userId.isNotEmpty() }
         } catch (damaged: org.json.JSONException) {
             null
@@ -72,6 +80,7 @@ class SessionStore(private val file: File, private val cipher: SessionCipher) {
     fun save(session: Session) {
         val json = JSONObject().put("token", session.token).put("userId", session.userId).put("username", session.username)
             .put("displayName", session.displayName).put("expiresAt", session.expiresAt).put("deletionUnanswered", session.deletionUnanswered)
+            .put("passwordTemporary", session.passwordTemporary)
         replaceAtomically(file, cipher.seal(json.toString().toByteArray(Charsets.UTF_8)))
     }
 
@@ -154,7 +163,8 @@ private fun readSealed(file: File, cipher: SessionCipher): JSONObject {
  * sealed list stand in for it (see [held]). [file] (deletions.bin) keeps each
  * one's username for the text of the offer, sealed like session.bin. A username that can not be read
  * (a new keystore key, a damaged file, a keystore that fails now) leaves its account in doubt
- * without a name, and the offer then names no account.
+ * without a name, and the offer then names no account. deletions.bin never names an account that
+ * deletions.ids no longer holds (see [remove]).
  */
 class DeletionDoubtStore(
     private val file: File,
@@ -178,7 +188,12 @@ class DeletionDoubtStore(
         if (names != null && username != null) runCatching { writeNames(next, names + (userId to username)) }
     }
 
-    /** Throws when the phone can not write the list. A username the keystore can not open now stays sealed, unread. */
+    /**
+     * Throws when the phone can not write the list. The sealed list leaves [userId] before the plain one
+     * does, and a sealed list the keystore can not rewrite now is deleted: a damaged deletions.ids falls
+     * back to deletions.bin (see [held]), so deletions.bin must never name an account whose doubt ended
+     * (third checker's C1). The accounts still in doubt then lose only their usernames.
+     */
     @Synchronized
     fun remove(userId: String) {
         val names = runCatching { readNames() }.getOrNull()
@@ -190,8 +205,9 @@ class DeletionDoubtStore(
             ids.delete()
             return
         }
+        val resealed = names != null && runCatching { writeNames(next, names) }.isSuccess
+        if (!resealed) file.delete()
         writeIds(next)
-        if (names != null) runCatching { writeNames(next, names) }
     }
 
     /**
@@ -228,6 +244,48 @@ class DeletionDoubtStore(
             return
         }
         replaceAtomically(file, cipher.seal(JSONObject().put("accounts", org.json.JSONArray(known)).toString().toByteArray(Charsets.UTF_8)))
+    }
+}
+
+/**
+ * registrations.bin: the usernames whose registration got no answer (third review, A1). The server
+ * may have opened those accounts, so a repeat that meets a taken username or a spent code asks with
+ * a login whether the account is there. The file keys each username by its SHA-256, as device.bin
+ * does, and is sealed like session.bin: no plain file of the phone names the account, not even by
+ * its digest.
+ */
+class UnansweredRegistrationStore(private val file: File, private val cipher: SessionCipher) {
+
+    /** The digests of the marked usernames. A file the phone can not open now gives none, and stays as it is. */
+    fun load(): Set<String> = runCatching { read() }.getOrDefault(emptySet())
+
+    /** Marks [username]. Throws, and leaves the file as it was, when the phone can not open or seal the file now. */
+    @Synchronized
+    fun add(username: String) {
+        val marks = read()
+        val key = sha256Hex(username)
+        if (key !in marks) write(marks + key)
+    }
+
+    /** Takes the mark of [username] off. Throws, and leaves the file as it was, when the phone can not open or seal the file now. */
+    @Synchronized
+    fun remove(username: String) {
+        val marks = read()
+        val key = sha256Hex(username)
+        if (key in marks) write(marks - key)
+    }
+
+    private fun read(): Set<String> {
+        val marks = readSealed(file, cipher).optJSONArray("usernames") ?: return emptySet()
+        return (0 until marks.length()).map { marks.optString(it) }.filter { it.isNotEmpty() }.toSet()
+    }
+
+    private fun write(marks: Set<String>) {
+        if (marks.isEmpty()) {
+            file.delete()
+            return
+        }
+        replaceAtomically(file, cipher.seal(JSONObject().put("usernames", org.json.JSONArray(marks.toList())).toString().toByteArray(Charsets.UTF_8)))
     }
 }
 

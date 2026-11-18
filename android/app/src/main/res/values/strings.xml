@@ -571,6 +571,7 @@
          is signed in, registered, renamed or logged out only after the server confirmed it. Texts of design 10.8
          and 2.12 that speak of teams, invites or open matches are adapted: this app version has none of them. -->
     <string name="start_body">Uygulamayı kullanmak için bir hesabın olmalı. Hesabın yoksa Voleybol Ve Veleybol\'dan bir kayıt kodu alıp hesap oluşturabilirsin. Hesabın varsa giriş yapabilirsin.</string>
+    <string name="start_no_server">Bu yüzden uygulama hesap açamaz ve giriş yapamaz.</string>
     <string name="action_login">Giriş Yap</string>
     <string name="action_create_account">Hesap Oluştur</string>
     <string name="action_have_account">Hesabım Var</string>
@@ -613,7 +614,7 @@
     <string name="server_locked">Uygulama oturum açıkken sunucu seçimini değiştirmez. Başka bir sunucu seçmek için önce çıkış yapabilirsin.</string>
     <string name="register_data">Sunucu hesabın için kullanıcı adını, şifrenin özetini ve görünen adını saklar. Uygulama e-posta adresini ve telefon numaranı sormaz.</string>
     <string name="register_display_hint">Uygulama bu adı ana sayfadaki selamda gösterir. Sunucu bu adı şimdilik başka hiçbir kullanıcıya göstermez.</string>
-    <string name="register_username_hint">Kullanıcı adını uygulamada senden başka kimse görmez. Kullanıcı adı küçük harf, rakam, nokta ve alt çizgi taşıyabilir.</string>
+    <string name="register_username_hint">Uygulama kullanıcı adını yalnız giriş yaptığın telefonlarda gösterir. Sunucu kullanıcı adını başka kullanıcılara göndermez. Kullanıcı adı küçük harf, rakam, nokta ve alt çizgi taşıyabilir.</string>
     <string name="register_username_suggested">Uygulama kullanıcı adını görünen adından önerdi. İstersen kullanıcı adını değiştirebilirsin.</string>
     <string name="register_password_hint">Şifre en az 10 karakter olmalı ve kullanıcı adını içermemeli. Sunucu çok yaygın şifreleri kabul etmez.</string>
     <string name="register_code_hint">Kayıt kodunu Voleybol Ve Veleybol verir. Kodu büyük ya da küçük harfle, tireli ya da tiresiz yazabilirsin.</string>
@@ -650,6 +651,8 @@
     <string name="account_server_changed">Uygulama bu isteği şu an seçili olmayan bir sunucuya gönderdi ve gelen yanıtla oturum açmadı. Yeniden deneyebilirsin.</string>
     <string name="account_server_older">Sunucunun sürümü bu uygulamadan eski. Uygulama bu sunucuda hesap açamaz ve giriş yapamaz.</string>
     <string name="account_refused">Sunucu bu isteği kabul etmedi ve hiçbir şeyi değiştirmedi.</string>
+    <string name="account_outcome_unknown">Sunucu bir hata bildirdi. Uygulama sunucunun bu isteği yerine getirip getirmediğini bilmiyor. Biraz sonra yeniden deneyebilirsin.</string>
+    <string name="account_unexpected_change">Uygulama sunucunun yanıtını okuyamadı ve sunucunun bu isteği yerine getirip getirmediğini bilmiyor. Sunucu seçimini kontrol edip yeniden deneyebilirsin.</string>
     <!-- 503 SERVER_BUSY after the app's own repeats. %1$d is the number of times it sent the request. -->
     <string name="server_busy_gave_up">Uygulama isteği %1$d kez gönderdi ve sunucu her seferinde çok sayıda istek işlediğini bildirdi. Biraz sonra yeniden deneyebilirsin.</string>
 
@@ -676,6 +679,8 @@
     <string name="password_change_body">Sunucu yeni şifreyi kaydedince bu hesabın öteki bütün oturumlarını kapatır. Bu telefondaki oturumun açık kalır.</string>
     <string name="password_changed">Sunucu şifreni değiştirdi ve bu hesabın öteki bütün oturumlarını kapattı.</string>
     <string name="password_not_handed_over">Android şifre değiştirme ekranını sunucunun yanıtı gelmeden yeniden kurdu. Bu yüzden uygulama yeni şifreni şifre yöneticisine iletemedi. Şifre yöneticin bu hesabın eski şifresini tutuyorsa yeni şifreyi oraya sen yazabilirsin.</string>
+    <string name="password_not_handed_over_left">Şifre değiştirme ekranından sunucunun yanıtı gelmeden çıktın. Bu yüzden uygulama yeni şifreni şifre yöneticisine iletemedi. Şifre yöneticin bu hesabın eski şifresini tutuyorsa yeni şifreyi oraya sen yazabilirsin.</string>
+    <string name="password_not_handed_over_edited">Uygulama sunucunun yanıtını beklerken sen yeni şifre alanındaki yazıyı değiştirdin. Sen %1$s düğmesine dokunduğunda sunucu alanda yazan şifreyi yeni şifre olarak kaydetti. Alanda artık bu şifre yazmadığı için uygulama şifre yöneticisine hiçbir şifre iletmedi. Şifre yöneticin bu hesabın eski şifresini tutuyorsa sunucunun kaydettiği şifreyi oraya sen yazabilirsin.</string>
     <string name="action_logout">Çıkış Yap</string>
     <string name="logout_title">Çıkış yapmak istiyor musun?</string>
     <string name="logout_body">Uygulama bu hesabın maçlarını, kadrolarını ve kamera kayıtlarını bu telefonda saklar. Yeniden giriş yapınca hepsini yerinde bulursun.</string>

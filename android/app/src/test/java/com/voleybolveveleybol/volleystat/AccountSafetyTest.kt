@@ -354,6 +354,52 @@ class AccountSafetyTest {
         assertEquals(UnconfirmedDeletion(user.userId, user.username), vm.state.value.account.unconfirmedDeletion)
     }
 
+    /**
+     * An answer the app can not read (a 200 where the 204 belongs, or a redirect) may come after the deletion as a
+     * 5xx may: the mark stays, and the screen says that the app does not know whether the account is gone (ADR-0119).
+     */
+    @Test fun aDeletionAnswerTheAppCanNotReadKeepsTheMark() {
+        seedAccountWithData()
+        listOf(ok(JSONObject().put("deleted", true)), MockResponse().setResponseCode(302)).forEach { answer ->
+            on("POST /me/delete") { answer }
+            val sessions = SessionStore(File(files, "session.bin"), PlainSessionCipher)
+            sessions.save(sessions.load()!!.copy(deletionUnanswered = false))
+            val vm = viewModel()
+            seen.clear()
+            vm.deleteAccount(password)
+            await("the answer") { !vm.state.value.account.busy && seen.isNotEmpty() }
+            val problem = vm.state.value.account.problem!!
+            assertEquals(AuthProblem.UnexpectedAnswer, problem)
+            val shown = com.voleybolveveleybol.volleystat.ui.screens.accountProblemText(problem, com.voleybolveveleybol.volleystat.ui.screens.AccountAction.DELETE).id
+            assertEquals(R.string.account_unexpected_change, shown)
+            assertTrue("${answer.status}: the server may have deleted the account", marked())
+        }
+        val vm = viewModel()
+        vm.endTheSession()
+        assertEquals(UnconfirmedDeletion(user.userId, user.username), vm.state.value.account.unconfirmedDeletion)
+    }
+
+    /**
+     * The third review's B3 (the reader's probe F): a 5xx on the deletion keeps the mark, because the server may
+     * have deleted the account. The screen says that the app does not know; it never says that nothing changed.
+     */
+    @Test fun aServerErrorOnTheDeletionSaysTheAppDoesNotKnowWhetherTheAccountIsGone() {
+        seedAccountWithData()
+        on("POST /me/delete") { refuse(500, "INTERNAL") }
+        on("POST /auth/logout") { lost() }
+        val vm = viewModel()
+        vm.deleteAccount(password)
+        await("the error") { !vm.state.value.account.busy && seen.isNotEmpty() }
+        val problem = vm.state.value.account.problem!!
+        val shown = com.voleybolveveleybol.volleystat.ui.screens.accountProblemText(problem, com.voleybolveveleybol.volleystat.ui.screens.AccountAction.DELETE).id
+        assertEquals(R.string.account_outcome_unknown, shown)
+        assertTrue("the code keeps the mark: the server may have deleted the account", marked())
+        // The way out the doubt leaves: the session goes on this phone only, and the login offers the phone's data.
+        vm.logout(evenWithoutAnswer = true)
+        await("the logout") { !vm.state.value.account.busy && vm.state.value.account.user == null }
+        assertEquals(UnconfirmedDeletion(user.userId, user.username), vm.state.value.account.unconfirmedDeletion)
+    }
+
     // ----- review finding F1: the offer outlives the process, so no account's folder is ever out of reach -----
 
     /** Loses the answer of a deletion, then repeats it: the server no longer knows the session, and the login with the same password fails. */
@@ -520,6 +566,53 @@ class AccountSafetyTest {
         assertFalse(folder.exists())
         assertNull(deviceTokens().tokenFor(user.username))
         assertNull(viewModel().state.value.account.unconfirmedDeletion)
+    }
+
+    /** Seals nothing, as [PlainSessionCipher], and fails every open and seal while [failing] is true, as a keystore that can not work now. */
+    private class SwitchableCipher(@Volatile var failing: Boolean = false) : com.voleybolveveleybol.volleystat.data.SessionCipher {
+        override fun seal(plain: ByteArray): ByteArray { if (failing) throw java.security.KeyStoreException("busy"); return plain.copyOf() }
+        override fun open(sealed: ByteArray): ByteArray { if (failing) throw java.security.KeyStoreException("busy"); return sealed.copyOf() }
+    }
+
+    // The third checker's C1: the doubt of an account that logged in again never comes back from deletions.bin.
+    @Test fun anAccountThatLoggedInAgainWhileTheKeystoreFailedIsNeverOfferedForTelefondanSilLater() {
+        val keystore = SwitchableCipher()
+        TestApplication.cipher = keystore
+        TestAccounts.device(context, TestAccounts.SIGNED_IN_PHONE)
+        on("POST /auth/login") { signedInAs(JSONObject(seen.last().body).getString("username"), "token-${seen.size}") }
+        on("POST /auth/logout") { MockResponse().setResponseCode(204) }
+        val vm = viewModel()
+        listOf("ali", "veli").forEach { name ->
+            vm.loginAs(name)
+            vm.addTeam("$name takımı")
+            vm.logout()
+            await("the logout of $name") { vm.state.value.account.user == null && !vm.state.value.account.busy }
+        }
+        // The deletion of both accounts is in doubt, Veli's the newest.
+        com.voleybolveveleybol.volleystat.data.DeletionDoubtStore(File(files, "deletions.bin"), keystore).apply {
+            add("user-ali", "ali")
+            add("user-veli", "veli")
+        }
+        val restarted = viewModel()
+        assertEquals(UnconfirmedDeletion("user-veli", "veli"), restarted.state.value.account.unconfirmedDeletion)
+
+        // Ali logs in again, so his account is plainly there. The keystore can not work at that moment.
+        keystore.failing = true
+        restarted.loginAs("ali")
+        keystore.failing = false
+        restarted.logout()
+        await("Ali's logout") { restarted.state.value.account.user == null && !restarted.state.value.account.busy }
+        // Later the plain list is damaged.
+        File(files, "deletions.ids").writeText("{\"version\":1,\"accou")
+
+        val later = viewModel()
+        var offer = later.state.value.account.unconfirmedDeletion
+        while (offer != null) {
+            assertFalse("Ali's live account is offered for Telefondan Sil", offer.userId == "user-ali")
+            later.deleteUnconfirmedAccountData()
+            offer = later.state.value.account.unconfirmedDeletion
+        }
+        assertTrue("Ali's team stays on the phone", File(files, "accounts/user-ali/volleystat.json").exists())
     }
 
     // ----- the second review's R2-C: one keystore error at the start of the app does not sign a live session out -----
@@ -825,6 +918,106 @@ class AccountSafetyTest {
         } finally {
             other.shutdown()
         }
+    }
+
+    // The third checker's gap: the address check also holds for the two other logins that open a session.
+
+    /** A second stand-in server, for the address the test switches to. It answers every request at once and counts it. */
+    private fun otherServer() = MockWebServer().apply {
+        dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest) = refuse(404, "NOT_FOUND")
+        }
+        start()
+    }
+
+    @Test fun aLostRegistrationsLoginFromAnotherAddressThanTheCurrentOneSignsNothingIn() {
+        TestAccounts.device(context, com.voleybolveveleybol.volleystat.model.Settings(serverTarget = ServerTarget.USB_DEVICE, welcomeSeen = true, legacyHandled = true))
+        on("POST /auth/register") { lost() }
+        val vm = viewModel()
+        vm.register("Test Kullanıcı", user.username, password, "KOD-1")
+        await("the lost answer") { !vm.state.value.account.busy && vm.state.value.account.problem != null }
+        val other = otherServer()
+        try {
+            // The server opened the account: the repeat meets the spent code, and the login that looks for the account is held.
+            val held = java.util.concurrent.CountDownLatch(1)
+            on("POST /auth/register") { refuse(403, "SIGNUP_CODE_INVALID") }
+            on("POST /auth/login") {
+                held.await(10, java.util.concurrent.TimeUnit.SECONDS)
+                signedIn("token-a")
+            }
+            on("POST /auth/logout") { MockResponse().setResponseCode(204) }
+            vm.register("Test Kullanıcı", user.username, password, "KOD-1")
+            await("the login reaches server A") { seen.any { it.key == "POST /auth/login" } }
+            vm.baseUrlOverride = other.url("/v1").toString()
+            held.countDown()
+            await("the answer") { !vm.state.value.account.busy }
+
+            assertNull("server A's session reaches no other address", vm.state.value.account.user)
+            assertEquals(AuthProblem.ServerChanged, vm.state.value.account.problem)
+            assertTrue(vm.playbackHeaders().isEmpty())
+            assertFalse(File(files, "session.bin").exists())
+            assertNull("its device token is not kept either", deviceTokens().tokenFor(user.username))
+            assertEquals(listOf("POST /auth/register", "POST /auth/register", "POST /auth/login", "POST /auth/logout"), seen.map { it.key })
+            assertEquals("the session goes back closed to the server that opened it", "Bearer token-a", seen.last().authorization)
+            assertEquals(0, other.requestCount)
+        } finally {
+            other.shutdown()
+        }
+    }
+
+    @Test fun aRepeatLoginAfterALostDeletionFromAnotherAddressThanTheCurrentOneSignsNothingInAndDeletesNothing() {
+        val recording = seedAccountWithData()
+        val vm = viewModel()
+        vm.deleteAndLoseTheAnswer()
+        val other = otherServer()
+        try {
+            // The repeat meets an ended session, and the login that asks whether the account is still there is held.
+            val held = java.util.concurrent.CountDownLatch(1)
+            on("POST /me/delete") { refuse(401, "AUTH_REQUIRED") }
+            on("POST /auth/login") {
+                held.await(10, java.util.concurrent.TimeUnit.SECONDS)
+                signedIn("fresh-token")
+            }
+            on("POST /auth/logout") { MockResponse().setResponseCode(204) }
+            vm.deleteAccount(password)
+            await("the login reaches server A") { seen.any { it.key == "POST /auth/login" } }
+            vm.baseUrlOverride = other.url("/v1").toString()
+            held.countDown()
+            await("the answer") { !vm.state.value.account.busy }
+
+            assertNull("neither the new session nor the ended one stays on the phone", vm.state.value.account.user)
+            assertEquals(AuthProblem.ServerChanged, vm.state.value.account.problem)
+            assertTrue(vm.playbackHeaders().isEmpty())
+            assertFalse(File(files, "session.bin").exists())
+            assertEquals(listOf("POST /me/delete", "POST /me/delete", "POST /auth/login", "POST /auth/logout"), seen.map { it.key })
+            assertEquals("the new session goes back closed to the server that opened it", "Bearer fresh-token", seen.last().authorization)
+            assertEquals("no deletion and no other request goes to the other address", 0, other.requestCount)
+            assertNull("the login showed that the account is still there", vm.state.value.account.unconfirmedDeletion)
+            assertNull(vm.state.value.account.confirmed)
+            assertTrue("nothing of the account leaves the phone", File(folder, "volleystat.json").exists())
+            assertTrue(recording.exists())
+            assertEquals("the new device token is not kept", "device-1", deviceTokens().tokenFor(user.username))
+        } finally {
+            other.shutdown()
+        }
+    }
+
+    // The third review's A1: a sign-in of the username from any screen ends the mark of a registration without an answer.
+
+    @Test fun aRepeatLoginAfterALostDeletionEndsTheMarkOfALostRegistration() {
+        seedAccountWithData()
+        val marks = com.voleybolveveleybol.volleystat.data.UnansweredRegistrationStore(File(files, "registrations.bin"), PlainSessionCipher)
+        marks.add(user.username)
+        val vm = viewModel()
+        vm.deleteAndLoseTheAnswer()
+        var deletions = 0
+        on("POST /me/delete") { if (++deletions == 1) refuse(401, "AUTH_REQUIRED") else refuse(403, "PASSWORD_WRONG") }
+        on("POST /auth/login") { signedIn("fresh-token") }
+        vm.deleteAccount(password)
+        await("the second deletion") { !vm.state.value.account.busy && seen.size == 4 }
+        assertEquals("the login signed the account in", "fresh-token", SessionStore(File(files, "session.bin"), PlainSessionCipher).load()?.token)
+        assertTrue("the account is there, so the mark has done its work", marks.load().isEmpty())
+        assertFalse(File(files, "registrations.bin").exists())
     }
 
     @Test fun aDeletionThatMeetsAnEndedSessionWithoutAnEarlierLostAnswerIsAnOrdinaryEnd() {

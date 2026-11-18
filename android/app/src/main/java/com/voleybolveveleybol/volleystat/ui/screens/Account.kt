@@ -74,6 +74,7 @@ import com.voleybolveveleybol.volleystat.AccountUi
 import com.voleybolveveleybol.volleystat.AppUiState
 import com.voleybolveveleybol.volleystat.AppViewModel
 import com.voleybolveveleybol.volleystat.LegacyQuestion
+import com.voleybolveveleybol.volleystat.PasswordNotHandedOver
 import com.voleybolveveleybol.volleystat.R
 import com.voleybolveveleybol.volleystat.UnconfirmedDeletion
 import com.voleybolveveleybol.volleystat.data.AccountUser
@@ -117,7 +118,8 @@ fun accountProblemText(problem: AuthProblem, action: AccountAction): AccountText
     if (action == AccountAction.LOGOUT) return AccountText(R.string.logout_not_confirmed, listOf(LabelArgument(R.string.action_logout_anyway)))
     return when (problem) {
         AuthProblem.Unreachable -> AccountText(R.string.net_no_answer)
-        AuthProblem.UnexpectedAnswer -> AccountText(R.string.account_unexpected)
+        // A call that changes something may have changed it before an answer the app can not read (third review, B3).
+        AuthProblem.UnexpectedAnswer -> AccountText(if (action == AccountAction.LOGIN) R.string.account_unexpected else R.string.account_unexpected_change)
         AuthProblem.ServerChanged -> AccountText(R.string.account_server_changed)
         AuthProblem.ServerOutdated -> AccountText(R.string.account_server_older)
         AuthProblem.LoginFailed -> AccountText(R.string.login_failed)
@@ -154,6 +156,8 @@ fun accountProblemText(problem: AuthProblem, action: AccountAction): AccountText
         AuthProblem.PasswordWrong -> AccountText(R.string.password_wrong)
         // A link answer can not come before the invite links (slice B5): this app sends none.
         AuthProblem.LinkNotFound, is AuthProblem.Refused -> AccountText(R.string.account_refused)
+        // A 5xx may come after the change: the text says that the app does not know, never that nothing changed (third review, B3).
+        is AuthProblem.ServerFailed -> AccountText(R.string.account_outcome_unknown)
     }
 }
 
@@ -339,15 +343,17 @@ private fun AccountField(
 /**
  * The first start without any account on this phone (design 10.1, `start`). Kod Gir, the main
  * action of the design, comes with the invite links (slice B6); until then a registration takes
- * the operator's code.
+ * the operator's code. A build without a server address (a release build until the hosting slice)
+ * can neither open an account nor log in: the screen says so in place of the promise, and its
+ * buttons open no form (third review, B5).
  */
 @Composable
-fun StartScreen(onCreateAccount: () -> Unit, onLogin: () -> Unit) {
+fun StartScreen(onCreateAccount: () -> Unit, onLogin: () -> Unit, serverConfigured: Boolean = true) {
     AccountScaffold(
         title = null, onBack = null,
         actions = {
-            PrimaryButton(stringResource(R.string.action_create_account), onCreateAccount, icon = R.drawable.ic_person_add)
-            SecondaryButton(stringResource(R.string.action_login), onLogin)
+            PrimaryButton(stringResource(R.string.action_create_account), onCreateAccount, enabled = serverConfigured, icon = R.drawable.ic_person_add)
+            SecondaryButton(stringResource(R.string.action_login), onLogin, enabled = serverConfigured)
         },
     ) {
         Spacer(Modifier.height(24.dp))
@@ -356,7 +362,12 @@ fun StartScreen(onCreateAccount: () -> Unit, onLogin: () -> Unit) {
             Text(stringResource(R.string.app_name), style = MaterialTheme.typography.headlineMedium, modifier = Modifier.semantics { heading() })
             Text(stringResource(R.string.tagline), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
         }
-        VsCard { Text(stringResource(R.string.start_body), style = MaterialTheme.typography.bodyLarge) }
+        if (serverConfigured) {
+            VsCard { Text(stringResource(R.string.start_body), style = MaterialTheme.typography.bodyLarge) }
+        } else {
+            Notice(stringResource(R.string.server_none), Tone.NEUTRAL)
+            VsCard { Text(stringResource(R.string.start_no_server), style = MaterialTheme.typography.bodyLarge) }
+        }
     }
 }
 
@@ -613,11 +624,11 @@ fun AccountSection(state: AppUiState, user: AccountUser, actions: ProfileAccount
                 else AccountOutcome(account, AccountAction.DISPLAY_NAME)
             }
             SecondaryButton(stringResource(R.string.action_change_password), { savingName = false; actions.onOpenPasswordChange() }, enabled = !account.busy)
-            // The password screen closes on the server's confirmation; the card says what the server did, and whether
-            // the new password reached no password manager (a screen Android rebuilt meanwhile, R2-D).
+            // The password screen closes on the server's confirmation; the card says what the server did, and why the
+            // new password reached no password manager when it did not (R2-D, and the third review's B1 and B2).
             if (account.confirmed == AccountChange.PASSWORD) {
                 Notice(stringResource(R.string.password_changed), Tone.POSITIVE, Modifier.announced())
-                if (account.newPasswordNotHandedOver) Notice(stringResource(R.string.password_not_handed_over), Tone.CAUTION, Modifier.announced())
+                account.newPasswordNotHandedOver?.let { Notice(notHandedOverText(it), Tone.CAUTION, Modifier.announced()) }
             }
             SecondaryButton(
                 stringResource(R.string.action_logout),
@@ -637,6 +648,14 @@ fun AccountSection(state: AppUiState, user: AccountUser, actions: ProfileAccount
     }
     // The dialog can not be left while its call is on its way: its answer would have nowhere to show.
     if (logout) LogoutDialog(account, uploading = state.upload?.running == true, onClose = { if (!account.busy) logout = false }, actions.onLogout)
+}
+
+/** Why the password manager did not get the confirmed new password, in the words of the profile. */
+@Composable
+private fun notHandedOverText(reason: PasswordNotHandedOver): String = when (reason) {
+    PasswordNotHandedOver.SCREEN_REBUILT -> stringResource(R.string.password_not_handed_over)
+    PasswordNotHandedOver.SCREEN_LEFT -> stringResource(R.string.password_not_handed_over_left)
+    PasswordNotHandedOver.PASSWORD_EDITED -> stringResource(R.string.password_not_handed_over_edited, stringResource(R.string.action_change_password))
 }
 
 @Composable
@@ -680,44 +699,64 @@ private fun DangerButton(text: String, onClick: () -> Unit, enabled: Boolean) {
  * be offered for saving (review finding S6). The username field, read-only, tells the password
  * manager which entry the new password belongs to.
  *
- * Android may rebuild the screen while the change is on its way (a dark theme switch, say), and the
- * call goes on (F8). The rebuilt screen knows that it sent a change, but its password fields start
- * empty by design, so it has nothing to commit. When that change is confirmed, it calls
- * [onNewPasswordNotHandedOver] instead, and the profile says that the password manager did not get
- * the new password (second review, R2-D).
+ * The password manager never gets a password other than the one the server got. The fields stay
+ * editable while the change waits (Android's autofill commit may need them), so the screen keeps the
+ * new password it sent, in memory only, and commits at the confirmation only when the field still
+ * holds exactly that text (third review, B2).
+ *
+ * When the screen can not hand a confirmed new password over, it says why, and the profile says so:
+ * - Android rebuilt it while the change was on its way (a dark theme switch, say), and the call went
+ *   on (F8). The rebuilt screen knows that it sent a change, but its password fields start empty by
+ *   design. At the confirmation it calls [onNewPasswordNotHandedOver] (second review, R2-D).
+ * - The new password was edited while the change waited: [onNewPasswordNotHandedOver] at the confirmation.
+ * - The screen goes while a change it sent is not committed: [onGoneWithoutHandingOver]. The user left
+ *   it, or Android rebuilds it; the caller tells the two apart (third review, B1).
  */
 @Composable
-fun PasswordChangeScreen(account: AccountUi, onChange: (current: String, new: String) -> Unit, onBack: () -> Unit, onNewPasswordNotHandedOver: () -> Unit = {}) {
+fun PasswordChangeScreen(
+    account: AccountUi,
+    onChange: (current: String, new: String) -> Unit,
+    onBack: () -> Unit,
+    onNewPasswordNotHandedOver: (PasswordNotHandedOver) -> Unit = {},
+    onGoneWithoutHandingOver: (PasswordNotHandedOver) -> Unit = {},
+) {
     var current by remember { mutableStateOf("") }
     var new by remember { mutableStateOf("") }
-    // A change this screen sent, through a rebuild of the screen. Only a change sent from the fields the screen
-    // still shows may commit the autofill, and only once.
+    // A change this screen sent, through a rebuild of the screen.
     var sent by rememberSaveable { mutableStateOf(false) }
-    var sentFromTheseFields by remember { mutableStateOf(false) }
+    // The new password of that change while these fields show it, in memory only: only it may be committed, and only once.
+    var sentPassword by remember { mutableStateOf<String?>(null) }
     var committed by remember { mutableStateOf(false) }
     var toldNotHandedOver by remember { mutableStateOf(false) }
     val commitAutofill by rememberUpdatedState(autofillCommit())
     val cancelAutofill by rememberUpdatedState(autofillCancel())
     val notHandedOver by rememberUpdatedState(onNewPasswordNotHandedOver)
+    val gone by rememberUpdatedState(onGoneWithoutHandingOver)
+    // A sent password the field no longer holds is one the password manager must not get.
+    fun reasonFromTheseFields() = if (sentPassword != null && new != sentPassword) PasswordNotHandedOver.PASSWORD_EDITED else null
     LaunchedEffect(account.confirmed) {
-        if (!sent || account.confirmed != AccountChange.PASSWORD) return@LaunchedEffect
-        when {
-            sentFromTheseFields -> if (!committed) {
-                committed = true
-                commitAutofill()
-            }
-            !toldNotHandedOver -> {
-                toldNotHandedOver = true
-                notHandedOver()
-            }
+        if (!sent || account.confirmed != AccountChange.PASSWORD || committed || toldNotHandedOver) return@LaunchedEffect
+        val reason = if (sentPassword == null) PasswordNotHandedOver.SCREEN_REBUILT else reasonFromTheseFields()
+        if (reason == null) {
+            committed = true
+            commitAutofill()
+        } else {
+            toldNotHandedOver = true
+            notHandedOver(reason)
         }
     }
-    DisposableEffect(Unit) { onDispose { if (!committed) cancelAutofill() } }
+    DisposableEffect(Unit) {
+        onDispose {
+            if (committed) return@onDispose
+            cancelAutofill()
+            if (sent && !toldNotHandedOver) gone(reasonFromTheseFields() ?: PasswordNotHandedOver.SCREEN_LEFT)
+        }
+    }
     val ready = current.isNotEmpty() && new.isNotEmpty() && !account.busy
     val submit = {
         if (ready) {
             sent = true
-            sentFromTheseFields = true
+            sentPassword = new
             onChange(current, new)
         }
     }

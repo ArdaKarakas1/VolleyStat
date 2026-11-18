@@ -44,6 +44,18 @@ class SessionStoreTest {
         assertFalse(String(bytes, Charsets.UTF_8).contains("Öztürk"))
     }
 
+    /** The third review's A2: the temporary password is kept with the session, and a file of an earlier round reads as an ordinary password. */
+    @Test fun aTemporaryPasswordIsKeptAndAnOlderFileWithoutItReadsAsAnOrdinaryPassword() {
+        val file = File(folder.root, "session.bin")
+        SessionStore(file, cipher).save(session.copy(passwordTemporary = true))
+        assertTrue(SessionStore(file, cipher).load()!!.passwordTemporary)
+        val older = org.json.JSONObject().put("token", session.token).put("userId", session.userId).put("username", session.username)
+            .put("displayName", session.displayName).put("expiresAt", session.expiresAt).put("deletionUnanswered", false)
+        file.writeBytes(cipher.seal(older.toString().toByteArray(Charsets.UTF_8)))
+        assertEquals(session, SessionStore(file, cipher).load())
+        assertFalse(SessionStore(file, cipher).load()!!.passwordTemporary)
+    }
+
     @Test fun twoSealsOfTheSameSessionDifferBecauseEachHasItsOwnNonce() {
         val first = cipher.seal("same".toByteArray())
         val second = cipher.seal("same".toByteArray())

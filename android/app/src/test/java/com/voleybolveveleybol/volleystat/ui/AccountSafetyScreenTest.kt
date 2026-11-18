@@ -35,6 +35,7 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import com.voleybolveveleybol.volleystat.AccountChange
 import com.voleybolveveleybol.volleystat.AccountUi
 import com.voleybolveveleybol.volleystat.AppUiState
+import com.voleybolveveleybol.volleystat.PasswordNotHandedOver
 import com.voleybolveveleybol.volleystat.R
 import com.voleybolveveleybol.volleystat.UnconfirmedDeletion
 import com.voleybolveveleybol.volleystat.data.AccountUser
@@ -272,7 +273,7 @@ class AccountSafetyScreenTest {
         show { com.voleybolveveleybol.volleystat.ui.screens.ProfileScreen(state, "0.8.0", {}, {}, {}, { true }, account = com.voleybolveveleybol.volleystat.ui.screens.ProfileAccountActions()) }
         compose.onNodeWithText(text(R.string.password_changed)).performScrollTo().assertIsDisplayed()
         assertFalse(shown(text(R.string.password_not_handed_over)))
-        state = state.copy(account = state.account.copy(newPasswordNotHandedOver = true))
+        state = state.copy(account = state.account.copy(newPasswordNotHandedOver = com.voleybolveveleybol.volleystat.PasswordNotHandedOver.SCREEN_REBUILT))
         compose.onNodeWithText(text(R.string.password_changed)).performScrollTo().assertIsDisplayed()
         compose.onNodeWithText(text(R.string.password_not_handed_over)).performScrollTo().assertIsDisplayed()
     }
@@ -299,6 +300,136 @@ class AccountSafetyScreenTest {
         compose.waitForIdle()
         assertEquals(0, autofill.commits)
         assertEquals("nor does it speak of a password it never sent", 0, autofill.notHandedOver)
+    }
+
+    // The third review's B1 and B2: the password manager never gets a password other than the one the server got,
+    // and a change it did not get is named, also when the user left the screen or edited the field meanwhile.
+
+    /** The password change screen with counting autofill. [account] follows the screen's own call: a tap makes it busy. */
+    private class PasswordChangeProbe(val autofill: CountingAutofill = CountingAutofill()) {
+        var account by mutableStateOf(AccountUi(user = AccountUser("user-ali", "ali", "Ali")))
+        var open by mutableStateOf(true)
+        val toldAtConfirmation = mutableListOf<PasswordNotHandedOver>()
+        val toldWhenGone = mutableListOf<PasswordNotHandedOver>()
+    }
+
+    private fun passwordChange(probe: PasswordChangeProbe) = show {
+        CompositionLocalProvider(LocalAutofillCommit provides { probe.autofill.commits++ }, LocalAutofillCancel provides { probe.autofill.cancels++ }) {
+            if (probe.open) {
+                PasswordChangeScreen(
+                    probe.account, { _, _ -> probe.account = probe.account.copy(busy = true) }, onBack = {},
+                    onNewPasswordNotHandedOver = { probe.toldAtConfirmation += it }, onGoneWithoutHandingOver = { probe.toldWhenGone += it },
+                )
+            }
+        }
+    }
+
+    private fun PasswordChangeProbe.send(newPassword: String = "yeni bir şifre 2") {
+        field(R.string.field_current_password).performTextInput("eski bir şifre 1")
+        field(R.string.field_new_password).performTextInput(newPassword)
+        confirm.performClick()
+        compose.waitForIdle()
+        assertTrue(account.busy)
+    }
+
+    private fun PasswordChangeProbe.confirm() {
+        account = account.copy(busy = false, confirmed = AccountChange.PASSWORD)
+        compose.waitForIdle()
+    }
+
+    private fun PasswordChangeProbe.leave() {
+        open = false
+        compose.waitForIdle()
+    }
+
+    @Test fun leavingThePasswordChangeWhileItIsOnItsWaySaysThatThePasswordManagerGotNothing() {
+        val probe = PasswordChangeProbe()
+        passwordChange(probe)
+        probe.send()
+        probe.leave()
+        assertEquals("the screen that went commits nothing", 0, probe.autofill.commits)
+        assertEquals(1, probe.autofill.cancels)
+        assertEquals(listOf(PasswordNotHandedOver.SCREEN_LEFT), probe.toldWhenGone)
+        assertEquals(emptyList<PasswordNotHandedOver>(), probe.toldAtConfirmation)
+    }
+
+    @Test fun aScreenLeftWithNothingSentSaysNothingAboutThePasswordManager() {
+        val untouched = PasswordChangeProbe()
+        passwordChange(untouched)
+        untouched.leave()
+        assertEquals(emptyList<PasswordNotHandedOver>(), untouched.toldWhenGone)
+    }
+
+    @Test fun aScreenLeftAfterItsCommitSaysNothingAboutThePasswordManager() {
+        val committed = PasswordChangeProbe()
+        passwordChange(committed)
+        committed.send()
+        committed.confirm()
+        committed.leave()
+        assertEquals(1, committed.autofill.commits)
+        assertEquals(emptyList<PasswordNotHandedOver>(), committed.toldWhenGone)
+        assertEquals(emptyList<PasswordNotHandedOver>(), committed.toldAtConfirmation)
+    }
+
+    @Test fun aNewPasswordEditedWhileTheChangeWaitsIsNeverCommitted() {
+        val probe = PasswordChangeProbe()
+        passwordChange(probe)
+        probe.send("yeni bir şifre 2")
+        // The fields stay editable while the change waits: Android's autofill commit may need them enabled.
+        field(R.string.field_new_password).assertIsEnabled().performTextReplacement("yeni bir şifre 3")
+        probe.confirm()
+        assertEquals("the server got another password than the field holds", 0, probe.autofill.commits)
+        assertEquals(listOf(PasswordNotHandedOver.PASSWORD_EDITED), probe.toldAtConfirmation)
+        // A later state of the same confirmation says it once, and the screen that goes then says nothing more.
+        probe.account = probe.account.copy(problem = null, busy = false)
+        compose.waitForIdle()
+        probe.leave()
+        assertEquals(listOf(PasswordNotHandedOver.PASSWORD_EDITED), probe.toldAtConfirmation)
+        assertEquals(emptyList<PasswordNotHandedOver>(), probe.toldWhenGone)
+        assertEquals("the edited text is not offered for saving", 1, probe.autofill.cancels)
+        assertEquals(0, probe.autofill.commits)
+    }
+
+    @Test fun aNewPasswordEditedBackToTheSentTextIsCommitted() {
+        val probe = PasswordChangeProbe()
+        passwordChange(probe)
+        probe.send("yeni bir şifre 2")
+        field(R.string.field_new_password).performTextReplacement("yeni bir şifre 3")
+        field(R.string.field_new_password).performTextReplacement("yeni bir şifre 2")
+        probe.confirm()
+        assertEquals(1, probe.autofill.commits)
+        assertEquals(emptyList<PasswordNotHandedOver>(), probe.toldAtConfirmation)
+    }
+
+    @Test fun aScreenLeftAfterTheNewPasswordWasEditedNamesTheEdit() {
+        val probe = PasswordChangeProbe()
+        passwordChange(probe)
+        probe.send("yeni bir şifre 2")
+        field(R.string.field_new_password).performTextReplacement("yeni bir şifre 3")
+        probe.leave()
+        assertEquals(listOf(PasswordNotHandedOver.PASSWORD_EDITED), probe.toldWhenGone)
+        assertEquals(0, probe.autofill.commits)
+    }
+
+    @Test fun theProfileNamesWhyThePasswordManagerDidNotGetTheNewPassword() {
+        var state by mutableStateOf(
+            AppUiState(
+                settings = Settings(welcomeSeen = true, accountSeen = true, legacyHandled = true),
+                account = AccountUi(user = ali, confirmed = AccountChange.PASSWORD),
+            )
+        )
+        show { com.voleybolveveleybol.volleystat.ui.screens.ProfileScreen(state, "0.8.0", {}, {}, {}, { true }, account = com.voleybolveveleybol.volleystat.ui.screens.ProfileAccountActions()) }
+        val texts = mapOf(
+            PasswordNotHandedOver.SCREEN_REBUILT to text(R.string.password_not_handed_over),
+            PasswordNotHandedOver.SCREEN_LEFT to text(R.string.password_not_handed_over_left),
+            PasswordNotHandedOver.PASSWORD_EDITED to text(R.string.password_not_handed_over_edited, text(R.string.action_change_password)),
+        )
+        texts.forEach { (reason, expected) ->
+            state = state.copy(account = state.account.copy(newPasswordNotHandedOver = reason))
+            compose.onNodeWithText(text(R.string.password_changed)).performScrollTo().assertIsDisplayed()
+            compose.onNodeWithText(expected).performScrollTo().assertIsDisplayed()
+            texts.filterKeys { it != reason }.values.forEach { other -> assertFalse("$reason shows another reason", shown(other)) }
+        }
     }
 
     @Test fun theOfferWaitsWhileAnAccountCallIsOnItsWay() {
