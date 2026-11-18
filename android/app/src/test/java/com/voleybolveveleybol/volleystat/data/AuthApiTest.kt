@@ -281,6 +281,34 @@ class AuthApiTest {
         assertFalse(outcomeUnknownAfter(AnswerFromAnotherServer()))
     }
 
+    /**
+     * The sixth checker's Q2: a 4xx without the API's envelope (a proxy's page, say) is an answer the app can not read. A change
+     * of the user's own account leaves its outcome open after it. A registration marks no username after it, because the mark
+     * would send a login to the account that holds that username. A 401 that names the Bearer scheme reads as AUTH_REQUIRED.
+     */
+    @Test fun a4xxWithoutTheEnvelopeLeavesAChangeOpenAndMarksNoRegistration() {
+        fun failureOf(answer: MockResponse, call: (ApiClient) -> Unit): ApiException {
+            server.enqueue(answer)
+            return try {
+                call(client("token"))
+                throw AssertionError("the call must fail")
+            } catch (error: ApiException) {
+                error
+            }
+        }
+        fun page(status: Int) = MockResponse().setResponseCode(status).setHeader("Content-Type", "text/html").setBody("<html>$status</html>")
+        val errors = listOf(404, 413, 429, 401).map { status -> failureOf(page(status)) { it.changePassword("eski bir şifre 1", "yeni bir şifre 2") } }
+        assertEquals(listOf("HTTP_404", "HTTP_413", "HTTP_429", "HTTP_401"), errors.map { it.code })
+        assertEquals("the outcome of a change stays open", errors.map { it.code to true }, errors.map { it.code to outcomeUnknownAfter(it) })
+        assertEquals("the registration marks no username", errors.map { it.code to false }, errors.map { it.code to it.leavesOutcomeUnknown })
+        val bearer = failureOf(page(401).setHeader("WWW-Authenticate", "Bearer realm=\"gw\"")) { it.changePassword("eski bir şifre 1", "yeni bir şifre 2") }
+        assertEquals("AUTH_REQUIRED", bearer.code)
+        assertFalse(outcomeUnknownAfter(bearer))
+        // The API's own envelope makes a 4xx the server's answer, which came before it changed anything.
+        assertFalse(outcomeUnknownAfter(failureOf(error(404, "NOT_FOUND")) { it.changeDisplayName("Yeni Ad") }))
+        assertFalse(outcomeUnknownAfter(failureOf(error(422, "PASSWORD_REJECTED")) { it.changePassword("eski bir şifre 1", "kısa") }))
+    }
+
     @Test fun aClosedSignUpNamesItsReason() {
         assertEquals(AuthProblem.SignupClosed(SignupClosedReason.NO_LINK), problemOf(error(403, "SIGNUP_CLOSED", JSONObject().put("reason", "NO_LINK"))))
         assertEquals(AuthProblem.SignupClosed(SignupClosedReason.OPEN_MATCH_LINK), problemOf(error(403, "SIGNUP_CLOSED", JSONObject().put("reason", "OPEN_MATCH_LINK"))))

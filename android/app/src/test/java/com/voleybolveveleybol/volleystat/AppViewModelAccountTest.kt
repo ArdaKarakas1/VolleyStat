@@ -802,6 +802,30 @@ class AppViewModelAccountTest {
         assertFalse(File(files, "registrations.bin").exists())
     }
 
+    /**
+     * The sixth checker's Q2: a 4xx without the API's envelope marks no registration, though the form says that the app does
+     * not know the outcome. Such an answer most likely comes from a gateway that never passed the request on, and a mark would
+     * send the typed password as a login to the account that holds the username.
+     */
+    @Test fun aRegistrationAnsweredByA4xxWithoutTheEnvelopeIsNotLookedFor() {
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        val answered = mutableSetOf<String>()
+        on("POST /auth/register") {
+            val name = JSONObject(seen.last().body).getString("username")
+            if (answered.add(name)) page(if (name == "ali") 404 else 429) else refuse(409, "USERNAME_TAKEN")
+        }
+        val vm = viewModel()
+        listOf("ali", "veli").forEach { name ->
+            vm.registerAndWait(name, operatorCode = null)
+            assertEquals("$name: the form says that the app can not read the answer", AuthProblem.UnexpectedAnswer, vm.state.value.account.problem)
+            assertFalse(File(files, "registrations.bin").exists())
+            vm.registerAndWait(name, operatorCode = null)
+            assertEquals(AuthProblem.UsernameTaken, vm.state.value.account.problem)
+        }
+        assertEquals("no login goes to the account that holds the username", List(4) { "POST /auth/register" }, seen.map { it.key })
+        assertFalse(File(files, "registrations.bin").exists())
+    }
+
     @Test fun theMarkOfALostRegistrationIsSealedAndNoPlainFileNamesTheAccount() {
         val sealing = ReplaceableKeyCipher()
         TestApplication.cipher = sealing
@@ -1228,6 +1252,55 @@ class AppViewModelAccountTest {
         assertNull(vm.state.value.account.afterLeave)
         await("the answer") { !vm.state.value.account.busy }
         assertNull(vm.state.value.account.afterLeave)
+    }
+
+    /** A proxy's page with an error status: no envelope of the API, so the app can not read it. */
+    private fun page(status: Int) = MockResponse().setResponseCode(status).setHeader("Content-Type", "text/html").setBody("<html>$status</html>")
+
+    /**
+     * The sixth checker's Q2: a 4xx without the API's envelope is an answer the app can not read. A password change touches
+     * only the user's own account, so the outcome stays open and the profile adds the password note. A 401 without the Bearer
+     * scheme is not the API's either, and ends no session.
+     */
+    @Test fun aPasswordChangeLeftWhileOnItsWayAndAnsweredByA4xxWithoutTheEnvelopeLeavesTheOutcomeUnknown() {
+        TestAccounts.seed(context)
+        val vm = viewModel()
+        val answers = listOf(
+            "HTML 404" to page(404), "HTML 413" to page(413), "HTML 429" to page(429), "HTML 401 without Bearer" to page(401),
+            "JSON 422 without the envelope" to MockResponse().setResponseCode(422).setHeader("Content-Type", "application/json").setBody("{\"detail\":\"x\"}"),
+        )
+        val left = answers.map { (name, answer) ->
+            vm.changePasswordAndLeave { answer }
+            assertNull(name, vm.state.value.account.problem)
+            assertEquals(name, TestAccounts.SESSION.username, vm.state.value.account.user?.username)
+            assertFalse(name, vm.state.value.account.sessionEnded)
+            name to vm.state.value.account.afterLeave
+        }
+        assertEquals(answers.map { (name, _) -> name to OutcomeAfterLeave(AccountChange.PASSWORD, AuthProblem.UnexpectedAnswer, outcomeUnknown = true) }, left)
+    }
+
+    /** A name change leaves its outcome open after the same answer. The API's own 404 stays an answer the app can read. */
+    @Test fun aDisplayNameChangeLeftWhileOnItsWayAndAnsweredByA4xxWithoutTheEnvelopeLeavesTheOutcomeUnknown() {
+        TestAccounts.seed(context)
+        val vm = viewModel()
+        val left = listOf(404, 429).map { status ->
+            vm.leaveWhileOnItsWay("PUT /me/display-name", { page(status) }) { changeDisplayName("Yeni Ad") }
+            status to vm.state.value.account.afterLeave
+        }
+        assertEquals(listOf(404, 429).map { it to OutcomeAfterLeave(AccountChange.DISPLAY_NAME, AuthProblem.UnexpectedAnswer, true) }, left)
+        vm.leaveWhileOnItsWay("PUT /me/display-name", { refuse(404, "NOT_FOUND") }) { changeDisplayName("Yeni Ad") }
+        assertEquals(OutcomeAfterLeave(AccountChange.DISPLAY_NAME, AuthProblem.ServerOutdated, false), vm.state.value.account.afterLeave)
+    }
+
+    /** A 401 without the envelope that names the Bearer scheme is the API's AUTH_REQUIRED: the session ends, and the profile keeps no outcome. */
+    @Test fun aPasswordChangeLeftWhileOnItsWayAndAnsweredByABearer401WithoutTheEnvelopeEndsTheSession() {
+        TestAccounts.seed(context)
+        val vm = viewModel()
+        vm.changePasswordAndLeave { page(401).setHeader("WWW-Authenticate", "Bearer realm=\"gw\"") }
+        assertNull(vm.state.value.account.user)
+        assertTrue(vm.state.value.account.sessionEnded)
+        assertNull(vm.state.value.account.afterLeave)
+        assertNull(vm.state.value.account.problem)
     }
 
     @Test fun aChangeLeftWhileOnItsWayWhoseSessionEndedKeepsNoOutcomeForTheLoginScreen() {

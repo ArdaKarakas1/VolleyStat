@@ -485,6 +485,12 @@ class AccountSafetyScreenTest {
         compose.onNodeWithText(note).performScrollTo().assertIsDisplayed()
         assertFalse(shown(text(R.string.net_no_answer)))
 
+        // An answer the app can not read (a proxy's page for a 4xx, say, sixth checker's Q2): the text of that answer, and the note.
+        state = profileWith(left(AuthProblem.UnexpectedAnswer, unknown = true))(state)
+        compose.onNodeWithText(text(R.string.account_unexpected_change_signed_in)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(note).performScrollTo().assertIsDisplayed()
+        assertFalse(shown(text(R.string.account_outcome_unknown_on_the_way)))
+
         // A refusal: the server changed nothing, so the app knows the outcome and the password manager holds the right password.
         state = profileWith(left(AuthProblem.PasswordWrong, unknown = false))(state)
         compose.onNodeWithText(text(R.string.password_wrong)).performScrollTo().assertIsDisplayed()

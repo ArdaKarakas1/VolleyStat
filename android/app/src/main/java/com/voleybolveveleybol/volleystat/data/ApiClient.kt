@@ -30,7 +30,10 @@ class ApiException(val status: Int, val code: String, message: String, val detai
     /**
      * The answer leaves open whether the server made the change: a 5xx other than SERVER_BUSY, a 3xx,
      * or a success the app can not read (UNEXPECTED_ANSWER). A 4xx comes before the server changes
-     * anything, and SERVER_BUSY before it counts or writes anything (third review, B3).
+     * anything, and SERVER_BUSY before it counts or writes anything (third review, B3). The registration
+     * marks a username by this rule. A 4xx without the API's envelope marks none: it most likely comes
+     * from a gateway that never passed the request on, and the mark would send a login to the account
+     * that holds the username. The changes of the user's own account read it with [outcomeUnknownAfter].
      */
     val leavesOutcomeUnknown: Boolean get() = status !in 400..499 && code != "SERVER_BUSY"
 }
