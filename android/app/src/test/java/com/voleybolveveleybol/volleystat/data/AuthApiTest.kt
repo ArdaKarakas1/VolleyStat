@@ -222,15 +222,56 @@ class AuthApiTest {
         assertEquals(AuthProblem.PasswordWrong, problemOf(error(403, "PASSWORD_WRONG")))
         assertEquals(AuthProblem.Refused(422, "VALIDATION_ERROR"), problemOf(error(422, "VALIDATION_ERROR")))
         // A 5xx may come after the server made the change, so it is no refusal that changed nothing (third review, B3).
-        assertEquals(AuthProblem.ServerFailed(500), problemOf(error(500, "INTERNAL")))
+        assertEquals(AuthProblem.ServerFailed(500, withEnvelope = true), problemOf(error(500, "INTERNAL")))
     }
 
     @Test fun aServerErrorWithOrWithoutTheEnvelopeLeavesTheOutcomeUnknown() {
-        assertEquals(AuthProblem.ServerFailed(500), problemOf(error(500, "INTERNAL")) { it.deleteAccount("uzun bir şifre 42") })
-        assertEquals(AuthProblem.ServerFailed(502), problemOf(MockResponse().setResponseCode(502).setBody("Bad Gateway")))
-        assertEquals(AuthProblem.ServerFailed(500), problemOf(MockResponse().setResponseCode(500)) { it.changePassword("eski bir şifre 1", "yeni bir şifre 2") })
+        assertEquals(AuthProblem.ServerFailed(500, withEnvelope = true), problemOf(error(500, "INTERNAL")) { it.deleteAccount("uzun bir şifre 42") })
+        // Without the API's envelope a gateway on the way may have sent it (fourth review, D4).
+        assertEquals(AuthProblem.ServerFailed(502, withEnvelope = false), problemOf(MockResponse().setResponseCode(502).setBody("Bad Gateway")))
+        assertEquals(AuthProblem.ServerFailed(500, withEnvelope = false), problemOf(MockResponse().setResponseCode(500)) { it.changePassword("eski bir şifre 1", "yeni bir şifre 2") })
         // SERVER_BUSY comes before the server counts or writes anything: the view model asks again.
         assertEquals(AuthProblem.ServerBusy(1), problemOf(error(503, "SERVER_BUSY", headers = mapOf("Retry-After" to "1"))))
+    }
+
+    // ----- the fourth review's D2: a request that never left the phone -----
+
+    @Test fun aRequestThatCouldNotConnectIsOneThatNeverLeftThePhone() {
+        val port = java.net.ServerSocket(0).use { it.localPort }
+        // Nothing listens on the port (connection refused), and a name under .invalid never resolves.
+        listOf("http://127.0.0.1:$port/v1", "http://volleystat-test.invalid/v1").forEach { address ->
+            val error = runCatching { ApiClient(address).register("ali", "Ali", "uzun bir şifre 42", null) }.exceptionOrNull()
+            assertTrue("$address: $error", error is RequestNotSent)
+            assertEquals("the form says no more than before", AuthProblem.Unreachable, AuthProblem.of(error!!))
+            assertFalse("the server can not have acted on it", outcomeUnknownAfter(error))
+        }
+    }
+
+    @Test fun aRequestWhoseAnswerWasLostIsOneThatLeftThePhone() {
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST))
+        val error = runCatching { client().register("ali", "Ali", "uzun bir şifre 42", null) }.exceptionOrNull()
+        assertTrue("$error", error is IOException && error !is RequestNotSent && error !is ApiException)
+        assertEquals("the server got the whole request", "ali", body(server.takeRequest()).getString("username"))
+        assertTrue(outcomeUnknownAfter(error!!))
+        // A connection the server closes at once was made: the app can not tell whether the request was read.
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START))
+        val closed = runCatching { client().register("ali", "Ali", "uzun bir şifre 42", null) }.exceptionOrNull()
+        assertTrue("$closed", closed is IOException && closed !is RequestNotSent)
+    }
+
+    @Test fun anAnswerLeavesTheOutcomeOpenOnlyWhenTheServerMayHaveActed() {
+        fun failure(status: Int, code: String) = ApiException(status, code, code, JSONObject())
+        assertTrue(outcomeUnknownAfter(failure(500, "INTERNAL")))
+        assertTrue(outcomeUnknownAfter(failure(502, "HTTP_502")))
+        assertTrue(outcomeUnknownAfter(failure(200, "UNEXPECTED_ANSWER")))
+        assertTrue(outcomeUnknownAfter(failure(302, "HTTP_302")))
+        assertFalse("SERVER_BUSY comes before the server acts", outcomeUnknownAfter(failure(503, "SERVER_BUSY")))
+        assertFalse(outcomeUnknownAfter(failure(409, "USERNAME_TAKEN")))
+        assertFalse(outcomeUnknownAfter(failure(401, "AUTH_REQUIRED")))
+        assertTrue("no answer after the request went out", outcomeUnknownAfter(IOException("lost")))
+        assertTrue(outcomeUnknownAfter(JSONException("unreadable")))
+        assertFalse(outcomeUnknownAfter(RequestNotSent(java.net.ConnectException("refused"))))
+        assertFalse(outcomeUnknownAfter(AnswerFromAnotherServer()))
     }
 
     @Test fun aClosedSignUpNamesItsReason() {

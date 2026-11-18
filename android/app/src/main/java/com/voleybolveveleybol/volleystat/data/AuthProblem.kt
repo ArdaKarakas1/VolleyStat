@@ -30,7 +30,10 @@ enum class SignupClosedReason { NO_LINK, OPEN_MATCH_LINK }
  * (docs/API_V1.md section 10, design 10.7). The screens map each case to its Turkish text.
  */
 sealed interface AuthProblem {
-    /** No answer came: the server is off, the network is down, or the answer was lost on the way. */
+    /**
+     * No answer came: the server is off, the network is down, or the answer was lost on the way. The request
+     * may have reached the server, unless it never left the phone ([RequestNotSent]); the text is the same.
+     */
     data object Unreachable : AuthProblem
     /** Something answered that is not this API, or an answer this app can not read. */
     data object UnexpectedAnswer : AuthProblem
@@ -65,9 +68,12 @@ sealed interface AuthProblem {
     /**
      * A 5xx other than SERVER_BUSY, with the API's envelope or without it: the server, or something on
      * the way to it, failed while it had the request. The server may have made the change before it
-     * failed, so the app does not know what changed (third review, B3).
+     * failed, so the app does not know what changed (third review, B3). [withEnvelope] is true when the
+     * answer carries the API's own error envelope: then the server itself reported the error. Without it
+     * the answer may come from a gateway on the way, and the text does not name the server as its sender
+     * (fourth review, D4).
      */
-    data class ServerFailed(val status: Int) : AuthProblem
+    data class ServerFailed(val status: Int, val withEnvelope: Boolean = false) : AuthProblem
 
     companion object {
         fun of(error: Throwable): AuthProblem = when (error) {
@@ -103,7 +109,8 @@ sealed interface AuthProblem {
                 "UNEXPECTED_ANSWER" -> UnexpectedAnswer
                 else -> when {
                     // The server, or something on the way to it, failed while it had the request: it may have made the change.
-                    error.status >= 500 -> ServerFailed(error.status)
+                    // Only the API's own envelope says that the server itself reported it (fourth review, D4).
+                    error.status >= 500 -> ServerFailed(error.status, withEnvelope = !error.code.startsWith("HTTP_"))
                     // No envelope, or an envelope with a status this API never sends with one (a 3xx): not this API's refusal.
                     error.status !in 400..499 || error.code.startsWith("HTTP_") -> UnexpectedAnswer
                     else -> Refused(error.status, error.code)
@@ -114,6 +121,19 @@ sealed interface AuthProblem {
         private inline fun <reified T : Enum<T>> enumOr(name: String, fallback: T): T =
             runCatching { enumValueOf<T>(name) }.getOrDefault(fallback)
     }
+}
+
+/**
+ * Whether [error], the failure that ended an account call, leaves open whether the server made the
+ * change: the request went out and no answer came, a 5xx other than SERVER_BUSY came, or an answer the
+ * app can not read (third review, B3). A request that never left the phone leaves nothing open (fourth
+ * review, D2), nor does an answer from another address, whose session the app closed again.
+ */
+fun outcomeUnknownAfter(error: Throwable): Boolean = when (error) {
+    is ApiException -> error.leavesOutcomeUnknown
+    is RequestNotSent -> false
+    is AnswerFromAnotherServer -> false
+    else -> true
 }
 
 /** Thrown when the answer to a login or a registration came from another address than the one the app talks to now. */

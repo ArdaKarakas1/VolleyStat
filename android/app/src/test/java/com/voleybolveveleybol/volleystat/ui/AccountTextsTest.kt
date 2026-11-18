@@ -146,6 +146,7 @@ class AccountTextsTest {
             AuthProblem.ServerBusy(1), AuthProblem.SignupClosed(SignupClosedReason.NO_LINK), AuthProblem.SignupCodeInvalid, AuthProblem.LinkNotFound,
             AuthProblem.UsernameTaken, AuthProblem.UsernameInvalid, AuthProblem.DisplayNameInvalid, AuthProblem.PasswordWrong, AuthProblem.Refused(400, "X"),
             AuthProblem.TooManyAttempts(AttemptScope.USER, null), AuthProblem.ServerChanged,
+            AuthProblem.ServerFailed(500, withEnvelope = true), AuthProblem.ServerFailed(502),
         ) + PasswordRule.entries.map { AuthProblem.PasswordRejected(it) } + AttemptScope.entries.map { AuthProblem.TooManyAttempts(it, 30) }
         AccountAction.entries.forEach { action ->
             problems.forEach { problem ->
@@ -164,20 +165,25 @@ class AccountTextsTest {
     @Test fun anAnswerThatLeavesTheOutcomeUnknownNeverSaysThatTheServerChangedNothing() {
         fun failure(status: Int, code: String) = AuthProblem.of(com.voleybolveveleybol.volleystat.data.ApiException(status, code, code, org.json.JSONObject()))
         val unknown = string(R.string.account_outcome_unknown)
-        val changing = listOf(AccountAction.REGISTER, AccountAction.DISPLAY_NAME, AccountAction.PASSWORD, AccountAction.DELETE)
+        val onTheWay = string(R.string.account_outcome_unknown_on_the_way)
+        val signedIn = listOf(AccountAction.DISPLAY_NAME, AccountAction.PASSWORD, AccountAction.DELETE)
+        val changing = listOf(AccountAction.REGISTER) + signedIn
         (changing + AccountAction.LOGIN).forEach { action ->
             assertEquals("$action, a 500 with the envelope", unknown, text(failure(500, "INTERNAL"), action))
-            assertEquals("$action, a 502 without it", unknown, text(failure(502, "HTTP_502"), action))
+            // The fourth review's D4: a 5xx without the envelope may come from a gateway on the way, not from the server.
+            assertEquals("$action, a 502 without it", onTheWay, text(failure(502, "HTTP_502"), action))
             assertEquals("$action, a 4xx changed nothing", string(R.string.account_refused), text(failure(409, "SOMETHING_NEW"), action))
         }
-        changing.forEach { action ->
-            assertEquals("$action, an answer the app can not read", string(R.string.account_unexpected_change), text(AuthProblem.UnexpectedAnswer, action))
+        // The registration can go to another server choice; the signed-in calls can not (fourth review, D4).
+        assertEquals(string(R.string.account_unexpected_change), text(AuthProblem.UnexpectedAnswer, AccountAction.REGISTER))
+        signedIn.forEach { action ->
+            assertEquals("$action, an answer the app can not read", string(R.string.account_unexpected_change_signed_in), text(AuthProblem.UnexpectedAnswer, action))
         }
         // A login changes nothing the user asked for: the old text stays.
         assertEquals(string(R.string.account_unexpected), text(AuthProblem.UnexpectedAnswer, AccountAction.LOGIN))
         // A logout keeps its own text: the session stays on the phone, whatever the server did.
         assertEquals(string(R.string.logout_not_confirmed, string(R.string.action_logout_anyway)), text(failure(500, "INTERNAL"), AccountAction.LOGOUT))
-        listOf(unknown, string(R.string.account_unexpected_change)).forEach {
+        listOf(unknown, onTheWay, string(R.string.account_unexpected_change), string(R.string.account_unexpected_change_signed_in)).forEach {
             assertTrue(it.contains("bilmiyor"))
             assertFalse(it.contains("değiştirmedi"))
         }
@@ -199,13 +205,62 @@ class AccountTextsTest {
     }
 
     /**
-     * The note about a new password edited while the change waited names who tapped the button. "Sunucu ... düğmesine
-     * dokunduğunda" would read as if the server had tapped it (turkce-insansi-metin: every sentence names its actor).
+     * The note about a new password edited while the change waited names who sent the change and that the server saved
+     * the password (turkce-insansi-metin: every sentence names its actor). It names the sending, not a tap of Şifreyi
+     * Değiştir: the keyboard's Done key sends the change as well (fourth review, D3).
      */
-    @Test fun theNoteAboutAnEditedNewPasswordSaysThatTheUserTappedTheButtonAndTheServerSavedThePassword() {
+    @Test fun theNoteAboutAnEditedNewPasswordNamesTheSendingAndThatTheServerSavedThePassword() {
         val button = string(R.string.action_change_password)
-        val note = string(R.string.password_not_handed_over_edited, button)
-        assertTrue(note, note.contains("Sen $button düğmesine dokunduğunda sunucu alanda yazan şifreyi yeni şifre olarak kaydetti."))
-        assertFalse(note, note.contains("Sunucu yeni şifre olarak $button"))
+        val note = string(R.string.password_not_handed_over_edited)
+        assertTrue(note, note.contains("Sen değişikliği gönderdiğinde sunucu alanda o an yazan şifreyi yeni şifre olarak kaydetti."))
+        assertFalse(note, note.contains("düğmesine dokunduğunda"))
+        assertFalse(note, note.contains(button))
+        assertFalse(note, note.contains("Sunucu yeni şifre olarak"))
+    }
+
+    /**
+     * The fourth review's D4 (the reader's probe): a 502 without the API's envelope comes from something on the way (a
+     * gateway), not from the API. The text does not say that the server reported an error.
+     */
+    @Test fun aGatewayErrorWithoutTheEnvelopeIsNotWordedAsTheServersOwnReport() {
+        val problem = AuthProblem.of(com.voleybolveveleybol.volleystat.data.ApiException(502, "HTTP_502", "HTTP 502", org.json.JSONObject()))
+        assertEquals(AuthProblem.ServerFailed(502), problem)
+        val shown = text(problem, AccountAction.REGISTER)
+        assertFalse("the text names a report the app never got from the server: $shown", shown.startsWith("Sunucu bir hata bildirdi."))
+        assertTrue(shown, shown.startsWith("Uygulama sunucudan ya da sunucuya giden yoldan bir hata yanıtı aldı."))
+        // A 5xx in the API's own envelope is the server's report.
+        val reported = AuthProblem.of(com.voleybolveveleybol.volleystat.data.ApiException(500, "INTERNAL", "INTERNAL", org.json.JSONObject()))
+        assertEquals(AuthProblem.ServerFailed(500, withEnvelope = true), reported)
+        assertTrue(text(reported, AccountAction.REGISTER).startsWith("Sunucu bir hata bildirdi."))
+    }
+
+    /**
+     * The fourth review's D4 (the reader's probe): the app keeps the server choice locked while a session is open, so an
+     * unreadable answer to a signed-in call gives no advice about the server choice. Login and registration keep it.
+     */
+    @Test fun anUnreadableAnswerToASignedInCallGivesNoAdviceTheUserCanNotFollow() {
+        com.voleybolveveleybol.volleystat.TestAccounts.seed(context as android.app.Application)
+        val vm = AppViewModel(context as android.app.Application)
+        val before = vm.state.value.settings.serverTarget
+        val other = if (before == com.voleybolveveleybol.volleystat.model.ServerTarget.EMULATOR) com.voleybolveveleybol.volleystat.model.ServerTarget.USB_DEVICE
+        else com.voleybolveveleybol.volleystat.model.ServerTarget.EMULATOR
+        vm.setServerTarget(other)
+        assertEquals("the server choice is locked while signed in", before, vm.state.value.settings.serverTarget)
+        listOf(AccountAction.DISPLAY_NAME, AccountAction.PASSWORD, AccountAction.DELETE).forEach { action ->
+            val shown = text(AuthProblem.UnexpectedAnswer, action)
+            assertFalse("$action: the text sends a signed-in user to a choice the app has locked: $shown", shown.contains("Sunucu seçimini kontrol"))
+        }
+        listOf(AccountAction.LOGIN, AccountAction.REGISTER).forEach { action ->
+            assertTrue("$action: the choice can change before a login or a registration", text(AuthProblem.UnexpectedAnswer, action).contains("Sunucu seçimini kontrol"))
+        }
+    }
+
+    /** The fourth review's D1: the note of a password change whose screen was left and whose outcome is open. */
+    @Test fun theNoteAboutALeftPasswordChangeSaysThatTheAppDoesNotKnowAndNamesTheOldPassword() {
+        val note = string(R.string.password_left_outcome_unknown)
+        assertTrue(note, note.startsWith("Şifre değiştirme ekranından sunucunun yanıtı gelmeden çıktın."))
+        assertTrue(note, note.contains("Uygulama sunucunun şifreni değiştirip değiştirmediğini bilmiyor."))
+        assertTrue(note, note.contains("Sunucu şifreni değiştirdiyse şifre yöneticin bu hesabın eski şifresini tutuyor olabilir."))
+        listOf(" - ", " – ", " — ", "--").forEach { assertFalse(note, note.contains(it)) }
     }
 }

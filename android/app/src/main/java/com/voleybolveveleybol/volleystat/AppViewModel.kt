@@ -17,6 +17,8 @@ import com.voleybolveveleybol.volleystat.data.DeviceTokenStore
 import com.voleybolveveleybol.volleystat.data.KeystoreSessionCipher
 import com.voleybolveveleybol.volleystat.data.LegacyContent
 import com.voleybolveveleybol.volleystat.data.MatchInfo
+import com.voleybolveveleybol.volleystat.data.RequestNotSent
+import com.voleybolveveleybol.volleystat.data.outcomeUnknownAfter
 import com.voleybolveveleybol.volleystat.data.Session
 import com.voleybolveveleybol.volleystat.data.SessionCipher
 import com.voleybolveveleybol.volleystat.data.SessionCipherSource
@@ -132,6 +134,13 @@ enum class PasswordNotHandedOver {
  */
 data class UnconfirmedDeletion(val userId: String, val username: String?)
 
+/**
+ * The end of a change whose screen the user left while its request was on its way: [problem] is the
+ * answer that ended it, and [outcomeUnknown] says that this answer leaves open whether the server made
+ * the change (no answer after the request went out, a 5xx, or an answer the app can not read).
+ */
+data class OutcomeAfterLeave(val change: AccountChange, val problem: AuthProblem, val outcomeUnknown: Boolean)
+
 /** The question of the first login about the data app 0.7 kept for its one user (design 10.3). */
 data class LegacyQuestion(val titles: List<String>, val teams: Int, val recordings: Int, val draft: Boolean)
 
@@ -172,6 +181,11 @@ data class AccountUi(
      * clearAccountProblem() clear it, as they clear [confirmed].
      */
     val newPasswordNotHandedOver: PasswordNotHandedOver? = null,
+    /**
+     * How a change of the display name or of the password ended when the user had left its screen while its
+     * request was on its way (fourth review, D1). The profile says so. The next call and clearAccountProblem() clear it.
+     */
+    val afterLeave: OutcomeAfterLeave? = null,
 )
 
 data class AppUiState(
@@ -1093,13 +1107,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val accountCallMarks = java.util.concurrent.atomic.AtomicInteger()
 
     /**
-     * The SHA-256 of each username whose registration got no answer, or an answer that leaves the outcome
-     * unknown (a 5xx, or a success the app can not read): the server may have opened that account all the
-     * same (third review, A1 and B3). registrations.bin keeps them sealed through a restart; a
-     * phone that can not seal the file keeps them in memory until the app ends. Only a sign-in of that
-     * username, or LOGIN_FAILED for the login that looks for its account, ends a mark. Changed under [accountLock].
+     * The SHA-256 of each username whose registration went out and got no answer, or an answer that leaves
+     * the outcome unknown (a 5xx, or a success the app can not read), with the time of the mark: the server
+     * may have opened that account all the same (third review, A1 and B3). A registration that never left
+     * the phone gets no mark (fourth review, D2). registrations.bin keeps them sealed through a restart; a
+     * phone that can not seal the file keeps them in memory until the app ends. A sign-in of that username,
+     * LOGIN_FAILED for the login that looks for its account, or the end of its day ends a mark. Changed under [accountLock].
      */
-    @Volatile private var unansweredRegistrations: Set<String> = registrations.load()
+    @Volatile private var unansweredRegistrations: Map<String, Long> = registrations.load(System.currentTimeMillis())
+
+    /** The clock of the registration marks. Tests move it on with this instead of waiting a day. */
+    internal var clock: () -> Long = System::currentTimeMillis
 
     fun login(username: String, password: String) {
         val name = normalizeUsername(username)
@@ -1124,6 +1142,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     throw error
                 }
                 findLostRegistration(api, name, password, error)
+            } catch (error: RequestNotSent) {
+                // Nothing of the request left the phone, so no account can have opened: no mark sends a login later (D2).
+                throw error
             } catch (error: IOException) {
                 // No answer came, and the server may have opened the account all the same.
                 markRegistration(name)
@@ -1155,13 +1176,23 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun registrationUnanswered(username: String) = sha256Hex(username) in unansweredRegistrations
+    /**
+     * Whether [username] carries a mark that still counts. A mark a day old sends no login: by then the username may
+     * name someone else's account (fourth review, D2). It leaves memory and the file here.
+     */
+    private fun registrationUnanswered(username: String): Boolean {
+        val at = unansweredRegistrations[sha256Hex(username)] ?: return false
+        if (UnansweredRegistrationStore.current(at, clock())) return true
+        forgetRegistration(username)
+        return false
+    }
 
     /** Marks [username]: its registration got no answer. A phone that can not seal registrations.bin keeps the mark in memory. */
     private fun markRegistration(username: String) {
         synchronized(accountLock) {
-            unansweredRegistrations = unansweredRegistrations + sha256Hex(username)
-            runCatching { registrations.add(username) }
+            val now = clock()
+            unansweredRegistrations = unansweredRegistrations + (sha256Hex(username) to now)
+            runCatching { registrations.add(username, now) }
         }
     }
 
@@ -1197,13 +1228,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun changeDisplayName(displayName: String) {
         val current = session ?: return
-        accountCall { api -> updateUser(current, api.changeDisplayName(displayName.trim()), AccountChange.DISPLAY_NAME) }
+        accountCall(change = AccountChange.DISPLAY_NAME) { api -> updateUser(current, api.changeDisplayName(displayName.trim()), AccountChange.DISPLAY_NAME) }
     }
 
     /** The server ends every other session of the account and forgets its device tokens, this phone's included. */
     fun changePassword(currentPassword: String, newPassword: String) {
         val current = session ?: return
-        accountCall { api ->
+        accountCall(change = AccountChange.PASSWORD) { api ->
             val user = api.changePassword(currentPassword, newPassword)
             runCatching { deviceTokens.forget(current.username) }
             updateUser(current, user, AccountChange.PASSWORD)
@@ -1419,9 +1450,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun clearAccountProblem() =
-        _state.update { it.copy(account = it.account.copy(problem = null, confirmed = null, sessionEnded = false, newPasswordNotHandedOver = null)) }
+        _state.update { it.copy(account = it.account.copy(problem = null, confirmed = null, sessionEnded = false, newPasswordNotHandedOver = null, afterLeave = null)) }
 
-    /** Stops an account call that waits to repeat after SERVER_BUSY, for a screen the user left (design 10.7, R10). */
+    /**
+     * Stops an account call that waits to repeat after SERVER_BUSY, for a screen the user left (design 10.7, R10). A
+     * request already on its way goes on and is not repeated; its outcome stays (fourth review, D1).
+     */
     fun cancelAccountCall() {
         accountJob?.cancel()
     }
@@ -1431,24 +1465,38 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
      * Retry-After, a few times; the server answers it before it counts or writes anything, so a
      * repeat changes nothing twice. Every other failure becomes the account's problem.
      */
-    private fun accountCall(endsSession: Boolean = true, call: (ApiClient) -> Unit) {
+    private fun accountCall(endsSession: Boolean = true, change: AccountChange? = null, call: (ApiClient) -> Unit) {
+        val caller = session
         synchronized(accountLock) {
             if (_state.value.account.busy) return
-            _state.update { it.copy(account = it.account.copy(busy = true, problem = null, confirmed = null, newPasswordNotHandedOver = null)) }
+            _state.update { it.copy(account = it.account.copy(busy = true, problem = null, confirmed = null, newPasswordNotHandedOver = null, afterLeave = null)) }
             notHandedOverAtConfirmation = null
             accountCallMarks.incrementAndGet()
         }
         accountJob = viewModelScope.launch {
-            var problem: AuthProblem? = null
+            // Set inside the call's own context. A screen the user left cancels this job, and the cancelled withContext
+            // throws on its way back, after the request went out and its answer came: the failure must not go with it (D1).
+            var failure: Exception? = null
             try {
+                withContext(Dispatchers.IO) { failure = callUntilNotBusy(endsSession, call) }
+            } finally {
                 // An ended session left the account before this line, and the login screen says so in its own words
                 // (sessionEnded, or the offer of a deletion in doubt). The same reason as a problem would stand there twice (F3).
-                problem = withContext(Dispatchers.IO) { callUntilNotBusy(endsSession, call) }?.let(AuthProblem::of)?.takeUnless { it == AuthProblem.SessionEnded }
-            } finally {
+                val ended = failure
+                val problem = ended?.let(AuthProblem::of)?.takeUnless { it == AuthProblem.SessionEnded }
+                // The user left the screen of this call while its request was on its way (StopAccountCallOnLeave).
+                val left = !isActive
+                // The form of a call that was left is gone, and its problem would stand on whatever form comes next. The
+                // profile says how a change of its own ended, while the session that asked for it is still signed in.
+                val afterLeave = if (left && ended != null && problem != null && change != null && caller != null && session?.token == caller.token) {
+                    OutcomeAfterLeave(change, problem, outcomeUnknownAfter(ended))
+                } else {
+                    null
+                }
                 accountCallMarks.incrementAndGet()
                 // A screen that went during this call speaks for this call only.
                 notHandedOverAtConfirmation = null
-                _state.update { it.copy(account = it.account.copy(busy = false, retryingAfterBusy = false, problem = problem)) }
+                _state.update { it.copy(account = it.account.copy(busy = false, retryingAfterBusy = false, problem = problem.takeUnless { left }, afterLeave = afterLeave)) }
             }
         }
     }

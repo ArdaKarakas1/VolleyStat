@@ -464,5 +464,14 @@ class ScreenshotTest {
         shotOn("profil_sifre_iletilemedi_degistirildi", "+w411dp-h1300dp-port") { ProfileScreen(edited, "0.8.0", {}, {}, {}, { true }) }
         shotOn("profil_sifre_iletilemedi_degistirildi_koyu", "+w411dp-h1300dp-port", dark = true) { ProfileScreen(edited, "0.8.0", {}, {}, {}, { true }) }
         shotOn("kucuk_buyuk_yazi_profil_sifre_iletilemedi_degistirildi", "+w320dp-h2200dp-port", fontScale = 1.5f) { ProfileScreen(edited, "0.8.0", {}, {}, {}, { true }) }
+        // The user left the screen while the change was on its way, and its answer was lost (fourth review, D1).
+        val unknown = state.copy(
+            account = state.account.copy(
+                afterLeave = com.voleybolveveleybol.volleystat.OutcomeAfterLeave(AccountChange.PASSWORD, com.voleybolveveleybol.volleystat.data.AuthProblem.Unreachable, outcomeUnknown = true),
+            ),
+        )
+        shotOn("profil_sifre_sonucu_bilinmiyor", "+w411dp-h1300dp-port") { ProfileScreen(unknown, "0.8.0", {}, {}, {}, { true }) }
+        shotOn("profil_sifre_sonucu_bilinmiyor_koyu", "+w411dp-h1300dp-port", dark = true) { ProfileScreen(unknown, "0.8.0", {}, {}, {}, { true }) }
+        shotOn("kucuk_buyuk_yazi_profil_sifre_sonucu_bilinmiyor", "+w320dp-h2200dp-port", fontScale = 1.5f) { ProfileScreen(unknown, "0.8.0", {}, {}, {}, { true }) }
     }
 }

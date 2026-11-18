@@ -118,8 +118,15 @@ fun accountProblemText(problem: AuthProblem, action: AccountAction): AccountText
     if (action == AccountAction.LOGOUT) return AccountText(R.string.logout_not_confirmed, listOf(LabelArgument(R.string.action_logout_anyway)))
     return when (problem) {
         AuthProblem.Unreachable -> AccountText(R.string.net_no_answer)
-        // A call that changes something may have changed it before an answer the app can not read (third review, B3).
-        AuthProblem.UnexpectedAnswer -> AccountText(if (action == AccountAction.LOGIN) R.string.account_unexpected else R.string.account_unexpected_change)
+        // A call that changes something may have changed it before an answer the app can not read (third review, B3). The
+        // server choice is locked while a session is open, so only a login and a registration get advice about it (D4).
+        AuthProblem.UnexpectedAnswer -> AccountText(
+            when (action) {
+                AccountAction.LOGIN -> R.string.account_unexpected
+                AccountAction.REGISTER -> R.string.account_unexpected_change
+                else -> R.string.account_unexpected_change_signed_in
+            }
+        )
         AuthProblem.ServerChanged -> AccountText(R.string.account_server_changed)
         AuthProblem.ServerOutdated -> AccountText(R.string.account_server_older)
         AuthProblem.LoginFailed -> AccountText(R.string.login_failed)
@@ -157,7 +164,8 @@ fun accountProblemText(problem: AuthProblem, action: AccountAction): AccountText
         // A link answer can not come before the invite links (slice B5): this app sends none.
         AuthProblem.LinkNotFound, is AuthProblem.Refused -> AccountText(R.string.account_refused)
         // A 5xx may come after the change: the text says that the app does not know, never that nothing changed (third review, B3).
-        is AuthProblem.ServerFailed -> AccountText(R.string.account_outcome_unknown)
+        // Only an answer in the API's envelope is the server's own report; a gateway on the way may send one without it (D4).
+        is AuthProblem.ServerFailed -> AccountText(if (problem.withEnvelope) R.string.account_outcome_unknown else R.string.account_outcome_unknown_on_the_way)
     }
 }
 
@@ -619,9 +627,14 @@ fun AccountSection(state: AppUiState, user: AccountUser, actions: ProfileAccount
                 },
                 enabled = name.isNotBlank() && name.trim() != user.displayName && !account.busy,
             )
-            if (savingName && !logout) {
-                if (account.confirmed == AccountChange.DISPLAY_NAME) Notice(stringResource(R.string.display_name_saved), Tone.POSITIVE, Modifier.announced())
-                else AccountOutcome(account, AccountAction.DISPLAY_NAME)
+            // A name change whose profile the user left while it was on its way says how it ended when the profile is back (D1).
+            val nameAfterLeave = account.afterLeave?.takeIf { it.change == AccountChange.DISPLAY_NAME }
+            if ((savingName || nameAfterLeave != null) && !logout) {
+                when {
+                    account.confirmed == AccountChange.DISPLAY_NAME -> Notice(stringResource(R.string.display_name_saved), Tone.POSITIVE, Modifier.announced())
+                    nameAfterLeave != null -> Notice(accountProblemMessage(nameAfterLeave.problem, AccountAction.DISPLAY_NAME), Tone.NEGATIVE, Modifier.announced())
+                    else -> AccountOutcome(account, AccountAction.DISPLAY_NAME)
+                }
             }
             SecondaryButton(stringResource(R.string.action_change_password), { savingName = false; actions.onOpenPasswordChange() }, enabled = !account.busy)
             // The password screen closes on the server's confirmation; the card says what the server did, and why the
@@ -629,6 +642,12 @@ fun AccountSection(state: AppUiState, user: AccountUser, actions: ProfileAccount
             if (account.confirmed == AccountChange.PASSWORD) {
                 Notice(stringResource(R.string.password_changed), Tone.POSITIVE, Modifier.announced())
                 account.newPasswordNotHandedOver?.let { Notice(notHandedOverText(it), Tone.CAUTION, Modifier.announced()) }
+            }
+            // The user left Şifreyi Değiştir before the answer came, and no confirmation came: the screen is gone, so the
+            // profile says how the change ended, and what the app does not know when the answer leaves it open (D1).
+            account.afterLeave?.takeIf { it.change == AccountChange.PASSWORD }?.let { left ->
+                Notice(accountProblemMessage(left.problem, AccountAction.PASSWORD), Tone.NEGATIVE, Modifier.announced())
+                if (left.outcomeUnknown) Notice(stringResource(R.string.password_left_outcome_unknown), Tone.CAUTION, Modifier.announced())
             }
             SecondaryButton(
                 stringResource(R.string.action_logout),
@@ -655,7 +674,7 @@ fun AccountSection(state: AppUiState, user: AccountUser, actions: ProfileAccount
 private fun notHandedOverText(reason: PasswordNotHandedOver): String = when (reason) {
     PasswordNotHandedOver.SCREEN_REBUILT -> stringResource(R.string.password_not_handed_over)
     PasswordNotHandedOver.SCREEN_LEFT -> stringResource(R.string.password_not_handed_over_left)
-    PasswordNotHandedOver.PASSWORD_EDITED -> stringResource(R.string.password_not_handed_over_edited, stringResource(R.string.action_change_password))
+    PasswordNotHandedOver.PASSWORD_EDITED -> stringResource(R.string.password_not_handed_over_edited)
 }
 
 @Composable

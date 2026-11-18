@@ -371,7 +371,8 @@ class AccountSafetyTest {
             val problem = vm.state.value.account.problem!!
             assertEquals(AuthProblem.UnexpectedAnswer, problem)
             val shown = com.voleybolveveleybol.volleystat.ui.screens.accountProblemText(problem, com.voleybolveveleybol.volleystat.ui.screens.AccountAction.DELETE).id
-            assertEquals(R.string.account_unexpected_change, shown)
+            // A signed-in call gets no advice about the server choice, which the app locks while a session is open (fourth review, D4).
+            assertEquals(R.string.account_unexpected_change_signed_in, shown)
             assertTrue("${answer.status}: the server may have deleted the account", marked())
         }
         val vm = viewModel()
@@ -398,6 +399,46 @@ class AccountSafetyTest {
         vm.logout(evenWithoutAnswer = true)
         await("the logout") { !vm.state.value.account.busy && vm.state.value.account.user == null }
         assertEquals(UnconfirmedDeletion(user.userId, user.username), vm.state.value.account.unconfirmedDeletion)
+    }
+
+    // ----- the fourth review's D5: SERVER_BUSY on the deletion -----
+
+    /**
+     * The server answers SERVER_BUSY at /me/delete only after it found the session (backend/app/accounts.py,
+     * delete_account: signed_in, then the hash pool of check_own_password), so the account was still there and the
+     * deletion did not happen. When the app gives up after its repeats, no mark stays behind and a later end of the
+     * session offers nothing (no needless Telefondan Sil).
+     */
+    @Test fun aDeletionThatMeetsABusyServerUntilTheAppGivesUpLeavesNoMarkAndALaterEndIsAnOrdinaryOne() {
+        seedAccountWithData()
+        on("POST /me/delete") { refuse(503, "SERVER_BUSY").setHeader("Retry-After", "0") }
+        val vm = viewModel()
+        vm.deleteAccount(password)
+        await("the last busy answer") { !vm.state.value.account.busy && seen.isNotEmpty() }
+        assertEquals(AuthProblem.ServerBusy(0), vm.state.value.account.problem)
+        assertEquals(AppViewModel.BUSY_TRIES, seen.count { it.key == "POST /me/delete" })
+        assertFalse("the mark is what it was before the deletion", marked())
+        assertFalse("nor after a restart", SessionStore(File(files, "session.bin"), PlainSessionCipher).load()!!.deletionUnanswered)
+        vm.endTheSession()
+        assertNull("no needless Telefondan Sil offer", vm.state.value.account.unconfirmedDeletion)
+        assertTrue(vm.state.value.account.sessionEnded)
+        assertTrue(File(folder, "volleystat.json").exists())
+    }
+
+    /** After an earlier lost answer, a busy answer shows the session alive, as PASSWORD_WRONG does: the earlier deletion did not happen. */
+    @Test fun aBusyServerAtARepeatedDeletionShowsTheAccountIsStillThere() {
+        seedAccountWithData()
+        val vm = viewModel()
+        vm.deleteAndLoseTheAnswer()
+        assertTrue(marked())
+        on("POST /me/delete") { refuse(503, "SERVER_BUSY").setHeader("Retry-After", "0") }
+        vm.deleteAccount(password)
+        await("the last busy answer") { !vm.state.value.account.busy && seen.count { it.key == "POST /me/delete" } == 1 + AppViewModel.BUSY_TRIES }
+        assertEquals(AuthProblem.ServerBusy(0), vm.state.value.account.problem)
+        assertFalse("the server found the session before it answered SERVER_BUSY", marked())
+        vm.endTheSession()
+        assertNull("no needless Telefondan Sil offer", vm.state.value.account.unconfirmedDeletion)
+        assertTrue(vm.state.value.account.sessionEnded)
     }
 
     // ----- review finding F1: the offer outlives the process, so no account's folder is ever out of reach -----
@@ -1007,7 +1048,7 @@ class AccountSafetyTest {
     @Test fun aRepeatLoginAfterALostDeletionEndsTheMarkOfALostRegistration() {
         seedAccountWithData()
         val marks = com.voleybolveveleybol.volleystat.data.UnansweredRegistrationStore(File(files, "registrations.bin"), PlainSessionCipher)
-        marks.add(user.username)
+        marks.add(user.username, System.currentTimeMillis())
         val vm = viewModel()
         vm.deleteAndLoseTheAnswer()
         var deletions = 0
@@ -1016,7 +1057,7 @@ class AccountSafetyTest {
         vm.deleteAccount(password)
         await("the second deletion") { !vm.state.value.account.busy && seen.size == 4 }
         assertEquals("the login signed the account in", "fresh-token", SessionStore(File(files, "session.bin"), PlainSessionCipher).load()?.token)
-        assertTrue("the account is there, so the mark has done its work", marks.load().isEmpty())
+        assertTrue("the account is there, so the mark has done its work", marks.load(System.currentTimeMillis()).isEmpty())
         assertFalse(File(files, "registrations.bin").exists())
     }
 

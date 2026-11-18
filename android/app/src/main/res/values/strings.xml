@@ -653,6 +653,11 @@
     <string name="account_refused">Sunucu bu isteği kabul etmedi ve hiçbir şeyi değiştirmedi.</string>
     <string name="account_outcome_unknown">Sunucu bir hata bildirdi. Uygulama sunucunun bu isteği yerine getirip getirmediğini bilmiyor. Biraz sonra yeniden deneyebilirsin.</string>
     <string name="account_unexpected_change">Uygulama sunucunun yanıtını okuyamadı ve sunucunun bu isteği yerine getirip getirmediğini bilmiyor. Sunucu seçimini kontrol edip yeniden deneyebilirsin.</string>
+    <!-- A 5xx without the API's envelope (HTTP_5xx): a gateway on the way may have sent it, so the text does not name the server as the sender. -->
+    <string name="account_outcome_unknown_on_the_way">Uygulama sunucudan ya da sunucuya giden yoldan bir hata yanıtı aldı. Uygulama sunucunun bu isteği yerine getirip getirmediğini bilmiyor. Biraz sonra yeniden deneyebilirsin.</string>
+    <!-- An unreadable answer to the display name change, the password change or the deletion. The app locks the server choice
+         while a session is open, so the text gives no advice about it. -->
+    <string name="account_unexpected_change_signed_in">Uygulama sunucunun yanıtını okuyamadı ve sunucunun bu isteği yerine getirip getirmediğini bilmiyor. Biraz sonra yeniden deneyebilirsin.</string>
     <!-- 503 SERVER_BUSY after the app's own repeats. %1$d is the number of times it sent the request. -->
     <string name="server_busy_gave_up">Uygulama isteği %1$d kez gönderdi ve sunucu her seferinde çok sayıda istek işlediğini bildirdi. Biraz sonra yeniden deneyebilirsin.</string>
 
@@ -680,7 +685,11 @@
     <string name="password_changed">Sunucu şifreni değiştirdi ve bu hesabın öteki bütün oturumlarını kapattı.</string>
     <string name="password_not_handed_over">Android şifre değiştirme ekranını sunucunun yanıtı gelmeden yeniden kurdu. Bu yüzden uygulama yeni şifreni şifre yöneticisine iletemedi. Şifre yöneticin bu hesabın eski şifresini tutuyorsa yeni şifreyi oraya sen yazabilirsin.</string>
     <string name="password_not_handed_over_left">Şifre değiştirme ekranından sunucunun yanıtı gelmeden çıktın. Bu yüzden uygulama yeni şifreni şifre yöneticisine iletemedi. Şifre yöneticin bu hesabın eski şifresini tutuyorsa yeni şifreyi oraya sen yazabilirsin.</string>
-    <string name="password_not_handed_over_edited">Uygulama sunucunun yanıtını beklerken sen yeni şifre alanındaki yazıyı değiştirdin. Sen %1$s düğmesine dokunduğunda sunucu alanda yazan şifreyi yeni şifre olarak kaydetti. Alanda artık bu şifre yazmadığı için uygulama şifre yöneticisine hiçbir şifre iletmedi. Şifre yöneticin bu hesabın eski şifresini tutuyorsa sunucunun kaydettiği şifreyi oraya sen yazabilirsin.</string>
+    <!-- The change goes from the button or from the keyboard's Done key, so the text names the sending, not the button (fourth review, D3). -->
+    <string name="password_not_handed_over_edited">Uygulama sunucunun yanıtını beklerken sen yeni şifre alanındaki yazıyı değiştirdin. Sen değişikliği gönderdiğinde sunucu alanda o an yazan şifreyi yeni şifre olarak kaydetti. Alanda artık bu şifre yazmadığı için uygulama şifre yöneticisine hiçbir şifre iletmedi. Şifre yöneticin bu hesabın eski şifresini tutuyorsa sunucunun kaydettiği şifreyi oraya sen yazabilirsin.</string>
+    <!-- The user left Şifreyi Değiştir while the change was on its way, and the answer leaves the outcome open (no answer, a 5xx,
+         an unreadable answer). The profile shows it below the text of that answer. -->
+    <string name="password_left_outcome_unknown">Şifre değiştirme ekranından sunucunun yanıtı gelmeden çıktın. Bu yüzden uygulama şifre yöneticisine hiçbir şifre iletmedi. Uygulama sunucunun şifreni değiştirip değiştirmediğini bilmiyor. Sunucu şifreni değiştirdiyse şifre yöneticin bu hesabın eski şifresini tutuyor olabilir.</string>
     <string name="action_logout">Çıkış Yap</string>
     <string name="logout_title">Çıkış yapmak istiyor musun?</string>
     <string name="logout_body">Uygulama bu hesabın maçlarını, kadrolarını ve kamera kayıtlarını bu telefonda saklar. Yeniden giriş yapınca hepsini yerinde bulursun.</string>

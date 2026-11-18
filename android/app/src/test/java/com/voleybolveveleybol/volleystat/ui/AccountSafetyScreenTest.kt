@@ -422,7 +422,7 @@ class AccountSafetyScreenTest {
         val texts = mapOf(
             PasswordNotHandedOver.SCREEN_REBUILT to text(R.string.password_not_handed_over),
             PasswordNotHandedOver.SCREEN_LEFT to text(R.string.password_not_handed_over_left),
-            PasswordNotHandedOver.PASSWORD_EDITED to text(R.string.password_not_handed_over_edited, text(R.string.action_change_password)),
+            PasswordNotHandedOver.PASSWORD_EDITED to text(R.string.password_not_handed_over_edited),
         )
         texts.forEach { (reason, expected) ->
             state = state.copy(account = state.account.copy(newPasswordNotHandedOver = reason))
@@ -430,6 +430,57 @@ class AccountSafetyScreenTest {
             compose.onNodeWithText(expected).performScrollTo().assertIsDisplayed()
             texts.filterKeys { it != reason }.values.forEach { other -> assertFalse("$reason shows another reason", shown(other)) }
         }
+    }
+
+    // ----- the fourth review's D1: the profile says how a change ended whose screen the user left -----
+
+    private fun profileWith(afterLeave: com.voleybolveveleybol.volleystat.OutcomeAfterLeave?): (AppUiState) -> AppUiState =
+        { it.copy(account = it.account.copy(afterLeave = afterLeave)) }
+
+    @Test fun theProfileSaysHowAPasswordChangeEndedAfterItsScreenWasLeft() {
+        var state by mutableStateOf(
+            AppUiState(settings = Settings(welcomeSeen = true, accountSeen = true, legacyHandled = true), account = AccountUi(user = ali))
+        )
+        show { com.voleybolveveleybol.volleystat.ui.screens.ProfileScreen(state, "0.8.0", {}, {}, {}, { true }, account = com.voleybolveveleybol.volleystat.ui.screens.ProfileAccountActions()) }
+        val note = text(R.string.password_left_outcome_unknown)
+        assertFalse(shown(note))
+        fun left(problem: AuthProblem, unknown: Boolean) = com.voleybolveveleybol.volleystat.OutcomeAfterLeave(AccountChange.PASSWORD, problem, unknown)
+
+        // No answer came after the request went out: the profile names that, and what the app does not know.
+        state = profileWith(left(AuthProblem.Unreachable, unknown = true))(state)
+        compose.onNodeWithText(text(R.string.net_no_answer)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(note).performScrollTo().assertIsDisplayed()
+        assertFalse(shown(text(R.string.password_changed)))
+
+        // A 5xx without the envelope: the text of that answer, and the note.
+        state = profileWith(left(AuthProblem.ServerFailed(502), unknown = true))(state)
+        compose.onNodeWithText(text(R.string.account_outcome_unknown_on_the_way)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(note).performScrollTo().assertIsDisplayed()
+        assertFalse(shown(text(R.string.net_no_answer)))
+
+        // A refusal: the server changed nothing, so the app knows the outcome and the password manager holds the right password.
+        state = profileWith(left(AuthProblem.PasswordWrong, unknown = false))(state)
+        compose.onNodeWithText(text(R.string.password_wrong)).performScrollTo().assertIsDisplayed()
+        assertFalse(shown(note))
+
+        // A request that never left the phone: no answer came, and the app knows that the server did not get it.
+        state = profileWith(left(AuthProblem.Unreachable, unknown = false))(state)
+        compose.onNodeWithText(text(R.string.net_no_answer)).performScrollTo().assertIsDisplayed()
+        assertFalse(shown(note))
+
+        state = profileWith(null)(state)
+        assertFalse(shown(text(R.string.net_no_answer)))
+    }
+
+    @Test fun theProfileSaysHowADisplayNameChangeEndedAfterTheProfileWasLeft() {
+        val state = AppUiState(
+            settings = Settings(welcomeSeen = true, accountSeen = true, legacyHandled = true),
+            account = AccountUi(user = ali, afterLeave = com.voleybolveveleybol.volleystat.OutcomeAfterLeave(AccountChange.DISPLAY_NAME, AuthProblem.UnexpectedAnswer, true)),
+        )
+        show { com.voleybolveveleybol.volleystat.ui.screens.ProfileScreen(state, "0.8.0", {}, {}, {}, { true }, account = com.voleybolveveleybol.volleystat.ui.screens.ProfileAccountActions()) }
+        compose.onNodeWithText(text(R.string.account_unexpected_change_signed_in)).performScrollTo().assertIsDisplayed()
+        assertFalse("the password note belongs to the password change", shown(text(R.string.password_left_outcome_unknown)))
+        assertFalse(shown(text(R.string.display_name_saved)))
     }
 
     @Test fun theOfferWaitsWhileAnAccountCallIsOnItsWay() {

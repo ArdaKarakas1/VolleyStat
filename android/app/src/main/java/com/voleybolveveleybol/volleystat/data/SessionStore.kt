@@ -253,39 +253,74 @@ class DeletionDoubtStore(
  * a login whether the account is there. The file keys each username by its SHA-256, as device.bin
  * does, and is sealed like session.bin: no plain file of the phone names the account, not even by
  * its digest.
+ *
+ * Each mark keeps the time the app made it, inside the sealed file, and lasts a day (fourth review,
+ * D2): later the username may name someone else's account, and a login would count a failed attempt
+ * against it. A file of the fourth round holds marks without a time; they count as expired.
  */
 class UnansweredRegistrationStore(private val file: File, private val cipher: SessionCipher) {
+    companion object {
+        /** How long a mark lasts. The user can always log in from the login screen; an expired mark costs only the search. */
+        const val MARK_LIFETIME_MS = 24L * 60 * 60 * 1000
 
-    /** The digests of the marked usernames. A file the phone can not open now gives none, and stays as it is. */
-    fun load(): Set<String> = runCatching { read() }.getOrDefault(emptySet())
-
-    /** Marks [username]. Throws, and leaves the file as it was, when the phone can not open or seal the file now. */
-    @Synchronized
-    fun add(username: String) {
-        val marks = read()
-        val key = sha256Hex(username)
-        if (key !in marks) write(marks + key)
+        /**
+         * Whether a mark made at [at] still counts at [now]: it is younger than a day. A mark made later than
+         * [now] (the clock went back) counts as expired, so no mark lives longer than a day of the clock.
+         */
+        fun current(at: Long, now: Long): Boolean = now - at in 0 until MARK_LIFETIME_MS
     }
+
+    /**
+     * The marks that still count at [now], as digest to the time the app made each one. The others leave
+     * the file; a keystore that can not reseal it now leaves the file as it is, and the next load leaves
+     * them out again. A file the phone can not open now gives none, and stays as it is.
+     */
+    @Synchronized
+    fun load(now: Long): Map<String, Long> {
+        val marks = runCatching { read() }.getOrElse { return emptyMap() }
+        val counting = timed(marks).filterValues { current(it, now) }
+        if (counting.size != marks.size) runCatching { write(counting) }
+        return counting
+    }
+
+    /**
+     * Marks [username] at [at]; a second mark of the same username starts its day again. Marks that no longer
+     * count at [at] leave the file. Throws, and leaves the file as it was, when the phone can not open or seal it now.
+     */
+    @Synchronized
+    fun add(username: String, at: Long) = write(timed(read()).filterValues { current(it, at) } + (sha256Hex(username) to at))
 
     /** Takes the mark of [username] off. Throws, and leaves the file as it was, when the phone can not open or seal the file now. */
     @Synchronized
     fun remove(username: String) {
         val marks = read()
         val key = sha256Hex(username)
-        if (key in marks) write(marks - key)
+        if (key in marks) write(timed(marks) - key)
     }
 
-    private fun read(): Set<String> {
-        val marks = readSealed(file, cipher).optJSONArray("usernames") ?: return emptySet()
-        return (0 until marks.length()).map { marks.optString(it) }.filter { it.isNotEmpty() }.toSet()
+    /** The marks of the file, as digest to time. A mark of a fourth-round file has no time (null). */
+    private fun read(): Map<String, Long?> {
+        val json = readSealed(file, cipher)
+        val marks = LinkedHashMap<String, Long?>()
+        json.optJSONArray("usernames")?.let { old -> (0 until old.length()).map { old.optString(it) }.filter { it.isNotEmpty() }.forEach { marks[it] = null } }
+        json.optJSONArray("marks")?.let { list ->
+            (0 until list.length()).mapNotNull { list.optJSONObject(it) }.forEach { mark ->
+                val digest = mark.optString("digest")
+                if (digest.isNotEmpty()) marks[digest] = if (mark.has("markedAtMs")) mark.optLong("markedAtMs") else null
+            }
+        }
+        return marks
     }
 
-    private fun write(marks: Set<String>) {
+    private fun timed(marks: Map<String, Long?>): Map<String, Long> = marks.mapNotNull { (digest, at) -> at?.let { digest to it } }.toMap()
+
+    private fun write(marks: Map<String, Long>) {
         if (marks.isEmpty()) {
             file.delete()
             return
         }
-        replaceAtomically(file, cipher.seal(JSONObject().put("usernames", org.json.JSONArray(marks.toList())).toString().toByteArray(Charsets.UTF_8)))
+        val list = org.json.JSONArray(marks.map { (digest, at) -> JSONObject().put("digest", digest).put("markedAtMs", at) })
+        replaceAtomically(file, cipher.seal(JSONObject().put("version", 2).put("marks", list).toString().toByteArray(Charsets.UTF_8)))
     }
 }
 

@@ -395,51 +395,114 @@ class DeviceTokenStoreTest {
     // The third review's A1: registrations.bin keeps the usernames whose registration got no answer.
 
     private val marks get() = File(folder.root, "registrations.bin")
+    private val now = 1_800_000_000_000L
+    private val day = UnansweredRegistrationStore.MARK_LIFETIME_MS
 
     @Test fun theMarksOfLostRegistrationsAreKeptSealedByDigestAndOneLeavesWithoutTheOthers() {
         UnansweredRegistrationStore(marks, cipher).apply {
-            add("cagri.ozturk")
-            add("veli")
-            add("veli")
+            add("cagri.ozturk", now)
+            add("veli", now)
+            add("veli", now)
         }
-        assertEquals(setOf(sha256Hex("cagri.ozturk"), sha256Hex("veli")), UnansweredRegistrationStore(marks, cipher).load())
+        assertEquals(setOf(sha256Hex("cagri.ozturk"), sha256Hex("veli")), UnansweredRegistrationStore(marks, cipher).load(now).keys)
         val text = String(marks.readBytes(), Charsets.ISO_8859_1)
         assertFalse(text.contains("cagri"))
         assertFalse("the sealed file shows not even the digest", text.contains(sha256Hex("cagri.ozturk")))
         UnansweredRegistrationStore(marks, cipher).remove("cagri.ozturk")
-        assertEquals(setOf(sha256Hex("veli")), UnansweredRegistrationStore(marks, cipher).load())
+        assertEquals(setOf(sha256Hex("veli")), UnansweredRegistrationStore(marks, cipher).load(now).keys)
         UnansweredRegistrationStore(marks, cipher).remove("ayse")
         UnansweredRegistrationStore(marks, cipher).remove("veli")
         assertFalse("the last mark takes the file with it", marks.exists())
-        assertTrue(UnansweredRegistrationStore(marks, cipher).load().isEmpty())
+        assertTrue(UnansweredRegistrationStore(marks, cipher).load(now).isEmpty())
     }
 
     @Test fun aMarkIsKeptOnlyAsTheDigestOfTheUsername() {
-        UnansweredRegistrationStore(marks, com.voleybolveveleybol.volleystat.PlainSessionCipher).add("ali")
+        UnansweredRegistrationStore(marks, com.voleybolveveleybol.volleystat.PlainSessionCipher).add("ali", now)
         val text = marks.readText()
         assertFalse(text.contains("\"ali\""))
         assertTrue(text.contains(sha256Hex("ali")))
     }
 
     @Test fun aKeystoreThatCanNotOpenTheMarksNowLeavesTheFileAsItIs() {
-        UnansweredRegistrationStore(marks, cipher).add("ali")
+        UnansweredRegistrationStore(marks, cipher).add("ali", now)
         val before = marks.readBytes()
         val flaky = FlakyCipher(cipher, failures = 2) { java.security.KeyStoreException("busy") }
-        assertTrue("an open that fails twice reads as no mark", UnansweredRegistrationStore(marks, flaky).load().isEmpty())
+        assertTrue("an open that fails twice reads as no mark", UnansweredRegistrationStore(marks, flaky).load(now).isEmpty())
         flaky.failures = 2
-        assertTrue(runCatching { UnansweredRegistrationStore(marks, flaky).add("veli") }.isFailure)
+        assertTrue(runCatching { UnansweredRegistrationStore(marks, flaky).add("veli", now) }.isFailure)
         flaky.failures = 2
         assertTrue(runCatching { UnansweredRegistrationStore(marks, flaky).remove("ali") }.isFailure)
         org.junit.Assert.assertArrayEquals(before, marks.readBytes())
         flaky.failures = 1
-        assertEquals("one failed open is tried again", setOf(sha256Hex("ali")), UnansweredRegistrationStore(marks, flaky).load())
+        assertEquals("one failed open is tried again", setOf(sha256Hex("ali")), UnansweredRegistrationStore(marks, flaky).load(now).keys)
     }
 
     @Test fun aDamagedFileOfMarksHoldsNoneAndTheNextMarkStillGetsSaved() {
         marks.writeBytes(ByteArray(30) { 7 })
-        assertTrue(UnansweredRegistrationStore(marks, cipher).load().isEmpty())
-        UnansweredRegistrationStore(marks, cipher).add("ali")
-        assertEquals(setOf(sha256Hex("ali")), UnansweredRegistrationStore(marks, cipher).load())
+        assertTrue(UnansweredRegistrationStore(marks, cipher).load(now).isEmpty())
+        UnansweredRegistrationStore(marks, cipher).add("ali", now)
+        assertEquals(setOf(sha256Hex("ali")), UnansweredRegistrationStore(marks, cipher).load(now).keys)
+    }
+
+    // The fourth review's D2: each mark keeps the time it was made, inside the sealed file, and lasts a day.
+
+    @Test fun eachMarkKeepsItsTimeAndOneADayOldLeavesTheFile() {
+        UnansweredRegistrationStore(marks, cipher).apply {
+            add("ali", now)
+            // A second mark of the same username starts its day again.
+            add("ali", now + 1_000)
+            add("veli", now + 3_600_000)
+        }
+        val store = UnansweredRegistrationStore(marks, cipher)
+        assertEquals(mapOf(sha256Hex("ali") to now + 1_000, sha256Hex("veli") to now + 3_600_000), store.load(now + 3_600_000))
+        assertFalse("the time stays inside the sealed file", String(marks.readBytes(), Charsets.ISO_8859_1).contains("${now + 1_000}"))
+        // A day after it was made the mark of ali is gone, from the answer and from the file.
+        assertEquals(mapOf(sha256Hex("veli") to now + 3_600_000), store.load(now + 1_000 + day))
+        assertEquals("the file no longer holds it", mapOf(sha256Hex("veli") to now + 3_600_000), store.load(now + 3_600_000))
+        assertTrue(store.load(now + 3_600_000 + day).isEmpty())
+        assertFalse("the last expired mark takes the file with it", marks.exists())
+    }
+
+    @Test fun aNewMarkTakesTheExpiredOnesOutOfTheFile() {
+        val plain = UnansweredRegistrationStore(marks, com.voleybolveveleybol.volleystat.PlainSessionCipher)
+        plain.add("ali", now)
+        plain.add("veli", now + day)
+        assertFalse(marks.readText().contains(sha256Hex("ali")))
+        assertTrue(marks.readText().contains(sha256Hex("veli")))
+    }
+
+    /** A clock that went back would make a mark look younger than it is: such a mark counts as expired. */
+    @Test fun aMarkMadeLaterThanTheClockNowSaysCountsAsExpired() {
+        UnansweredRegistrationStore(marks, cipher).add("ali", now)
+        assertTrue(UnansweredRegistrationStore(marks, cipher).load(now - 1).isEmpty())
+        assertFalse(marks.exists())
+    }
+
+    @Test fun anExpiredMarkTheKeystoreCanNotRewriteIsStillLeftOut() {
+        UnansweredRegistrationStore(marks, cipher).apply {
+            add("ali", now)
+            add("veli", now + 3_600_000)
+        }
+        val cannotSeal = object : SessionCipher {
+            override fun seal(plain: ByteArray): ByteArray = throw java.security.GeneralSecurityException("the keystore can not seal now")
+            override fun open(sealed: ByteArray): ByteArray = cipher.open(sealed)
+        }
+        val before = marks.readBytes()
+        assertEquals(setOf(sha256Hex("veli")), UnansweredRegistrationStore(marks, cannotSeal).load(now + day).keys)
+        org.junit.Assert.assertArrayEquals("the file stays as it was", before, marks.readBytes())
+        assertEquals("the next load leaves the expired mark out again", setOf(sha256Hex("veli")), UnansweredRegistrationStore(marks, cannotSeal).load(now + day).keys)
+        // When every mark has expired, the file goes without the keystore.
+        assertTrue(UnansweredRegistrationStore(marks, cannotSeal).load(now + 3_600_000 + day).isEmpty())
+        assertFalse(marks.exists())
+    }
+
+    /** A registrations.bin of the fourth round holds digests without times: its marks count as expired (ADR-0119). */
+    @Test fun aFileOfMarksWithoutTimesReadsAsNoMarkAndLeaves() {
+        marks.writeBytes(cipher.seal(org.json.JSONObject().put("usernames", org.json.JSONArray(listOf(sha256Hex("ali")))).toString().toByteArray()))
+        assertTrue(UnansweredRegistrationStore(marks, cipher).load(now).isEmpty())
+        assertFalse(marks.exists())
+        UnansweredRegistrationStore(marks, cipher).add("veli", now)
+        assertEquals(setOf(sha256Hex("veli")), UnansweredRegistrationStore(marks, cipher).load(now).keys)
     }
 
     private fun sha256Hex(text: String) =

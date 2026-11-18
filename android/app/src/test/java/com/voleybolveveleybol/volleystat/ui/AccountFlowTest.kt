@@ -14,6 +14,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
@@ -450,9 +451,78 @@ class AccountFlowTest {
         field(R.string.field_new_password).performTextReplacement("başka ve uzun şifre 88")
         held.countDown()
         waitFor(text(R.string.password_changed))
-        compose.onNodeWithText(text(R.string.password_not_handed_over_edited, text(R.string.action_change_password))).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.password_not_handed_over_edited)).performScrollTo().assertIsDisplayed()
         assertEquals(com.voleybolveveleybol.volleystat.PasswordNotHandedOver.PASSWORD_EDITED, vm.state.value.account.newPasswordNotHandedOver)
         assertTrue("the server holds the text that was sent", standIn.hasPassword(TestAccounts.SESSION.username, "yeni ve uzun şifre 77"))
+    }
+
+    /** Runs the main looper until [condition] holds: the view model ends its calls on the main thread. */
+    private fun settleUntil(condition: () -> Boolean) {
+        val end = System.currentTimeMillis() + 15_000
+        while (!condition()) {
+            check(System.currentTimeMillis() < end) { "timed out" }
+            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+            Thread.sleep(20)
+        }
+    }
+
+    /**
+     * The fourth review's D1 (the reader's probe): the user leaves Şifreyi Değiştir while the change is on its way.
+     * The server changes the password and its answer is lost. The call goes on after the leave, and the profile says
+     * that no answer came, that the app does not know whether the server changed the password, and that the password
+     * manager may still hold the old one. Before, the cancelled call dropped its outcome and the profile said nothing.
+     */
+    @Test fun aChangeLeftWhileOnItsWayWhoseAnswerIsLostIsNotPassedOverInSilence() {
+        val (vm, held) = sendAHeldPasswordChange()
+        standIn.loseNextAnswerOf = "PUT /me/password"
+        scenario!!.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+        compose.waitForIdle()
+        assertFalse("the password screen is gone", shown(text(R.string.field_current_password)))
+        held.countDown()
+        settleUntil { !vm.state.value.account.busy }
+        compose.waitForIdle()
+        assertTrue("the server holds the new password", standIn.hasPassword(TestAccounts.SESSION.username, "yeni ve uzun şifre 77"))
+        val anyWord = listOf(
+            text(R.string.password_changed), text(R.string.net_no_answer), text(R.string.account_outcome_unknown),
+            text(R.string.password_not_handed_over_left),
+        ).filter { shown(it) }
+        assertTrue("the profile says nothing about a change the server may have made (and did)", anyWord.isNotEmpty())
+        assertEquals(
+            com.voleybolveveleybol.volleystat.OutcomeAfterLeave(com.voleybolveveleybol.volleystat.AccountChange.PASSWORD, com.voleybolveveleybol.volleystat.data.AuthProblem.Unreachable, outcomeUnknown = true),
+            vm.state.value.account.afterLeave,
+        )
+        compose.onNodeWithText(text(R.string.net_no_answer)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.password_left_outcome_unknown)).performScrollTo().assertIsDisplayed()
+        assertFalse("the server confirmed nothing the app got", shown(text(R.string.password_changed)))
+        assertEquals("the request went out once", 1, standIn.requests.count { it.first == "PUT /me/password" })
+    }
+
+    /**
+     * The fourth review's D3 (the reader's probe): the keyboard's Done key sends the change too, and then nobody tapped
+     * Şifreyi Değiştir. The note about an edited new password names the sending, not a tap of the button.
+     */
+    @Test fun aChangeSentFromTheKeyboardIsNotNamedAsATapOfTheButton() {
+        standIn.add(TestAccounts.SESSION.username, TestAccounts.SESSION.displayName, PASSWORD, token = TestAccounts.SESSION.token, id = TestAccounts.SESSION.userId)
+        TestAccounts.seed(context)
+        val vm = launch()
+        tap(R.string.nav_profile)
+        button(R.string.action_change_password).performScrollTo().performClick()
+        field(R.string.field_current_password).performTextInput(PASSWORD)
+        val held = java.util.concurrent.CountDownLatch(1)
+        standIn.hold["PUT /me/password"] = held
+        field(R.string.field_new_password).performTextInput("yeni ve uzun şifre 77")
+        // The keyboard's Done key sends the change; the button is never tapped.
+        field(R.string.field_new_password).performImeAction()
+        compose.waitUntil(10_000) { standIn.requests.any { it.first == "PUT /me/password" } }
+        field(R.string.field_new_password).performTextReplacement("başka ve uzun şifre 88")
+        held.countDown()
+        settleUntil { vm.state.value.account.confirmed == com.voleybolveveleybol.volleystat.AccountChange.PASSWORD && !vm.state.value.account.busy }
+        compose.waitForIdle()
+        assertEquals(com.voleybolveveleybol.volleystat.PasswordNotHandedOver.PASSWORD_EDITED, vm.state.value.account.newPasswordNotHandedOver)
+        val note = text(R.string.password_not_handed_over_edited)
+        compose.onNodeWithText(note).performScrollTo().assertIsDisplayed()
+        assertFalse("the profile says that the user tapped a button nobody tapped: $note", note.contains("düğmesine dokunduğunda"))
+        assertTrue(note, note.contains("Sen değişikliği gönderdiğinde"))
     }
 
     /**

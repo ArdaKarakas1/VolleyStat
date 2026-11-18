@@ -35,6 +35,13 @@ class ApiException(val status: Int, val code: String, message: String, val detai
     val leavesOutcomeUnknown: Boolean get() = status !in 400..499 && code != "SERVER_BUSY"
 }
 
+/**
+ * The request never left the phone: the app could not open a connection to the server's address (the
+ * connection was refused, the name did not resolve, no route led there, or no connection came within the
+ * wait). Nothing of the request reached the server, so the server can not have acted on it (fourth review, D2).
+ */
+class RequestNotSent(cause: IOException) : IOException("The request never left the phone", cause)
+
 /** An account as the server describes it (docs/API_V1.md, section 10). */
 data class AccountUser(val id: String, val username: String, val displayName: String, val passwordTemporary: Boolean = false)
 
@@ -395,7 +402,12 @@ class ApiClient(
         headers: Map<String, String> = emptyMap(),
         expectedStatus: Int? = null,
     ): JSONObject {
-        val connection = URL(baseUrl.trimEnd('/') + path).openConnection() as HttpURLConnection
+        // An address the phone can not even read (a build without a server address) sends nothing either.
+        val connection = try {
+            URL(baseUrl.trimEnd('/') + path).openConnection() as HttpURLConnection
+        } catch (error: IOException) {
+            throw RequestNotSent(error)
+        }
         try {
             connection.requestMethod = method
             connection.connectTimeout = 5_000
@@ -409,8 +421,15 @@ class ApiClient(
                 // A streamed body can not be sent a second time, so the HTTP stack never repeats a request
                 // on its own after a lost answer. A register or a login that went out twice would be wrong.
                 connection.setFixedLengthStreamingMode(length)
-                connection.outputStream.use { it.write(body, 0, length) }
             }
+            // The connection is opened on its own, before any of the body goes: a failure here (refused, no such
+            // name, no route, no connection within the wait) means that the request never left the phone (D2).
+            try {
+                connection.connect()
+            } catch (error: IOException) {
+                throw RequestNotSent(error)
+            }
+            if (body != null) connection.outputStream.use { it.write(body, 0, length) }
             val status = connection.responseCode
             val stream = if (status in 200..299) connection.inputStream else connection.errorStream
             val text = stream?.bufferedReader()?.use { it.readText() }.orEmpty()

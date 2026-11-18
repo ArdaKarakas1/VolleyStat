@@ -9,6 +9,7 @@ import com.voleybolveveleybol.volleystat.data.DeviceTokenStore
 import com.voleybolveveleybol.volleystat.data.LocalStore
 import com.voleybolveveleybol.volleystat.data.SessionStore
 import com.voleybolveveleybol.volleystat.data.StoredState
+import com.voleybolveveleybol.volleystat.data.UnansweredRegistrationStore
 import com.voleybolveveleybol.volleystat.model.Draft
 import com.voleybolveveleybol.volleystat.model.LocalVideo
 import com.voleybolveveleybol.volleystat.model.MatchRecord
@@ -767,7 +768,7 @@ class AppViewModelAccountTest {
     }
 
     @Test fun aRegistrationThatMeetsAServerErrorIsLookedForAtTheNextTry() =
-        aRegistrationLooksForItsAccountAfter(refuse(500, "INTERNAL"), AuthProblem.ServerFailed(500))
+        aRegistrationLooksForItsAccountAfter(refuse(500, "INTERNAL"), AuthProblem.ServerFailed(500, withEnvelope = true))
 
     @Test fun aRegistrationThatMeetsAServerErrorWithoutTheEnvelopeIsLookedForAtTheNextTry() =
         aRegistrationLooksForItsAccountAfter(MockResponse().setResponseCode(502).setBody("Bad Gateway"), AuthProblem.ServerFailed(502))
@@ -895,6 +896,63 @@ class AppViewModelAccountTest {
         viewModel().registerAndWait(operatorCode = null)
         assertEquals(listOf("POST /auth/register", "POST /auth/login", "POST /auth/logout", "POST /auth/register"), seen.map { it.key })
         assertFalse(File(files, "registrations.bin").exists())
+    }
+
+    // The fourth review's D2: a mark lasts a day. After that a taken username sends no login: the account it names may be
+    // someone else's by then, and the user can still log in from the login screen.
+
+    private val marks get() = File(files, "registrations.bin")
+    private val day = UnansweredRegistrationStore.MARK_LIFETIME_MS
+
+    /** A registration whose answer is lost, on a clock of the test's own, then a repeat [later] that meets the taken username. */
+    private fun aRepeatAfter(later: Long): AppViewModel {
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        var registrations = 0
+        on("POST /auth/register") { if (++registrations == 1) lost() else refuse(409, "USERNAME_TAKEN") }
+        val vm = viewModel()
+        var now = 1_800_000_000_000L
+        vm.clock = { now }
+        vm.registerAndWait(operatorCode = null)
+        assertEquals(AuthProblem.Unreachable, vm.state.value.account.problem)
+        assertTrue("the lost registration is marked", marks.exists())
+        now += later
+        vm.registerAndWait(operatorCode = null)
+        return vm
+    }
+
+    @Test fun aMarkADayOldSendsNoLoginAndLeavesTheFile() {
+        val vm = aRepeatAfter(day)
+        assertEquals("no login goes to whoever holds the username now", listOf("POST /auth/register", "POST /auth/register"), seen.map { it.key })
+        assertEquals(AuthProblem.UsernameTaken, vm.state.value.account.problem)
+        assertFalse("the expired mark leaves the file", marks.exists())
+    }
+
+    @Test fun aMarkYoungerThanADayStillLooksForTheAccount() {
+        val vm = aRepeatAfter(day - 1)
+        assertEquals(listOf("POST /auth/register", "POST /auth/register", "POST /auth/login"), seen.map { it.key })
+        assertEquals("ali", vm.state.value.account.user?.username)
+    }
+
+    @Test fun aMarkOlderThanADayIsDroppedAtTheStartAndSendsNoLogin() {
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        UnansweredRegistrationStore(marks, PlainSessionCipher).add("ali", System.currentTimeMillis() - day - 60_000)
+        on("POST /auth/register") { refuse(409, "USERNAME_TAKEN") }
+        val vm = viewModel()
+        assertFalse("the start drops the expired mark", marks.exists())
+        vm.registerAndWait(operatorCode = null)
+        assertEquals(listOf("POST /auth/register"), seen.map { it.key })
+        assertEquals(AuthProblem.UsernameTaken, vm.state.value.account.problem)
+    }
+
+    /** A registrations.bin of the fourth round holds digests without times. Its marks count as expired (ADR-0119). */
+    @Test fun aFileOfMarksWithoutTimesReadsAsNoMarkAndTheAppStarts() {
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        marks.writeText(JSONObject().put("usernames", org.json.JSONArray(listOf(com.voleybolveveleybol.volleystat.data.sha256Hex("ali")))).toString())
+        on("POST /auth/register") { refuse(409, "USERNAME_TAKEN") }
+        val vm = viewModel()
+        assertFalse(marks.exists())
+        vm.registerAndWait(operatorCode = null)
+        assertEquals(listOf("POST /auth/register"), seen.map { it.key })
     }
 
     // ----- the data of app 0.7 -----
@@ -1113,6 +1171,121 @@ class AppViewModelAccountTest {
         vm.changePassword("eski şifre 12345", "yeni şifre 67890")
         await("the confirmation") { !vm.state.value.account.busy && vm.state.value.account.confirmed == AccountChange.PASSWORD }
         assertNull("the left screen speaks only for its own call", vm.state.value.account.newPasswordNotHandedOver)
+    }
+
+    // ----- the fourth review's D1: a change whose screen was left keeps the outcome of its request -----
+
+    /** Sends a change through [send], leaves its screen while the request is on its way, and lets [answer] end it. */
+    private fun AppViewModel.leaveWhileOnItsWay(route: String, answer: () -> MockResponse, send: AppViewModel.() -> Unit) {
+        val held = CountDownLatch(1)
+        on(route) { held.await(10, TimeUnit.SECONDS); answer() }
+        val before = seen.count { it.key == route }
+        send()
+        await("the request") { seen.count { it.key == route } > before }
+        // The screen goes: StopAccountCallOnLeave stops the call's busy waits. The request itself is on its way.
+        cancelAccountCall()
+        held.countDown()
+        await("the end of the call") { !state.value.account.busy }
+        settle()
+    }
+
+    private fun AppViewModel.changePasswordAndLeave(answer: () -> MockResponse) =
+        leaveWhileOnItsWay("PUT /me/password", answer) { changePassword("eski şifre 12345", "yeni şifre 67890") }
+
+    @Test fun aPasswordChangeLeftWhileOnItsWayKeepsTheOutcomeOfItsLostAnswer() {
+        TestAccounts.seed(context)
+        val vm = viewModel()
+        vm.changePasswordAndLeave { lost() }
+        assertEquals(OutcomeAfterLeave(AccountChange.PASSWORD, AuthProblem.Unreachable, outcomeUnknown = true), vm.state.value.account.afterLeave)
+        assertNull("the form that sent it is gone, and no other form shows it as its own", vm.state.value.account.problem)
+        assertNull(vm.state.value.account.confirmed)
+        assertEquals(1, seen.count { it.key == "PUT /me/password" })
+        vm.clearAccountProblem()
+        assertNull(vm.state.value.account.afterLeave)
+    }
+
+    @Test fun aChangeLeftWhileOnItsWayKeepsWhatTheServerAnswered() {
+        TestAccounts.seed(context)
+        val vm = viewModel()
+        val page = MockResponse().setResponseCode(200).setHeader("Content-Type", "text/html").setBody("<html></html>")
+        listOf(
+            refuse(500, "INTERNAL") to OutcomeAfterLeave(AccountChange.PASSWORD, AuthProblem.ServerFailed(500, withEnvelope = true), true),
+            MockResponse().setResponseCode(502).setBody("Bad Gateway") to OutcomeAfterLeave(AccountChange.PASSWORD, AuthProblem.ServerFailed(502), true),
+            page to OutcomeAfterLeave(AccountChange.PASSWORD, AuthProblem.UnexpectedAnswer, true),
+            refuse(403, "PASSWORD_WRONG") to OutcomeAfterLeave(AccountChange.PASSWORD, AuthProblem.PasswordWrong, false),
+        ).forEach { (answer, expected) ->
+            vm.changePasswordAndLeave { answer }
+            assertEquals(expected, vm.state.value.account.afterLeave)
+            assertNull(vm.state.value.account.problem)
+        }
+        vm.leaveWhileOnItsWay("PUT /me/display-name", { lost() }) { changeDisplayName("Yeni Ad") }
+        assertEquals(OutcomeAfterLeave(AccountChange.DISPLAY_NAME, AuthProblem.Unreachable, true), vm.state.value.account.afterLeave)
+        vm.leaveWhileOnItsWay("PUT /me/display-name", { refuse(422, "DISPLAY_NAME_INVALID") }) { changeDisplayName("Yeni Ad") }
+        assertEquals(OutcomeAfterLeave(AccountChange.DISPLAY_NAME, AuthProblem.DisplayNameInvalid, false), vm.state.value.account.afterLeave)
+        // The next call starts without it.
+        on("PUT /me/display-name") { refuse(422, "DISPLAY_NAME_INVALID") }
+        vm.changeDisplayName("x")
+        assertNull(vm.state.value.account.afterLeave)
+        await("the answer") { !vm.state.value.account.busy }
+        assertNull(vm.state.value.account.afterLeave)
+    }
+
+    @Test fun aChangeLeftWhileOnItsWayWhoseSessionEndedKeepsNoOutcomeForTheLoginScreen() {
+        TestAccounts.seed(context)
+        val vm = viewModel()
+        vm.changePasswordAndLeave { refuse(401, "AUTH_REQUIRED") }
+        assertNull(vm.state.value.account.user)
+        assertNull(vm.state.value.account.afterLeave)
+        assertNull(vm.state.value.account.problem)
+        assertTrue(vm.state.value.account.sessionEnded)
+    }
+
+    /** Another call ends the session while the change is on its way: the profile of that session is gone, and so is the outcome. */
+    @Test fun aChangeLeftWhileAnotherCallEndedItsSessionKeepsNoOutcome() {
+        TestAccounts.seed(context)
+        on("GET /me") { refuse(401, "AUTH_REQUIRED") }
+        val vm = viewModel()
+        vm.leaveWhileOnItsWay("PUT /me/password", { lost() }) {
+            changePassword("eski şifre 12345", "yeni şifre 67890")
+            await("the request") { seen.any { it.key == "PUT /me/password" } }
+            refreshAccount()
+            await("the end of the session") { state.value.account.user == null }
+        }
+        assertNull(vm.state.value.account.afterLeave)
+        assertNull(vm.state.value.account.problem)
+        assertTrue(vm.state.value.account.sessionEnded)
+    }
+
+    /** Only the waits after SERVER_BUSY stop on a leave: the server did nothing, so there is nothing to tell. */
+    @Test fun aChangeLeftWhileItWaitsOutABusyServerStopsThereAndKeepsNoOutcome() {
+        TestAccounts.seed(context)
+        val vm = viewModel()
+        vm.changePasswordAndLeave { refuse(503, "SERVER_BUSY").setHeader("Retry-After", "1") }
+        Thread.sleep(1_300)
+        settle()
+        assertEquals("the busy answer is not asked again after the leave", 1, seen.count { it.key == "PUT /me/password" })
+        assertNull(vm.state.value.account.afterLeave)
+        assertNull(vm.state.value.account.problem)
+
+        on("PUT /me/password") { refuse(503, "SERVER_BUSY").setHeader("Retry-After", "1") }
+        vm.changePassword("eski şifre 12345", "yeni şifre 67890")
+        await("the wait after the busy answer") { vm.state.value.account.retryingAfterBusy }
+        vm.cancelAccountCall()
+        await("the end of the call") { !vm.state.value.account.busy }
+        Thread.sleep(1_300)
+        settle()
+        assertEquals(2, seen.count { it.key == "PUT /me/password" })
+        assertNull(vm.state.value.account.afterLeave)
+        assertNull(vm.state.value.account.problem)
+    }
+
+    /** A login form that was left shows nothing later: its outcome would stand on another form (the register form, say). */
+    @Test fun aLoginLeftWhileOnItsWayLeavesNoTextForTheNextForm() {
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        val vm = viewModel()
+        vm.leaveWhileOnItsWay("POST /auth/login", { refuse(401, "LOGIN_FAILED") }) { login("ali", "uzun bir şifre 42") }
+        assertNull(vm.state.value.account.problem)
+        assertNull(vm.state.value.account.afterLeave)
     }
 
     @Test fun aWrongCurrentPasswordChangesNothing() {
