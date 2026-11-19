@@ -68,7 +68,13 @@ class SignedIn(val user: AccountUser, val token: String, val expiresAt: String, 
     override fun toString() = "SignedIn(user=$user, expiresAt=$expiresAt, token=<hidden>, deviceToken=${if (deviceToken == null) "none" else "<hidden>"})"
 }
 
-data class Health(val maxVideoBytes: Long, val probeAvailable: Boolean)
+/**
+ * The answer to `GET /health`. A 2xx carries no error envelope, so the answer's own shape is the sign that the API sent it
+ * (ADR-0119): every version of the API answers with a JSON object whose `status` is "ok" and whose `mediaProbe` is
+ * "available" or "unavailable". [fromApi] is false for any other 2xx: a blank body, a page, or the JSON of another
+ * service at the address. Such an answer says nothing about the server, so [probeAvailable] says nothing then either.
+ */
+data class Health(val maxVideoBytes: Long, val probeAvailable: Boolean, val fromApi: Boolean)
 
 /** What the server is told about a match. Player names are never part of it. */
 data class MatchInfo(
@@ -172,9 +178,11 @@ class ApiClient(
 
     fun health(): Health {
         val json = request("GET", "/health", timeoutMs = 5_000)
+        val probe = json.optString("mediaProbe")
         return Health(
             maxVideoBytes = json.optLong("maxVideoBytes", 4L * 1024 * 1024 * 1024),
-            probeAvailable = json.optString("mediaProbe") == "available",
+            probeAvailable = probe == "available",
+            fromApi = json.optString("status") == "ok" && (probe == "available" || probe == "unavailable"),
         )
     }
 
@@ -341,11 +349,16 @@ class ApiClient(
         scoreAfter = json.optJSONObject("scoreAfter")?.let { SetPoint(it.getInt("set"), it.getInt("home"), it.getInt("away"), it.getInt("match")) },
     )
 
-    /** The report of a match, or null when the match has no analysis job. */
+    /**
+     * The report of a match, or null when the API itself answers that there is none: its own 404 for a match no analysis
+     * of which has produced rallies (REPORT_NOT_AVAILABLE), or for a match it does not hold (MATCH_NOT_FOUND). A 404
+     * without the API's envelope may come from a gateway or a proxy, and the API's NOT_FOUND names a route it does not
+     * have: neither says anything about the match, so both throw like any other failure (ADR-0119).
+     */
     fun report(matchId: String): MatchReport? = try {
         parseReport(request("GET", "/matches/$matchId/report"))
     } catch (error: ApiException) {
-        if (error.status != 404) throw error
+        if (error.status != 404 || (error.code != "REPORT_NOT_AVAILABLE" && error.code != "MATCH_NOT_FOUND")) throw error
         null
     }
 

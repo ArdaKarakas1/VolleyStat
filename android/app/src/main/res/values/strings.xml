@@ -504,9 +504,14 @@
     <string name="server_usb">USB ile bağlı telefon</string>
     <string name="server_usb_body">Önce bilgisayarda şu komutu çalıştır: adb reverse tcp:8000 tcp:8000</string>
     <string name="action_test_server">Bağlantıyı Dene</string>
+    <!-- server_ok and server_ok_no_probe come only with the API's own health answer (ADR-0119). -->
     <string name="server_ok">Sunucu yanıt verdi.</string>
     <string name="server_ok_no_probe">Sunucu yanıt verdi. Sunucuda video inceleme aracı kurulu değil.</string>
     <string name="server_unreachable">Uygulama sunucuya ulaşamadı.</string>
+    <!-- Any other answer to the server test: a blank 2xx, another service's JSON, a gateway's page or a captive portal's redirect.
+         Something on the way may have sent it, so the text does not name the server as its sender. The profile is open only while
+         a session is, and the app locks the server choice then, so the text gives no advice about it (ADR-0119). -->
+    <string name="server_unreadable">Uygulama isteğe gelen yanıtı okuyamadı.</string>
     <string name="server_testing">Uygulama sunucuyu deniyor</string>
     <string name="server_none">Bu sürümde sunucu adresi tanımlı değil.</string>
     <string name="profile_recordings">Telefondaki kayıtlar</string>
@@ -656,6 +661,8 @@
     <string name="account_server_changed">Uygulama bu isteği şu an seçili olmayan bir sunucuya gönderdi ve gelen yanıtla oturum açmadı. Yeniden deneyebilirsin.</string>
     <string name="account_server_older">Sunucunun sürümü bu uygulamadan eski. Uygulama bu sunucuda hesap açamaz ve giriş yapamaz.</string>
     <string name="account_refused">Sunucu bu isteği kabul etmedi ve hiçbir şeyi değiştirmedi.</string>
+    <!-- account_outcome_unknown, account_outcome_unknown_on_the_way and account_unexpected_change_signed_in also end a match's
+         removal, a rule change, a correction and a confirmation of the rally list when the answer leaves the outcome open. -->
     <string name="account_outcome_unknown">Sunucu bir hata bildirdi. Uygulama sunucunun bu isteği yerine getirip getirmediğini bilmiyor. Biraz sonra yeniden deneyebilirsin.</string>
     <string name="account_unexpected_change">Uygulama isteğe gelen yanıtı okuyamadı ve sunucunun bu isteği yerine getirip getirmediğini bilmiyor. Sunucu seçimini kontrol edip yeniden deneyebilirsin.</string>
     <!-- A 5xx without the API's envelope (HTTP_5xx): a gateway on the way may have sent it, so the text does not name the server as the sender. -->

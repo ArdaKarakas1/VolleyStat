@@ -145,5 +145,32 @@ fun outcomeUnknownAfter(error: Throwable): Boolean = when (error) {
     else -> true
 }
 
+/**
+ * Who may have sent an answer after which the app does not know whether the server made the change it asked for
+ * ([outcomeUnknownAfter]). The match screens word the three cases with the texts of the account changes (ADR-0119), so
+ * that no text names the server as the sender of an answer that something on the way may have sent.
+ */
+enum class UnknownOutcome {
+    /** A 5xx other than SERVER_BUSY and 511 that carries the API's own envelope: the server itself reported the error. */
+    SERVER_ERROR,
+    /** A 5xx without the envelope, or a 511 (a captive portal's status, which the API never sends): a gateway on the way may have sent it. */
+    ERROR_ON_THE_WAY,
+    /** An answer the app can not read: a 3xx, a 4xx without the envelope, an envelope with a status the API never sends with one, or a 2xx the call does not expect. */
+    UNREADABLE;
+
+    companion object {
+        /**
+         * The case of [error], or null when the answer itself says that the server changed nothing: the API's envelope on
+         * a 4xx, or SERVER_BUSY, which the server sends before it does anything. Only these answers are the server's refusal.
+         */
+        fun of(error: ApiException): UnknownOutcome? = when {
+            !outcomeUnknownAfter(error) -> null
+            error.code == "UNEXPECTED_ANSWER" || error.status !in 500..599 -> UNREADABLE
+            error.code.startsWith("HTTP_") || error.status == 511 -> ERROR_ON_THE_WAY
+            else -> SERVER_ERROR
+        }
+    }
+}
+
 /** Thrown when the answer to a login or a registration came from another address than the one the app talks to now. */
 class AnswerFromAnotherServer : Exception("The answer came from another server than the one the app talks to now")

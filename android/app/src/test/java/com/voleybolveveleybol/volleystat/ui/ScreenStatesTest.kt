@@ -35,6 +35,7 @@ import com.voleybolveveleybol.volleystat.R
 import com.voleybolveveleybol.volleystat.RecordingFile
 import com.voleybolveveleybol.volleystat.ReportLoad
 import com.voleybolveveleybol.volleystat.ReviewProblem
+import com.voleybolveveleybol.volleystat.ServerTest
 import com.voleybolveveleybol.volleystat.model.AnalysisJob
 import com.voleybolveveleybol.volleystat.model.AnalysisSummary
 import com.voleybolveveleybol.volleystat.model.Coverage
@@ -496,6 +497,10 @@ class ScreenStatesTest {
             RemovalFailure.UNCONFIRMED to R.string.removal_unconfirmed,
             RemovalFailure.VERIFYING to R.string.removal_verifying,
             RemovalFailure.REFUSED to R.string.removal_refused,
+            // An answer that leaves open whether the server deleted the match: the account changes' own texts (ADR-0119).
+            RemovalFailure.SERVER_ERROR to R.string.account_outcome_unknown,
+            RemovalFailure.ERROR_ON_THE_WAY to R.string.account_outcome_unknown_on_the_way,
+            RemovalFailure.UNREADABLE to R.string.account_unexpected_change_signed_in,
         )
         var shownFailure by mutableStateOf<RemovalFailure?>(null)
         show { StatusScreen(match, null, AnalysisUi("m1", JobLoad.NO_JOB), shownFailure, {}, {}, {}, {}, {}, {}, {}) }
@@ -963,6 +968,16 @@ class ScreenStatesTest {
         }
         compose.onNodeWithText(text(R.string.legacy_keep)).assertIsEnabled().performClick()
         assertEquals(listOf(true, true, false), answers)
+    }
+
+    @Test fun theServerTestSaysThatTheServerAnsweredOnlyAfterItsOwnHealthAnswer() {
+        var test by mutableStateOf(ServerTest.OK)
+        show { ProfileScreen(signedIn.copy(serverTest = test), "0.8.0", {}, {}, {}, { true }) }
+        compose.onNodeWithText(text(R.string.server_ok)).performScrollTo().assertIsDisplayed()
+        // An answer that is not the API's health answer: a blank 2xx, another service's JSON, a gateway's page.
+        test = ServerTest.UNREADABLE
+        compose.onNodeWithText(text(R.string.server_unreadable)).performScrollTo().assertIsDisplayed()
+        listOf(R.string.server_ok, R.string.server_ok_no_probe, R.string.server_unreachable).forEach { assertFalse(shown(text(it))) }
     }
 
     @Test fun theProfileShowsTheAccountAndHasNoLocalNameField() {

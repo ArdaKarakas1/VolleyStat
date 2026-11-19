@@ -476,6 +476,7 @@ fun ServerSection(state: AppUiState, onServerTarget: (ServerTarget) -> Unit, onT
                 ServerTest.OK -> Notice(stringResource(R.string.server_ok), Tone.POSITIVE, Modifier.padding(top = 12.dp))
                 ServerTest.OK_NO_PROBE -> Notice(stringResource(R.string.server_ok_no_probe), Tone.CAUTION, Modifier.padding(top = 12.dp))
                 ServerTest.UNREACHABLE -> Notice(stringResource(R.string.server_unreachable), Tone.NEGATIVE, Modifier.padding(top = 12.dp))
+                ServerTest.UNREADABLE -> Notice(stringResource(R.string.server_unreadable), Tone.NEGATIVE, Modifier.padding(top = 12.dp))
             }
         }
     }

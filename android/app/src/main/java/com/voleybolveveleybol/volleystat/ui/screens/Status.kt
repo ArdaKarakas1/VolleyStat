@@ -300,6 +300,10 @@ fun StatusScreen(
                     RemovalFailure.UNCONFIRMED -> R.string.removal_unconfirmed
                     RemovalFailure.VERIFYING -> R.string.removal_verifying
                     RemovalFailure.REFUSED -> R.string.removal_refused
+                    // The app does not know whether the server deleted the match: the account changes' own texts (ADR-0119).
+                    RemovalFailure.SERVER_ERROR -> R.string.account_outcome_unknown
+                    RemovalFailure.ERROR_ON_THE_WAY -> R.string.account_outcome_unknown_on_the_way
+                    RemovalFailure.UNREADABLE -> R.string.account_unexpected_change_signed_in
                 }),
                 if (removalFailure == RemovalFailure.VERIFYING) Tone.CAUTION else Tone.NEGATIVE,
             )
