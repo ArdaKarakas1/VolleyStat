@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS uploads (
   video_id TEXT UNIQUE, created_at TEXT NOT NULL DEFAULT (datetime('now')),
   client_sha256 TEXT, finalize_started_at REAL,
   -- Seconds since 1970 of the last initiate or stored chunk. The sweep aborts an upload idle for 24 h
+  -- of server uptime (server_downtimes)
   touched_at REAL,
   -- The account that started the upload or NULL once that account is deleted
   started_by TEXT
@@ -171,6 +172,20 @@ BEGIN SELECT RAISE(ABORT, 'rally_corrections is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS rally_corrections_keep_rows BEFORE DELETE ON rally_corrections
 WHEN EXISTS (SELECT 1 FROM analysis_jobs WHERE id = OLD.job_id)
 BEGIN SELECT RAISE(ABORT, 'rally_corrections is append-only'); END;
+
+-- The uptime clock of the sweep (sweep.py). Only the time this server runs counts as idle time of an
+-- upload: a phone can not send a chunk to a server that is off.
+CREATE TABLE IF NOT EXISTS server_clock (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  -- The last moment this server was seen running: written at every pass of the sweep and at a stop
+  last_alive REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS server_downtimes (
+  -- last_alive before the start. 0 when the server had no clock yet: all time before the start is time off
+  stopped_at REAL NOT NULL,
+  -- The start that ended the time off
+  started_at REAL NOT NULL
+);
 
 -- Accounts (ADR-0119). The server keeps no e-mail and no phone number.
 CREATE TABLE IF NOT EXISTS users (

@@ -512,12 +512,22 @@ def test_free_bytes_reads_the_disk_of_the_storage_folder(storage, monkeypatch):
 
 # --- the sweep -----------------------------------------------------------------------------------------
 
-def sweeper(client, running_since=0.0):
-    """The app's sweeper, as if its server had run since `running_since`: by default since long before T,
-    so the tests below count idle time from T. The tests of a server that was off set their own start."""
-    found = client.app.state.sweeper
-    found.running_since = running_since
-    return found
+HOUR = 3600
+
+
+def sweeper(client):
+    """The app's sweeper. The client runs no sweeper thread, so nothing called resume(): the server has
+    recorded no time off, and the tests below count idle time from T as if it had run since long before.
+    The tests of a server that was off call resume() themselves with the moment of each start."""
+    return client.app.state.sweeper
+
+
+def clock(storage):
+    """What the server wrote about its own uptime: the last moment it was seen running, and every time off."""
+    alive = rows(storage, "SELECT last_alive FROM server_clock")
+    return (alive[0]["last_alive"] if alive else None,
+            [(row["stopped_at"], row["started_at"])
+             for row in rows(storage, "SELECT stopped_at, started_at FROM server_downtimes ORDER BY started_at")])
 
 
 def test_the_sweep_aborts_an_upload_idle_for_24_hours_and_deletes_its_bytes(client, storage):
@@ -586,22 +596,168 @@ def test_an_aborted_upload_frees_the_link_accounts_unfinished_slot(client, stora
 
 
 def test_the_time_the_server_was_off_does_not_count_as_idle_time(client, storage):
-    """A phone can not send a chunk to a server that is off: idle time counts only while this server
-    process runs. The last chunk came two hours before a 25-hour outage."""
-    started = T + 27 * 3600
+    """A phone can not send a chunk to a server that is off: idle time counts only while the server runs.
+    The last chunk came two hours before a 25-hour outage, so the upload has 22 hours left after the start."""
     match_id = create_match(client)
     waiting, verifying = (create_upload(client, match_id, size=10).json()["uploadId"] for _ in range(2))
     assert client.put(f"/v1/uploads/{waiting}/chunks?offset=0", content=b"abc").status_code == 200
     set_upload(storage, waiting, touched_at=T)
     set_upload(storage, verifying, status="FINALIZING", finalize_started_at=T, touched_at=T)
-    swept = sweeper(client, running_since=started)
+    swept = sweeper(client)
+    assert swept.run_once(now=T + 2 * HOUR) == {"uploads": 0}
+    started = T + 27 * HOUR
+    swept.resume(now=started)
+    assert clock(storage) == (started, [(T + 2 * HOUR, started)])
     assert swept.run_once(now=started) == {"uploads": 0}
-    assert swept.run_once(now=started + 86399) == {"uploads": 0}
+    assert swept.run_once(now=started + 22 * HOUR - 1) == {"uploads": 0}
     assert {row["status"] for row in rows(storage, "SELECT status FROM uploads")} == {"UPLOADING", "FINALIZING"}
     assert len(media_files(storage)) == 2
-    # A day after the start, with no chunk from the phone, both are idle.
-    assert swept.run_once(now=started + 86400) == {"uploads": 2}
+    # 2 hours before the stop and 22 after the start make a day of uptime without a chunk: both are idle.
+    assert swept.run_once(now=started + 22 * HOUR) == {"uploads": 2}
     assert media_files(storage) == []
+
+
+def test_a_server_off_for_three_days_sweeps_nothing_in_its_first_hour_back(client, storage):
+    """The upload was idle for 23 hours of uptime when the server stopped. It stays for the first hour after
+    the start and goes when that hour is over, three days after the stop."""
+    upload_id = create_upload(client, create_match(client), size=10).json()["uploadId"]
+    assert client.put(f"/v1/uploads/{upload_id}/chunks?offset=0", content=b"abc").status_code == 200
+    set_upload(storage, upload_id, touched_at=T)
+    swept = sweeper(client)
+    assert swept.run_once(now=T + 23 * HOUR) == {"uploads": 0}
+    started = T + 23 * HOUR + 72 * HOUR
+    swept.resume(now=started)
+    for minute in range(60):
+        assert swept.run_once(now=started + minute * 60) == {"uploads": 0}
+    assert swept.run_once(now=started + HOUR - 1) == {"uploads": 0}
+    assert rows(storage, "SELECT status FROM uploads")[0]["status"] == "UPLOADING"
+    assert media_files(storage) == [f"{upload_id}.bin"]
+    assert swept.run_once(now=started + HOUR) == {"uploads": 1}
+    assert media_files(storage) == []
+
+
+def test_a_server_that_runs_20_hours_a_day_aborts_an_idle_upload_after_24_hours_of_its_uptime(client, storage):
+    """The review's probe: the owner's computer is the server and is off every night from 00:00 to 04:00.
+    The upload went idle 10 minutes after the first start, so the first day gave it 19 h 50 min of uptime.
+    Its 24th idle hour of uptime ends on the second day at 08:10, and the pass of 09:00 closes it."""
+    opened = as_account(client, storage, "test.acik", "OPEN")
+    upload_id = create_upload(opened, create_match(opened), size=GIB).json()["uploadId"]
+    assert refusal(create_upload(opened, create_match(opened), size=1))["reason"] == "UNFINISHED_UPLOAD"
+    swept = sweeper(client)
+    closed_at = []
+    for day in range(30):
+        started = T + day * 86400 + 4 * HOUR
+        swept.resume(now=started)
+        if day == 0:
+            set_upload(storage, upload_id, touched_at=started + 600)
+        # A pass every hour while the server runs; the last one at midnight, just before the stop.
+        for hour in range(21):
+            if swept.run_once(now=started + hour * HOUR)["uploads"]:
+                closed_at.append(started + hour * HOUR)
+    assert closed_at == [T + 86400 + 9 * HOUR]
+    assert rows(storage, "SELECT status FROM uploads WHERE id=?", upload_id)[0]["status"] == "ABORTED"
+    assert f"{upload_id}.bin" not in media_files(storage)
+    # The account's single unfinished upload is free again.
+    assert create_upload(opened, create_match(opened), size=GIB).status_code == 201
+
+
+def test_a_chunk_after_a_restart_gives_the_upload_a_new_day(client, storage):
+    """Two uploads with the same past: touched 95 hours before the chunk below, then the server ran 10 hours,
+    was off 72 hours and has run 13 hours since. Only one of them gets the chunk. The chunk is written with
+    the server's own clock, so the story is told backwards from now."""
+    match_id = create_match(client)
+    chunked, left = (create_upload(client, match_id, size=10).json()["uploadId"] for _ in range(2))
+    # Whole seconds, so that the sums below are exact.
+    touched = float(int(time.time())) - 95 * HOUR
+    for upload_id in (chunked, left):
+        set_upload(storage, upload_id, touched_at=touched)
+    swept = sweeper(client)
+    assert swept.run_once(now=touched + 10 * HOUR) == {"uploads": 0}
+    swept.resume(now=touched + 82 * HOUR)
+    assert swept.run_once(now=touched + 95 * HOUR - 60) == {"uploads": 0}
+    assert client.put(f"/v1/uploads/{chunked}/chunks?offset=0", content=b"abc").status_code == 200
+    chunk_at = rows(storage, "SELECT touched_at FROM uploads WHERE id=?", chunked)[0]["touched_at"]
+    assert chunk_at >= touched + 95 * HOUR
+    # 10 hours before the stop and 14 after the start: the upload without the chunk goes.
+    assert swept.run_once(now=touched + 96 * HOUR) == {"uploads": 1}
+    assert {row["id"]: row["status"] for row in rows(storage, "SELECT id, status FROM uploads")} == {
+        chunked: "UPLOADING", left: "ABORTED"}
+    # The chunk started a new day of uptime.
+    assert swept.run_once(now=chunk_at + 86399) == {"uploads": 0}
+    assert swept.run_once(now=chunk_at + 86400) == {"uploads": 1}
+    assert media_files(storage) == []
+
+
+def test_the_first_start_without_a_clock_gives_every_upload_a_full_day(client, storage):
+    """A server that never wrote its clock (the first start of this version) can not tell how long it was off,
+    so it counts all time before the start as time off. An upload stored before server 0.9 has no touch time
+    and still goes at the first pass."""
+    match_id = create_match(client)
+    kept, stored_before_accounts = (create_upload(client, match_id, size=10).json()["uploadId"] for _ in range(2))
+    set_upload(storage, kept, touched_at=T)
+    set_upload(storage, stored_before_accounts, touched_at=None)
+    assert clock(storage) == (None, [])
+    swept = sweeper(client)
+    started = T + 27 * HOUR
+    swept.resume(now=started)
+    assert swept.run_once(now=started) == {"uploads": 1}
+    assert rows(storage, "SELECT status FROM uploads WHERE id=?", stored_before_accounts)[0]["status"] == "ABORTED"
+    assert swept.run_once(now=started + 86399) == {"uploads": 0}
+    assert swept.run_once(now=started + 86400) == {"uploads": 1}
+    assert media_files(storage) == []
+
+
+def test_a_verification_counts_only_the_uptime_after_it_started(client, storage):
+    """The verification started an hour before the stop and never ended. It goes after 23 more hours of uptime,
+    and the start leaves its finalize_started_at as the server's clock wrote it (see the next test)."""
+    upload_id = create_upload(client, create_match(client), size=10).json()["uploadId"]
+    set_upload(storage, upload_id, status="FINALIZING", finalize_started_at=T, touched_at=T - 10 * HOUR)
+    swept = sweeper(client)
+    assert swept.run_once(now=T + HOUR) == {"uploads": 0}
+    started = T + 49 * HOUR
+    swept.resume(now=started)
+    assert rows(storage, "SELECT finalize_started_at FROM uploads")[0]["finalize_started_at"] == T
+    assert swept.run_once(now=started + 23 * HOUR - 1) == {"uploads": 0}
+    assert swept.run_once(now=started + 23 * HOUR) == {"uploads": 1}
+
+
+def test_after_a_start_the_next_complete_takes_over_a_verification_that_the_stop_ended(client, storage):
+    """The server stopped a minute after a verification started and was off for 19 minutes. No verification
+    runs after a start. The verification is 20 minutes old by the server's clock, so the next complete takes
+    it over at once (15 minutes) and the phone does not wait for a verification that the stop ended."""
+    upload_id = create_upload(client, create_match(client), size=5).json()["uploadId"]
+    assert client.put(f"/v1/uploads/{upload_id}/chunks?offset=0", content=b"abcde").status_code == 200
+    now = time.time()
+    set_upload(storage, upload_id, status="FINALIZING", finalize_started_at=now - 20 * 60)
+    swept = sweeper(client)
+    swept.run_once(now=now - 19 * 60)
+    swept.resume(now=now)
+    done = client.post(f"/v1/uploads/{upload_id}/complete")
+    assert done.status_code == 200, done.text
+    assert rows(storage, "SELECT status FROM uploads")[0]["status"] == "COMPLETED"
+
+
+def test_a_start_keeps_only_the_time_off_that_an_unfinished_upload_still_needs(client, storage):
+    """Every later touch comes after a time off that no unfinished upload predates, so that time off can
+    never count again and the start forgets it. The table stays as long as the oldest unfinished upload."""
+    swept = sweeper(client)
+    swept.run_once(now=T)
+    swept.resume(now=T + HOUR)
+    assert clock(storage) == (T + HOUR, [])
+    upload_id = create_upload(client, create_match(client), size=10).json()["uploadId"]
+    set_upload(storage, upload_id, touched_at=T + 2 * HOUR)
+    swept.run_once(now=T + 3 * HOUR)
+    swept.resume(now=T + 4 * HOUR)
+    swept.run_once(now=T + 5 * HOUR)
+    swept.resume(now=T + 6 * HOUR)
+    assert clock(storage) == (T + 6 * HOUR, [(T + 3 * HOUR, T + 4 * HOUR), (T + 5 * HOUR, T + 6 * HOUR)])
+    set_upload(storage, upload_id, touched_at=T + 4 * HOUR + 1)
+    swept.run_once(now=T + 7 * HOUR)
+    swept.resume(now=T + 8 * HOUR)
+    assert clock(storage) == (T + 8 * HOUR, [(T + 5 * HOUR, T + 6 * HOUR), (T + 7 * HOUR, T + 8 * HOUR)])
+    set_upload(storage, upload_id, status="COMPLETED")
+    swept.resume(now=T + 9 * HOUR)
+    assert clock(storage) == (T + 9 * HOUR, [])
 
 
 def test_the_first_pass_after_a_start_leaves_an_upload_touched_before_the_outage(storage):
@@ -617,6 +773,66 @@ def test_the_first_pass_after_a_start_leaves_an_upload_touched_before_the_outage
         wait_for(lambda: rows(storage, "SELECT status FROM uploads WHERE id=?", stored_before_accounts)[0]["status"] == "ABORTED")
         assert rows(storage, "SELECT status FROM uploads WHERE id=?", kept)[0]["status"] == "UPLOADING"
         assert (storage / "media" / f"{kept}.bin").read_bytes() == b"abc"
+
+
+def write_clock(storage, last_alive):
+    with closing(sqlite3.connect(storage / "volleystat.sqlite3")) as db, db:
+        db.execute("INSERT OR REPLACE INTO server_clock(id, last_alive) VALUES(1, ?)", (last_alive,))
+
+
+def test_the_first_pass_of_a_started_server_counts_the_uptime_before_its_stop(storage):
+    """The server stopped 25 hours ago. One upload was idle for 2 hours of uptime before the stop and stays;
+    the other was idle for a whole day of uptime before the stop and goes at the first pass."""
+    with serve(storage, None) as client:
+        match_id = create_match(client)
+        kept, idle = (create_upload(client, match_id, size=10).json()["uploadId"] for _ in range(2))
+    stopped = time.time() - 25 * HOUR
+    write_clock(storage, stopped)
+    set_upload(storage, kept, touched_at=stopped - 2 * HOUR)
+    set_upload(storage, idle, touched_at=stopped - 86400 - 60)
+    with serve(storage, None, start_worker=True):
+        wait_for(lambda: rows(storage, "SELECT status FROM uploads WHERE id=?", idle)[0]["status"] == "ABORTED")
+        assert rows(storage, "SELECT status FROM uploads WHERE id=?", kept)[0]["status"] == "UPLOADING"
+        assert media_files(storage) == [f"{kept}.bin"]
+
+
+def test_a_stop_writes_the_moment_the_server_stopped(storage):
+    """The time off then starts at the stop, not at the last pass a minute before it."""
+    with serve(storage, None) as client:
+        marker = create_upload(client, create_match(client), size=10).json()["uploadId"]
+    set_upload(storage, marker, touched_at=None)
+    with serve(storage, None, start_worker=True):
+        # The first pass closes the upload without a touch time: the pass and its clock write are done.
+        wait_for(lambda: rows(storage, "SELECT status FROM uploads")[0]["status"] == "ABORTED")
+        before_stop = time.time()
+    assert clock(storage)[0] >= before_stop
+
+
+def test_the_sweep_waits_for_the_clock_before_its_first_pass(storage, monkeypatch, caplog):
+    """A sweep that could not record the time off would count it as idle time and could close every upload
+    after a long outage. So the thread tries again a minute later and sweeps only after the clock is read."""
+    events = []
+    resume = sweep.Sweeper.resume
+
+    def flaky_resume(self, now=None):
+        events.append("resume")
+        if events.count("resume") == 1:
+            raise sqlite3.OperationalError("database is locked")
+        return resume(self, now)
+
+    def step(self, now):
+        events.append("pass")
+        return 0
+
+    monkeypatch.setattr(sweep, "SWEEP_SECONDS", 0.01)
+    monkeypatch.setattr(sweep.Sweeper, "resume", flaky_resume)
+    monkeypatch.setattr(sweep.Sweeper, "abort_idle_uploads", step)
+    with caplog.at_level(logging.ERROR, logger="app.sweep"):
+        with TestClient(create_app(storage, analyzer="none")):
+            wait_for(lambda: events.count("pass") >= 3)
+    assert events[:3] == ["resume", "resume", "pass"]
+    assert events.count("resume") == 2
+    assert any("server clock" in record.getMessage() for record in caplog.records)
 
 
 def sweeper_threads():

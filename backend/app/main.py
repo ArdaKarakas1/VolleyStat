@@ -350,7 +350,7 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
                     (match_id, caller.id, payload.clientSha256, payload.sizeBytes, payload.fileName,
                      payload.mimeType)).fetchone()
                 if same is not None:
-                    # A start is activity: the sweep waits a day from it, as from a new upload.
+                    # A start is activity: the sweep waits a day of server uptime from it, as from a new upload.
                     db.execute("UPDATE uploads SET touched_at=? WHERE id=?", (time.time(), same["id"]))
                     response.status_code = 200
                     return {"uploadId": same["id"], "nextOffset": same["next_offset"], "chunkSizeBytes": CHUNK_SIZE,
@@ -403,7 +403,7 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
                     fh.flush()
                     os.fsync(fh.fileno())
                 new_offset = offset + len(data)
-                # touched_at moves with every stored chunk: the sweep closes an upload a day after the last one.
+                # touched_at moves with every stored chunk: the sweep closes an upload a day of uptime after the last one.
                 db.execute("UPDATE uploads SET next_offset=?, touched_at=? WHERE id=?", (new_offset, time.time(), upload_id))
         if resume_from is not None:
             fail("OFFSET_MISMATCH", "Stored bytes were shorter than recorded; resume from the expected offset", 409, expectedOffset=resume_from)

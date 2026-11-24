@@ -47,7 +47,7 @@ Uygulama kamera kaydı için CameraX, klip oynatma için Media3 kullanır. Uygul
 | `main.py` | FastAPI uygulaması, maç ve yükleme uçları, hata zarfı |
 | `access.py` | Erişim: her nesneyi maçına çözer, maçın sahibini denetler (`404` ve `403 NOT_A_MEMBER`), yazma işleminde oturumu yeniden okur |
 | `quotas.py` | Kişisel kota, sunucunun kişisel video havuzu ve boş disk sınırı (`VOLLEYSTAT_DISK_FLOOR_GIB`) |
-| `sweep.py` | Dakikalık tarama: sunucunun açık kaldığı bir gün boyunca parça almayan yüklemeyi ve bir gün önce başlayıp bitmeyen doğrulamayı kapatır. Tarama sunucunun kapalı kaldığı süreyi saymaz |
+| `sweep.py` | Dakikalık tarama: son dokunuştan sonra sunucunun açık kaldığı toplam bir gün boyunca parça almayan yüklemeyi ve aynı süre boyunca bitmeyen doğrulamayı kapatır. Tarama sunucunun kapalı kaldığı süreyi saymaz. Sunucu her taramada ve kapanırken o anı yazar (`server_clock`). Sunucu açılınca kapalı kaldığı süreyi saklar (`server_downtimes`) |
 | `deletion.py` | Yüklemelerin ve videoların dosya yolları, bir maçın satırlarını ve dosyalarını silen ortak kod |
 | `media.py` | ffprobe ile dosya doğrulaması. Sunucu kapsayıcıya, video akışına ve dosyanın sonunun okunabilirliğine bakar. Sunucu görüntünün içeriğini ölçmez. |
 | `db.py` | SQLite şeması ve bağlantı |

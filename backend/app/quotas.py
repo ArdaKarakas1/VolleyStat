@@ -3,7 +3,8 @@
 Sizes count as the uploads declared them: an upload row counts at `expected_size` while it is
 UPLOADING, FINALIZING or COMPLETED (a live video, a quarantined one included, because its bytes stay
 on disk). A declared size bounds the bytes the server accepts, so a low declaration can not get
-around the limit; a high one holds the space until the sweep closes the upload after a day.
+around the limit; a high one holds the space until the sweep closes the upload after a day of server
+uptime.
 
 The free-disk floor is a reservation: the start of an upload subtracts from the free space the bytes
 every unfinished upload still has to send (LEGACY ones included). The checks of `initiate_upload` run
