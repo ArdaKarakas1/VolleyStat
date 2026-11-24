@@ -251,7 +251,7 @@
     "/v1/matches/{match_id}/uploads": {
       "post": {
         "summary": "Initiate Upload",
-        "description": "Start an upload of a video of the match. The quotas, the server-wide pool and the free-disk\nfloor are checked in the transaction that inserts the row (docs/API_V1.md, section 10).",
+        "description": "Start an upload of a video of the match. The quotas, the server-wide pool and the free-disk\nfloor are checked in the transaction that inserts the row (docs/API_V1.md, section 10).\n\nA start the account repeats for the same file (same match, checksum, size, name and type) gets\nthe unfinished upload it already has, before any limit is checked: a phone that lost the first\nanswer never learned that upload's id, and a second row would hold the same bytes twice.",
         "operationId": "initiate_upload_v1_matches__match_id__uploads_post",
         "security": [
           {
@@ -287,6 +287,9 @@
                 "schema": {}
               }
             }
+          },
+          "200": {
+            "description": "This account already had an unfinished upload of the same file for this match; the answer names it and the offset to continue from"
           },
           "422": {
             "description": "Validation Error",

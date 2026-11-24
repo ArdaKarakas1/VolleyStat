@@ -97,7 +97,7 @@ def test_storage_from_before_accounts_gets_legacy_matches_and_the_new_columns(st
         pass
     assert dump(storage) == first, "a second start changed the storage"
 
-    assert legacy(storage, "--assign", OWNER) == 0
+    assert legacy(storage, "--assign", OWNER, "--all") == 0
     with serve(storage, None) as client:
         assert client.get(f"/v1/matches/{match_id}/report").content == report.content
         assert client.get(f"/v1/matches/{match_id}").json()["status"] == "PERSONAL"
@@ -154,34 +154,65 @@ def test_legacy_list_says_so_when_there_is_none(client, storage, capsys):
 
 # --- legacy --assign ----------------------------------------------------------------------------------
 
-def test_legacy_assign_makes_every_legacy_match_a_personal_match_of_that_account(client, storage, stranger, capsys):
-    first, second = create_match(client), create_match(client)
+def test_legacy_assign_all_makes_every_legacy_match_a_personal_match_of_the_only_account(client, storage, capsys):
+    first = create_match(client, homeTeamName="Birinci Ev", awayTeamName="Birinci Konuk", playedOn="2026-10-01")
+    second = create_match(client, homeTeamName="İkinci Ev", awayTeamName="İkinci Konuk")
     create_upload(client, first, size=9)
-    others = stranger.post("/v1/matches", json={"homeTeamName": "Yabancı Ev", "awayTeamName": "Yabancı Konuk"}).json()["id"]
     make_legacy(storage, first, second)
     assert client.get(f"/v1/matches/{first}").status_code == 403
     capsys.readouterr()
 
-    assert legacy(storage, "--assign", STRANGER) == 0
-    assert capsys.readouterr().out.strip() == f"Komut 2 maçı {STRANGER} hesabına bağladı (9 bayt)."
-    stranger_id = user_id_of(storage, STRANGER)
-    assert rows(storage, "SELECT id, status, owner_user_id FROM matches ORDER BY rowid") == [
-        {"id": first, "status": "PERSONAL", "owner_user_id": stranger_id},
-        {"id": second, "status": "PERSONAL", "owner_user_id": stranger_id},
-        {"id": others, "status": "PERSONAL", "owner_user_id": stranger_id},
+    assert legacy(storage, "--assign", OWNER, "--all") == 0
+    # The command names every match it binds, so the operator sees what the account now holds.
+    assert capsys.readouterr().out.splitlines() == [
+        f"{first}  2026-10-01  Birinci Ev  Birinci Konuk",
+        f"{second}  -  İkinci Ev  İkinci Konuk",
+        f"Komut 2 maçı {OWNER} hesabına bağladı (9 bayt).",
     ]
-    assert stranger.get(f"/v1/matches/{first}").json()["status"] == "PERSONAL"
-    assert client.get(f"/v1/matches/{first}").status_code == 403
+    owner_id = user_id_of(storage, OWNER)
+    assert rows(storage, "SELECT id, status, owner_user_id FROM matches ORDER BY rowid") == [
+        {"id": first, "status": "PERSONAL", "owner_user_id": owner_id},
+        {"id": second, "status": "PERSONAL", "owner_user_id": owner_id},
+    ]
+    assert client.get(f"/v1/matches/{first}").json()["status"] == "PERSONAL"
 
 
-def test_legacy_assign_with_match_moves_only_those(client, storage, capsys):
+def test_legacy_assign_all_refuses_a_server_with_more_than_one_account_and_changes_nothing(client, storage, stranger, capsys):
+    """Server 0.8 read no session on the match routes, so nothing tells whose a LEGACY match was. With two
+    accounts on the server, binding every one to one account could hand one person's videos to another."""
+    first, second = create_match(client), create_match(client)
+    make_legacy(storage, first, second)
+    before = dump(storage)
+    capsys.readouterr()
+    assert legacy(storage, "--assign", STRANGER, "--all") == 1
+    captured = capsys.readouterr()
+    assert captured.err.strip() == ("This server has 2 accounts, so --all could give one person's matches to another."
+                                    " Name each match with --match; legacy --list shows their teams and dates.")
+    assert captured.out == ""
+    assert dump(storage) == before
+
+
+def test_legacy_assign_needs_a_match_or_all(storage):
+    for arguments in (("--assign", OWNER), ("--assign", OWNER, "--all", "--match", "m1"), ("--list", "--all"),
+                      ("--delete", "--all")):
+        with pytest.raises(SystemExit) as stopped:
+            legacy(storage, *arguments)
+        assert stopped.value.code == 2, arguments
+
+
+def test_legacy_assign_with_match_moves_only_those(client, storage, stranger, capsys):
     first, second, third = create_match(client), create_match(client), create_match(client)
+    others = stranger.post("/v1/matches", json={"homeTeamName": "Yabancı Ev", "awayTeamName": "Yabancı Konuk"}).json()["id"]
     make_legacy(storage, first, second, third)
     capsys.readouterr()
     assert legacy(storage, "--assign", OWNER, "--match", first, "--match", third) == 0
-    assert capsys.readouterr().out.strip() == f"Komut 2 maçı {OWNER} hesabına bağladı (0 bayt)."
+    out = capsys.readouterr().out.splitlines()
+    assert [line.split("  ")[0] for line in out[:-1]] == [first, third]
+    assert out[-1] == f"Komut 2 maçı {OWNER} hesabına bağladı (0 bayt)."
     assert {row["id"]: row["status"] for row in rows(storage, "SELECT id, status FROM matches")} == {
-        first: "PERSONAL", second: "LEGACY", third: "PERSONAL"}
+        first: "PERSONAL", second: "LEGACY", third: "PERSONAL", others: "PERSONAL"}
+    assert rows(storage, "SELECT owner_user_id FROM matches WHERE id=?", others) == [
+        {"owner_user_id": user_id_of(storage, STRANGER)}]
 
 
 def test_legacy_assign_refuses_an_unknown_username_and_changes_nothing(client, storage, capsys):
@@ -189,7 +220,7 @@ def test_legacy_assign_refuses_an_unknown_username_and_changes_nothing(client, s
     make_legacy(storage, match_id)
     before = dump(storage)
     capsys.readouterr()
-    assert legacy(storage, "--assign", "hic.yok") == 1
+    assert legacy(storage, "--assign", "hic.yok", "--match", match_id) == 1
     captured = capsys.readouterr()
     assert captured.err.strip() == "No account has the username 'hic.yok'." and captured.out == ""
     assert dump(storage) == before

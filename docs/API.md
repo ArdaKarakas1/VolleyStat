@@ -1,7 +1,7 @@
 # Yerel geliştirme API'si (v0.9)
 
 **Kök:** `http://127.0.0.1:8000/v1`. Android emülatöründen `http://10.0.2.2:8000/v1`.
-**Kapsam:** Yalnızca yerel geliştirme. TLS yoktur. Sağlık, kayıt ve giriş dışındaki her uç oturum ister ve sunucu her maçı yalnız onu açan hesaba gösterir.
+**Kapsam:** Yalnızca yerel geliştirme. TLS yoktur. Sağlık, kayıt ve giriş dışındaki her uç oturum ister ve sunucu her maçı yalnız sahibi olan hesaba gösterir.
 
 Makinece okunur sözleşme: [openapi-local-dev.json](openapi-local-dev.json). Dosya `create_app().openapi()` çıktısıdır.
 
@@ -17,7 +17,7 @@ Sürüm 0.7.0 bir videoyu maçlara böler ([API_V1.md](API_V1.md) bölüm 7, ADR
 
 Sürüm 0.8.0 hesapları ekler ([API_V1.md](API_V1.md) bölüm 10, ADR-0119): kayıt, giriş, çıkış, görünen ad, şifre değişikliği ve hesap silme. Oturum isteyen uçlar `Authorization: Bearer <oturum anahtarı>` başlığını ister. Başlık yoksa ya da oturum bittiyse sunucu `401 AUTH_REQUIRED` ve `WWW-Authenticate: Bearer` döner. Bu sürümde yalnız `/auth/logout` ve `/me` uçları oturum ister. Maç, yükleme, analiz ve rapor uçları oturumsuz çalışmayı sürdürür, bu yüzden uygulamanın 0.7.0 sürümü 0.8.0 sunucusuyla çalışır. `GET /health` yanıtı `accounts` alanını da taşır: `{"signup": "LINK" | "OPEN", "teams": "OPERATOR" | "OPEN"}`.
 
-Sürüm 0.9.0 erişimi ve depolama sınırlarını ekler ([API_V1.md](API_V1.md) bölüm 10, ADR-0119). `GET /health`, `POST /auth/register` ve `POST /auth/login` dışındaki her uç oturum ister. Bir hesabın açtığı maç o hesabın kişisel maçıdır ve sunucu maçı, yüklemelerini, videolarını, analizlerini ve raporunu yalnız o hesaba gösterir. Başka bir hesap `403 NOT_A_MEMBER` alır. Sunucu 0.9 öncesi sürümlerin sakladığı maçları hiçbir hesaba bağlamaz (`LEGACY`). Operatör bu maçları `python -m app.admin legacy` komutuyla bir hesaba bağlar ya da siler. Sunucu bir hesabın kişisel videolarına 8 GiB, bütün hesaplarınkine 40 GiB ayırır ve diskte 20 GiB boş yer bırakır. Sunucu bir gün boyunca parça almayan yarım yüklemeyi kapatır ve baytlarını siler. Sunucu hesabı silerken hesaba ait maçları da siler. Uygulamanın 0.9.0 sürümü sunucunun 0.9.0 sürümünü ister, çünkü uygulamanın hesap silme ve gizlilik metinleri yalnız bu sunucu için doğrudur. Uygulama 0.9 kota ve disk retlerini sunucunun gönderdiği sayılarla yazar ve sunucunun göstermediği bir maçı silinmiş saymaz. Uygulamanın 0.8.0 sürümü her isteğe oturumunu eklediği için 0.9.0 sunucusuyla çalışır, ama sunucunun yeni retlerini genel bir hata olarak gösterir. Uygulamanın 0.7.0 sürümü oturum göndermez ve 0.9.0 sunucusuyla artık çalışmaz. Sunucu `/docs`, `/redoc` ve `/openapi.json` adreslerini sunmaz. Makinece okunur sözleşme yalnız depodaki dosyadadır.
+Sürüm 0.9.0 erişimi ve depolama sınırlarını ekler ([API_V1.md](API_V1.md) bölüm 10, ADR-0119). `GET /health`, `POST /auth/register` ve `POST /auth/login` dışındaki her uç oturum ister. Bir hesabın açtığı maç o hesabın kişisel maçıdır ve sunucu maçı, yüklemelerini, videolarını, analizlerini ve raporunu yalnız o hesaba gösterir. Başka bir hesap `403 NOT_A_MEMBER` alır. Sunucu 0.9 öncesi sürümlerin sakladığı maçları hiçbir hesaba bağlamaz (`LEGACY`). Operatör bu maçları `python -m app.admin legacy` komutuyla bir hesaba bağlar ya da siler. Sunucu kayıt koduyla açılan bir hesabın kişisel videolarına 8 GiB, kodsuz açılan bir hesabınkine 4 GiB ve bütün hesaplarınkine 40 GiB ayırır. Sunucu diskteki boş yeri 20 GiB'ın altına indirecek bir yüklemeyi reddeder ve bu denetimde bitmemiş yüklemelerin henüz gelmeyen baytlarını da sayar. Sunucu açık kaldığı bir gün boyunca parça almayan yarım yüklemeyi kapatır ve baytlarını siler. Sunucu hesabı silerken hesaba ait maçları da siler. Uygulamanın 0.9.0 sürümü sunucunun 0.9.0 sürümünü ister, çünkü uygulamanın hesap silme ve gizlilik metinleri yalnız bu sunucu için doğrudur. Uygulama 0.9 kota ve disk retlerini sunucunun gönderdiği sayılarla yazar ve sunucunun göstermediği bir maçı silinmiş saymaz. Uygulamanın 0.8.0 sürümü her isteğe oturumunu ekler, ama ekip onu 0.9.0 sunucusuyla kullanmayı önermez. Uygulama 0.8'in hesap silme ekranı sunucunun maç listesindeki maçları hesapla birlikte silmeyeceğini yazar. Sunucu 0.9 ise uygulama 0.8'in bu sunucuya yüklediği maçları hesapla birlikte siler. Uygulama 0.8 analiz işini sorunca aldığı `403 NOT_A_MEMBER` yanıtını bir bağlantı hatası sayar. Uygulama bu durumda sunucudan iş durumunu alamadığını yazar ve ekran açık kaldıkça işi beş saniyede bir yeniden sorar. Uygulamanın 0.7.0 sürümü oturum göndermez ve 0.9.0 sunucusuyla artık çalışmaz. Sunucu `/docs`, `/redoc` ve `/openapi.json` adreslerini sunmaz. Makinece okunur sözleşme yalnız depodaki dosyadadır.
 
 | Uç | Görev | Başarı | Hatalar |
 |---|---|---|---|
@@ -27,7 +27,7 @@ Sürüm 0.9.0 erişimi ve depolama sınırlarını ekler ([API_V1.md](API_V1.md)
 | `GET /matches/{id}` | Maçı okur | 200 | 401, 403, 404 |
 | `PUT /matches/{id}/rules` | Sunucunun maçın setlerini saydığı kuralı değiştirir. İstek istemcinin sunucudan son okuduğu kuralı da taşır | 200 | 401, 403, 404, 409, 422 |
 | `DELETE /matches/{id}` | Maçı ve sunucunun o maç için tuttuğu her şeyi siler | 204 | 401, 403, 404, 409 |
-| `POST /matches/{id}/uploads` | Yükleme oturumu açar | 201 | 401, 403, 404, 409, 422, 507 |
+| `POST /matches/{id}/uploads` | Yükleme oturumu açar. Hesabın aynı dosya için bitmemiş yüklemesi varsa onu döner | 201, 200 | 401, 403, 404, 409, 422, 507 |
 | `GET /uploads/{id}` | Sunucudaki offset ve durumu verir (devam için) | 200 | 401, 403, 404 |
 | `PUT /uploads/{id}/chunks?offset=n` | En çok 4 MiB'lık parça yükler | 200 | 400, 401, 403, 404, 409, 413, 507 |
 | `POST /uploads/{id}/complete` | SHA-256 ve dosya doğrulaması yapar, videoyu kaydeder | 200 | 401, 403, 404, 409, 422 |
@@ -59,9 +59,10 @@ Sürüm 0.9.0 erişimi ve depolama sınırlarını ekler ([API_V1.md](API_V1.md)
 - Doğrulama sürerken gelen ikinci `complete` çağrısı `409 UPLOAD_FINALIZING` döner. 15 dakikadan eski bir doğrulama terk edilmiş sayılır ve sonraki çağrı işi devralır.
 - Sunucu bir parçayı yazarken kesilirse kayıtlı offset geçerlidir. Sonraki parça fazla baytların üzerine yazar. Diskteki dosya kayıtlı offset'ten kısaysa sunucu offset'i diskteki boyuta çeker ve `409 OFFSET_MISMATCH` ile bildirir.
 - `DELETE /uploads/{id}` yarım kalan yüklemeyi kapatır (`ABORTED`). Videoya dönüşmüş yükleme için `409 UPLOAD_COMPLETED` döner; o durumda video silinir.
-- Sunucu yüklemeyi bildirilen boyutla sayar. Sunucu bir hesabın kişisel maç videolarına ve yarım yüklemelerine en çok 8 GiB, bütün hesaplarınkine en çok 40 GiB ayırır. Sınırı aşan yükleme başlamaz ve sunucu `409 QUOTA_EXCEEDED` döner. Yanıt `details.scope`, `details.usedBytes` ve `details.limitBytes` taşır ([API_V1.md](API_V1.md) bölüm 10).
-- Yükleme diskteki boş yeri `VOLLEYSTAT_DISK_FLOOR_GIB` sınırının (varsayılan 20 GiB) altına indirecekse sunucu `507 STORAGE_FULL` döner. Bir parça boş yeri bu sınırın yarısının altına indirecekse sunucu parçayı yazmaz ve yine `507 STORAGE_FULL` döner. Yanıt yalnız sınırı taşır (`details.floorBytes`).
-- Sunucu yüklemenin son dokunuş zamanını yükleme başlarken ve her parçada günceller. Sunucu bir gün boyunca parça almayan yüklemeyi kapatır (bölüm "Silme ve saklama").
+- İstemci aynı hesapla aynı maç için aynı dosyanın yüklemesini yeniden isterse (aynı `clientSha256`, `sizeBytes`, `fileName` ve `mimeType`) ve o yükleme hâlâ `UPLOADING` durumundaysa sunucu yeni bir yükleme açmaz. Sunucu var olan yüklemeyi `200` ile ve `nextOffset` değeriyle döner ve sınırları yeniden denetlemez. Yükleme başlatan isteğin yanıtı kaybolsa da sunucu dosyayı böylece bir kez sayar.
+- Sunucu yüklemeyi istemcinin bildirdiği boyutla sayar. Sunucu kayıt koduyla açılan bir hesabın kişisel maç videolarına ve yarım yüklemelerine en çok 8 GiB, kodsuz açılan bir hesabınkine en çok 4 GiB ayırır. Sunucu kodsuz açılan bir hesaptan aynı anda tek bir yarım yükleme kabul eder. Sunucu bütün hesapların kişisel maç videolarına birlikte en çok 40 GiB ayırır. Sınırı aşan yükleme başlamaz ve sunucu `409 QUOTA_EXCEEDED` döner. Yanıt `details.scope` ve `details.limitBytes` taşır. Hesabın sınırında yanıt `details.usedBytes` de taşır ([API_V1.md](API_V1.md) bölüm 10).
+- Sunucu yeni yüklemenin boyutunu ve bitmemiş yüklemelerin henüz gelmeyen baytlarını diskteki boş yerden düşer. Kalan yer `VOLLEYSTAT_DISK_FLOOR_GIB` sınırının (varsayılan 20 GiB) altına inecekse sunucu `507 STORAGE_FULL` döner. Bir parça boş yeri bu sınırın yarısının altına indirecekse sunucu parçayı yazmaz ve yine `507 STORAGE_FULL` döner. Yanıt yalnız sınırı taşır (`details.floorBytes`).
+- Sunucu yüklemenin son dokunuş zamanını yükleme başlarken ve her parçada günceller. Sunucu açık kaldığı bir gün boyunca parça almayan yüklemeyi kapatır (bölüm "Silme ve saklama").
 
 ## Video durumu ve kalite raporu
 
@@ -103,14 +104,14 @@ Uyarılar videoyu reddetmez, daha düşük bir kalite katmanına koyar: `LOW_RES
 
 ## Silme ve saklama
 
-Sunucu aldığı veriyi bir silme çağrısı gelene kadar saklar. Tek istisna yarım kalan yüklemedir: Sunucu bir gün boyunca parça almayan yüklemeyi kapatır ve baytlarını siler.
+Sunucu aldığı veriyi bir silme çağrısı gelene kadar saklar. Tek istisna yarım kalan yüklemedir: Sunucu açık kaldığı bir gün boyunca parça almayan yüklemeyi kapatır ve baytlarını siler. Sunucu kapalı kaldığı süreyi saymaz.
 
 | Çağrı | Sunucunun sildiği | Sunucuda kalan |
 |---|---|---|
 | `DELETE /matches/{id}` | Maç kaydı (takım adları, maç adı, tarih, salon, tür), maçın bütün yükleme kayıtları ve baytları, videolar, analiz işleri, ralliler, inceleme kartları, kararlar ve istek anahtarları | Hiçbir şey |
 | `DELETE /videos/{id}` | Video kaydı ve baytları, o videonun analiz işleri, rallileri, kartları ve kararları | Maç kaydı ve `DELETED` durumundaki yükleme kaydı |
 | `DELETE /uploads/{id}` | Bitmemiş yüklemenin baytları | Maç kaydı ve `ABORTED` durumundaki yükleme kaydı |
-| Dakikalık tarama (çağrı yok) | Bir gün boyunca parça almayan yüklemenin ve bir gün önce başlayıp bitmeyen doğrulamanın baytları | Maç kaydı ve `ABORTED` durumundaki yükleme kaydı |
+| Dakikalık tarama (çağrı yok) | Sunucunun açık kaldığı bir gün boyunca parça almayan yüklemenin ve bir gün önce başlayıp bitmeyen doğrulamanın baytları | Maç kaydı ve `ABORTED` durumundaki yükleme kaydı |
 | `POST /me/delete` | Hesap, oturumları, telefon anahtarları ve hesaba ait kişisel maçların her şeyi (`DELETE /matches/{id}` gibi) | Hiçbir hesaba bağlı olmayan (`LEGACY`) maçlar |
 
 `DELETE /matches/{id}` kuralları:
@@ -143,7 +144,7 @@ Bütün hatalar bu zarfla döner. Tanımsız adres `NOT_FOUND`, yanlış yöntem
 ## Bilinen sınırlar
 
 - Tek süreç, tek bilgisayar. Eşzamanlı çok süreçli kullanım desteklenmez.
-- Sunucu terk edilen bir yüklemeyi ancak bir gün sonra siler. O zamana kadar sunucu yüklemeyi bildirdiği boyutla hesabın ve sunucunun sınırına sayar. İstemci yüklemeden daha önce vazgeçerse `DELETE /uploads/{id}` ya da `DELETE /matches/{id}` çağırır.
+- Sunucu istemcinin bıraktığı bir yüklemeyi ancak açık kaldığı bir günün sonunda siler. O zamana kadar sunucu yüklemeyi istemcinin bildirdiği boyutla hesabın ve sunucunun sınırına sayar ve henüz gelmeyen baytlarını diskteki boş yerden düşer. İstemci yüklemeden daha önce vazgeçerse `DELETE /uploads/{id}` ya da `DELETE /matches/{id}` çağırır.
 - Sunucu boş disk yerini yükleme başlarken ve her parçada okur. Başka bir program diski bu arada doldurursa yükleme yarıda kalabilir.
 - `POST /matches` kullanan bir istemci yanıtı kaybederse sunucuda adresleyemediği bir maç bırakır. `PUT /matches/{id}` bu boşluğu kapatır ve Android uygulaması yalnız onu kullanır.
 - Sunucu silinen dosyanın diskteki bloklarının üzerine yazmaz. Dosya sistemi o blokları yeniden kullanana kadar bir disk kurtarma aracı video baytlarını bulabilir.

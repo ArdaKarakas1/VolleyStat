@@ -3,8 +3,11 @@
 signup-code              print a one-time code that opens one registration (valid 7 days)
 reset-password USERNAME  print a one-time temporary password and close every session of the account
 legacy --list            list the matches stored before server 0.9, which belong to no account
-legacy --assign USERNAME [--match ID]...
-                         make those matches (all of them, or the named ones) personal matches of USERNAME
+legacy --assign USERNAME --match ID [--match ID]...
+                         make the named matches personal matches of USERNAME
+legacy --assign USERNAME --all
+                         make every one of them a personal match of USERNAME, only on a server
+                         with a single account
 legacy --delete [--match ID]...
                          delete those matches with their uploads, videos, analyses and bytes
 
@@ -63,13 +66,25 @@ def _legacy_ids(db, wanted: list[str] | None) -> list[str]:
 
 
 def legacy_assign(db_path: Path, username: str, wanted: list[str] | None) -> int:
+    """Give LEGACY matches to one account: the named ones, or every one (`wanted` None, from --all).
+
+    Server 0.8 read no session on the match routes, so nothing on the server tells which account
+    uploaded a LEGACY match. --all therefore runs only on a server with a single account: with more,
+    it could hand one person's videos to another, and the operator names each match instead."""
     # The checks run in the write transaction that changes the rows, so the server can not change a
     # match between a check and the change.
     with connector(db_path)(write=True) as db:
         user = db.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone()
         if user is None:
             raise _Refused(f"No account has the username {username!r}.")
+        if wanted is None:
+            count = db.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+            if count > 1:
+                raise _Refused(f"This server has {count} accounts, so --all could give one person's matches to another."
+                               " Name each match with --match; legacy --list shows their teams and dates.")
         chosen = _legacy_ids(db, wanted)
+        bound = [db.execute("SELECT id, played_on, home_team, away_team FROM matches WHERE id=?", (match_id,)).fetchone()
+                 for match_id in chosen]
         for match_id in chosen:
             db.execute("UPDATE matches SET status='PERSONAL', owner_user_id=? WHERE id=? AND status='LEGACY'",
                        (user["id"], match_id))
@@ -77,6 +92,8 @@ def legacy_assign(db_path: Path, username: str, wanted: list[str] | None) -> int
         marks = ",".join("?" * len(chosen))
         held = db.execute(f"SELECT COALESCE(SUM(expected_size), 0) FROM uploads WHERE match_id IN ({marks})"
                           " AND status IN ('UPLOADING', 'FINALIZING', 'COMPLETED')", chosen).fetchone()[0] if chosen else 0
+    for row in bound:
+        print("  ".join(str(value) for value in (row["id"], row["played_on"] or "-", row["home_team"], row["away_team"])))
     print(f"Komut {len(chosen)} maçı {username} hesabına bağladı ({held} bayt).")
     return 0
 
@@ -113,9 +130,18 @@ def main(argv: list[str] | None = None) -> int:
     action.add_argument("--assign", metavar="USERNAME", help="Make them personal matches of this account")
     action.add_argument("--delete", action="store_true", help="Delete them with their uploads, videos and bytes")
     legacy.add_argument("--match", metavar="ID", action="append", help="Act on this match only (repeatable)")
+    legacy.add_argument("--all", action="store_true",
+                        help="With --assign: every match that belongs to no account (a server with one account only)")
     args = parser.parse_args(argv)
-    if args.command == "legacy" and args.list and args.match:
-        legacy.error("--match can not be used with --list")
+    if args.command == "legacy":
+        if args.list and args.match:
+            legacy.error("--match can not be used with --list")
+        if args.all and args.assign is None:
+            legacy.error("--all goes only with --assign")
+        if args.assign is not None and not args.match and not args.all:
+            legacy.error("--assign needs --match ID for each match, or --all on a server with one account")
+        if args.all and args.match:
+            legacy.error("--all can not be used with --match")
     storage = (args.storage or default_storage()).resolve()
     storage.mkdir(parents=True, exist_ok=True, mode=0o700)
     db_path = storage / "volleystat.sqlite3"
@@ -129,7 +155,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.list:
                 return legacy_list(db_path)
             if args.assign is not None:
-                return legacy_assign(db_path, args.assign, args.match)
+                return legacy_assign(db_path, args.assign, None if args.all else args.match)
             return legacy_delete(db_path, storage, args.match)
         except _Refused as refusal:
             print(str(refusal), file=sys.stderr)

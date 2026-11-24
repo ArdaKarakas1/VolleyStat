@@ -18,7 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import quotas, sweep
-from app.main import create_app
+from app.main import MAX_VIDEO_BYTES, create_app
 from app.quotas import GIB
 from tests.helpers import OWNER, as_account, rows, serve, session_for, user_id_of, wait_for
 from tests.test_api import create_match, create_upload, set_upload
@@ -93,21 +93,36 @@ def test_a_declared_size_over_the_personal_quota_answers_409_and_stores_nothing(
     assert upload_ids(storage) == before and media_files(storage) == files
 
 
-def test_a_link_account_has_2_gib_and_one_unfinished_upload(client, storage, link_account):
+def test_a_link_account_has_4_gib_and_one_unfinished_upload(client, storage, link_account):
     invited = link_account()
-    match_id = create_match(invited)
-    refused = refusal(create_upload(invited, match_id, size=2 * GIB + 1))
-    assert refused == {"scope": "PERSONAL", "usedBytes": 0, "limitBytes": 2 * GIB}
-    first = create_upload(invited, match_id, size=GIB)
-    assert first.status_code == 201
-    second = refusal(create_upload(invited, match_id, size=1))
-    assert second == {"scope": "PERSONAL", "reason": "UNFINISHED_UPLOAD", "usedBytes": GIB, "limitBytes": 2 * GIB}
-    # Once the first upload is a video, the account may start another one within its 2 GiB.
+    first_match, second_match = create_match(invited), create_match(invited)
+    first = create_upload(invited, first_match, size=4 * GIB)
+    assert first.status_code == 201, first.text
+    before, files = upload_ids(storage), media_files(storage)
+    second = refusal(create_upload(invited, second_match, size=1))
+    assert second == {"scope": "PERSONAL", "reason": "UNFINISHED_UPLOAD", "usedBytes": 4 * GIB, "limitBytes": 4 * GIB}
+    # Once the first upload is a video, the account has no unfinished upload, and its 4 GiB are full.
     set_upload(storage, first.json()["uploadId"], status="COMPLETED")
-    assert create_upload(invited, match_id, size=GIB).status_code == 201
-    set_upload(storage, upload_ids(storage)[-1], status="COMPLETED")
-    assert refusal(create_upload(invited, match_id, size=1)) == {"scope": "PERSONAL", "usedBytes": 2 * GIB,
-                                                                 "limitBytes": 2 * GIB}
+    full = refusal(create_upload(invited, second_match, size=1))
+    assert full == {"scope": "PERSONAL", "usedBytes": 4 * GIB, "limitBytes": 4 * GIB}
+    assert upload_ids(storage) == before and media_files(storage) == files
+
+
+def test_an_account_opened_without_a_link_or_a_code_gets_the_link_quota(client, storage):
+    """OPEN (a server started with VOLLEYSTAT_SIGNUP=open) gets what every account without an operator
+    code gets: 4 GiB, one maximum-size video, and one unfinished upload."""
+    assert quotas.PERSONAL_LIMIT_OTHER == MAX_VIDEO_BYTES
+    opened = as_account(client, storage, "test.acik", "OPEN")
+    first_match, second_match = create_match(opened), create_match(opened)
+    first = create_upload(opened, first_match, size=4 * GIB)
+    assert first.status_code == 201, first.text
+    before, files = upload_ids(storage), media_files(storage)
+    unfinished = refusal(create_upload(opened, second_match, size=1))
+    assert unfinished == {"scope": "PERSONAL", "reason": "UNFINISHED_UPLOAD", "usedBytes": 4 * GIB, "limitBytes": 4 * GIB}
+    set_upload(storage, first.json()["uploadId"], status="COMPLETED")
+    full = refusal(create_upload(opened, second_match, size=1))
+    assert full == {"scope": "PERSONAL", "usedBytes": 4 * GIB, "limitBytes": 4 * GIB}
+    assert upload_ids(storage) == before and media_files(storage) == files
 
 
 def test_an_upload_being_verified_is_the_link_accounts_unfinished_upload(storage, link_account):
@@ -120,33 +135,40 @@ def test_an_upload_being_verified_is_the_link_accounts_unfinished_upload(storage
     assert create_upload(invited, match_id, size=1).status_code == 201
 
 
-@pytest.mark.parametrize("signup_via", ["OPEN_MATCH", "INVITE", "SOMETHING_NEW", ""])
+@pytest.mark.parametrize("signup_via", ["OPEN_MATCH", "INVITE", "CAPTAIN_CODE", "SOMETHING_NEW", ""])
 def test_an_unknown_signup_via_gets_the_link_quota(client, storage, signup_via):
     other = as_account(client, storage, "test.baska", signup_via)
-    match_id = create_match(other)
-    assert refusal(create_upload(other, match_id, size=2 * GIB + 1))["limitBytes"] == 2 * GIB
-    assert create_upload(other, match_id, size=1).status_code == 201
-    assert refusal(create_upload(other, match_id, size=1))["reason"] == "UNFINISHED_UPLOAD"
+    first_match, second_match = create_match(other), create_match(other)
+    first = create_upload(other, first_match, size=1)
+    assert first.status_code == 201, first.text
+    assert refusal(create_upload(other, second_match, size=1)) == {
+        "scope": "PERSONAL", "reason": "UNFINISHED_UPLOAD", "usedBytes": 1, "limitBytes": 4 * GIB}
+    set_upload(storage, first.json()["uploadId"], status="COMPLETED")
+    assert refusal(create_upload(other, second_match, size=4 * GIB)) == {
+        "scope": "PERSONAL", "usedBytes": 1, "limitBytes": 4 * GIB}
+    assert create_upload(other, second_match, size=4 * GIB - 1).status_code == 201
 
 
-@pytest.mark.parametrize("signup_via", ["SIGNUP_CODE", "CAPTAIN_CODE", "OPEN"])
-def test_an_account_opened_with_a_code_has_8_gib_and_no_limit_on_unfinished_uploads(client, storage, signup_via):
-    other = as_account(client, storage, "test.kodlu", signup_via)
-    match_id = create_match(other)
-    for size in (GIB, GIB, 2 * GIB, 4 * GIB):
-        assert create_upload(other, match_id, size=size).status_code == 201
-    assert refusal(create_upload(other, match_id, size=1))["limitBytes"] == 8 * GIB
+def test_an_account_opened_with_a_code_gets_8_gib(client, storage):
+    coded = as_account(client, storage, "test.kodlu", "SIGNUP_CODE")
+    # Two maximum-size videos, both unfinished at once: a code account has no limit on unfinished uploads.
+    for _ in range(2):
+        assert create_upload(coded, create_match(coded), size=4 * GIB).status_code == 201
+    details = refusal(create_upload(coded, create_match(coded), size=1))
+    assert details == {"scope": "PERSONAL", "usedBytes": 8 * GIB, "limitBytes": 8 * GIB}
 
 
 # --- the server-wide pool -------------------------------------------------------------------------
 
-def test_twenty_link_accounts_fill_the_personal_pool_and_the_next_upload_answers_server(client, storage):
-    for number in range(20):
+def test_ten_link_accounts_fill_the_personal_pool_and_the_next_upload_answers_server(client, storage):
+    for number in range(10):
         invited = as_account(client, storage, f"test.davetli{number}", "INVITE")
-        assert create_upload(invited, create_match(invited), size=2 * GIB).status_code == 201
-    details = refusal(create_upload(client, create_match(client), size=1))
-    assert details == {"scope": "SERVER", "pool": "PERSONAL", "usedBytes": 40 * GIB, "limitBytes": 40 * GIB}
-    assert len(upload_ids(storage)) == 20
+        assert create_upload(invited, create_match(invited), size=4 * GIB).status_code == 201
+    eleventh = as_account(client, storage, "test.davetli10", "INVITE")
+    details = refusal(create_upload(eleventh, create_match(eleventh), size=1))
+    # The answer names the limit, and not how much the other accounts hold.
+    assert details == {"scope": "SERVER", "pool": "PERSONAL", "limitBytes": 40 * GIB}
+    assert len(upload_ids(storage)) == 10
 
 
 def test_legacy_bytes_do_not_count_in_the_personal_pool(client, storage):
@@ -199,14 +221,14 @@ def test_the_checks_come_in_their_order(storage, disk, monkeypatch):
     with serve(storage, None) as client:
         invited = as_account(client, storage, "test.davetli", "INVITE")
         match_id = create_match(invited)
-        unfinished = create_upload(invited, match_id, size=2 * GIB).json()["uploadId"]
+        unfinished = create_upload(invited, match_id, size=4 * GIB).json()["uploadId"]
         personal_match(storage, "dolgu-hesabi", 40 * GIB)               # the pool is full without it
         disk.free = 20 * GIB                                              # and the disk has nothing to spare
         # Every limit is reached at once: the first check answers, then each next one as the one before it clears.
         assert refusal(create_upload(invited, match_id, size=1))["reason"] == "UNFINISHED_UPLOAD"
         set_upload(storage, unfinished, status="COMPLETED")
         details = refusal(create_upload(invited, match_id, size=1))
-        assert details == {"scope": "PERSONAL", "usedBytes": 2 * GIB, "limitBytes": 2 * GIB}
+        assert details == {"scope": "PERSONAL", "usedBytes": 4 * GIB, "limitBytes": 4 * GIB}
         set_upload(storage, unfinished, status="DELETED")
         assert refusal(create_upload(invited, match_id, size=1))["scope"] == "SERVER"
         with closing(sqlite3.connect(storage / "volleystat.sqlite3")) as db, db:
@@ -240,6 +262,74 @@ def test_two_uploads_of_one_link_account_at_once_give_one_201_and_one_409(storag
             thread.join(30)
         assert sorted(codes) == [201, 409]
         assert len(rows(storage, "SELECT 1 FROM uploads")) == 1
+
+
+# --- a start whose answer was lost --------------------------------------------------------------------
+
+def start_of(client, match_id, data=None, size=None, sha=None, **overrides):
+    """The app's own start: the declared size and the SHA-256 of the whole file."""
+    return create_upload(client, match_id, size=size if size is not None else len(data),
+                         clientSha256=sha or hashlib.sha256(data).hexdigest(), **overrides)
+
+
+def test_a_start_repeated_after_a_lost_answer_gets_the_same_upload_and_counts_it_once(client, storage, link_account):
+    invited = link_account()
+    match_id = create_match(invited)
+    first = start_of(invited, match_id, size=4 * GIB, sha="a" * 64)
+    assert first.status_code == 201, first.text
+    # The phone never read the first answer and asks again for the same file: the server names the
+    # unfinished upload it already holds instead of refusing a second one or counting the file twice.
+    again = start_of(invited, match_id, size=4 * GIB, sha="a" * 64)
+    assert again.status_code == 200, again.text
+    assert again.json() == {**first.json(), "nextOffset": 0, "status": "UPLOADING"}
+    assert len(upload_ids(storage)) == 1 and len(media_files(storage)) == 1
+    assert refusal(create_upload(invited, create_match(invited), size=1)) == {
+        "scope": "PERSONAL", "reason": "UNFINISHED_UPLOAD", "usedBytes": 4 * GIB, "limitBytes": 4 * GIB}
+    # A code account has no limit on unfinished uploads, so the second start would have held 4 GiB more.
+    match_id = create_match(client)
+    assert [start_of(client, match_id, size=4 * GIB, sha="b" * 64).status_code for _ in range(3)] == [201, 200, 200]
+    assert create_upload(client, create_match(client), size=4 * GIB).status_code == 201
+    assert refusal(create_upload(client, create_match(client), size=1))["usedBytes"] == 8 * GIB
+
+
+def test_a_repeated_start_resumes_from_the_bytes_the_server_holds(client, storage):
+    data = b"0123456789"
+    match_id = create_match(client)
+    upload_id = start_of(client, match_id, data).json()["uploadId"]
+    assert client.put(f"/v1/uploads/{upload_id}/chunks?offset=0", content=data[:4]).status_code == 200
+    set_upload(storage, upload_id, touched_at=T)
+    again = start_of(client, match_id, data)
+    assert again.status_code == 200, again.text
+    assert (again.json()["uploadId"], again.json()["nextOffset"]) == (upload_id, 4)
+    # A start counts as activity: the sweep waits a day from it.
+    assert touched(storage, upload_id) > T
+    assert client.put(f"/v1/uploads/{upload_id}/chunks?offset=4", content=data[4:]).status_code == 200
+    assert client.post(f"/v1/uploads/{upload_id}/complete").status_code == 200
+
+
+def test_a_start_of_another_file_opens_a_new_upload(client, storage):
+    match_id = create_match(client)
+    first = start_of(client, match_id, size=GIB, sha="c" * 64).json()["uploadId"]
+    others = [
+        start_of(client, match_id, size=GIB, sha="d" * 64),                        # other bytes
+        start_of(client, match_id, size=GIB - 1, sha="c" * 64),                    # another size
+        start_of(client, match_id, size=GIB, sha="c" * 64, mimeType="video/webm", fileName="video.webm"),
+        create_upload(client, match_id, size=GIB),                                 # no checksum: the server can not tell
+        start_of(client, create_match(client), size=GIB, sha="c" * 64),            # another match
+    ]
+    assert [response.status_code for response in others] == [201] * 5
+    assert len(set(upload_ids(storage))) == 6
+    # A closed upload is never handed out again: the phone starts from zero on a new one.
+    client.delete(f"/v1/uploads/{first}")
+    reopened = start_of(client, match_id, size=GIB, sha="c" * 64)
+    assert reopened.status_code == 201 and reopened.json()["uploadId"] != first
+
+
+def test_a_repeated_start_by_another_account_is_refused_before_anything_is_named(client, storage, stranger):
+    match_id = create_match(client)
+    start_of(client, match_id, size=GIB, sha="e" * 64)
+    refused = start_of(stranger, match_id, size=GIB, sha="e" * 64)
+    assert refused.status_code == 403 and "uploadId" not in refused.text
 
 
 # --- touched_at and started_by ------------------------------------------------------------------------
@@ -305,6 +395,62 @@ def test_a_patched_free_space_below_the_floor_answers_507_and_stores_nothing(sto
         assert upload_ids(storage) == before and media_files(storage) == files
 
 
+def test_unfinished_uploads_hold_the_free_space_they_still_need(storage, disk, monkeypatch):
+    """The floor counts the bytes every unfinished upload still has to send, so two uploads can not
+    pass on the same free bytes, one after the other or at once."""
+    monkeypatch.setenv("VOLLEYSTAT_DISK_FLOOR_GIB", "20")
+    with serve(storage, None) as client:
+        other = as_account(client, storage, "test.ikinci")
+        data = b"0123456789"
+        disk.free = 20 * GIB + 10
+        upload_id = start_of(client, create_match(client), data).json()["uploadId"]
+        refused = create_upload(other, create_match(other), size=1)
+        assert refusal(refused, 507, "STORAGE_FULL") == {"floorBytes": 20 * GIB}
+        # A stored chunk takes its bytes from the disk and from what the upload still owes at once.
+        assert client.put(f"/v1/uploads/{upload_id}/chunks?offset=0", content=data[:4]).status_code == 200
+        disk.free -= 4
+        refusal(create_upload(other, create_match(other), size=1), 507, "STORAGE_FULL")
+        # A finished upload owes nothing, and one byte more of free space lets the next one in.
+        assert client.put(f"/v1/uploads/{upload_id}/chunks?offset=4", content=data[4:]).status_code == 200
+        disk.free -= 6
+        assert client.post(f"/v1/uploads/{upload_id}/complete").status_code == 200
+        disk.free += 1
+        assert create_upload(other, create_match(other), size=1).status_code == 201
+        # An unfinished upload of a match that belongs to no account holds its bytes too, until it is closed.
+        disk.free += GIB
+        personal_match(storage, None, GIB, status="UPLOADING", match_status="LEGACY")
+        refusal(create_upload(other, create_match(other), size=1), 507, "STORAGE_FULL")
+        with closing(sqlite3.connect(storage / "volleystat.sqlite3")) as db, db:
+            db.execute("UPDATE uploads SET status='ABORTED' WHERE expected_size=?", (GIB,))
+        assert create_upload(other, create_match(other), size=1).status_code == 201
+
+
+def test_two_uploads_started_at_once_do_not_both_take_the_last_free_space(storage, monkeypatch):
+    monkeypatch.setenv("VOLLEYSTAT_DISK_FLOOR_GIB", "20")
+    with serve(storage, None) as client:
+        accounts = [as_account(client, storage, f"test.ayni{number}") for number in range(2)]
+        matches = [create_match(account) for account in accounts]
+
+        def slow(path):
+            # Holds the first start's transaction open while the second request arrives.
+            time.sleep(0.3)
+            return 21 * GIB
+        monkeypatch.setattr(quotas, "free_bytes", slow)
+        barrier = threading.Barrier(2)
+        codes = []
+
+        def start(account, match_id):
+            barrier.wait(5)
+            codes.append(create_upload(account, match_id, size=GIB).status_code)
+
+        threads = [threading.Thread(target=start, args=pair) for pair in zip(accounts, matches)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(30)
+        assert sorted(codes) == [201, 507]
+
+
 def test_a_chunk_below_half_the_floor_answers_507_and_keeps_the_offset(storage, disk, monkeypatch):
     monkeypatch.setenv("VOLLEYSTAT_DISK_FLOOR_GIB", "20")
     with serve(storage, None) as client:
@@ -366,8 +512,12 @@ def test_free_bytes_reads_the_disk_of_the_storage_folder(storage, monkeypatch):
 
 # --- the sweep -----------------------------------------------------------------------------------------
 
-def sweeper(client):
-    return client.app.state.sweeper
+def sweeper(client, running_since=0.0):
+    """The app's sweeper, as if its server had run since `running_since`: by default since long before T,
+    so the tests below count idle time from T. The tests of a server that was off set their own start."""
+    found = client.app.state.sweeper
+    found.running_since = running_since
+    return found
 
 
 def test_the_sweep_aborts_an_upload_idle_for_24_hours_and_deletes_its_bytes(client, storage):
@@ -433,6 +583,40 @@ def test_an_aborted_upload_frees_the_link_accounts_unfinished_slot(client, stora
     set_upload(storage, upload_id, touched_at=T)
     sweeper(client).run_once(now=T + 86400)
     assert create_upload(invited, match_id, size=GIB).status_code == 201
+
+
+def test_the_time_the_server_was_off_does_not_count_as_idle_time(client, storage):
+    """A phone can not send a chunk to a server that is off: idle time counts only while this server
+    process runs. The last chunk came two hours before a 25-hour outage."""
+    started = T + 27 * 3600
+    match_id = create_match(client)
+    waiting, verifying = (create_upload(client, match_id, size=10).json()["uploadId"] for _ in range(2))
+    assert client.put(f"/v1/uploads/{waiting}/chunks?offset=0", content=b"abc").status_code == 200
+    set_upload(storage, waiting, touched_at=T)
+    set_upload(storage, verifying, status="FINALIZING", finalize_started_at=T, touched_at=T)
+    swept = sweeper(client, running_since=started)
+    assert swept.run_once(now=started) == {"uploads": 0}
+    assert swept.run_once(now=started + 86399) == {"uploads": 0}
+    assert {row["status"] for row in rows(storage, "SELECT status FROM uploads")} == {"UPLOADING", "FINALIZING"}
+    assert len(media_files(storage)) == 2
+    # A day after the start, with no chunk from the phone, both are idle.
+    assert swept.run_once(now=started + 86400) == {"uploads": 2}
+    assert media_files(storage) == []
+
+
+def test_the_first_pass_after_a_start_leaves_an_upload_touched_before_the_outage(storage):
+    with serve(storage, None) as client:
+        match_id = create_match(client)
+        kept, stored_before_accounts = (create_upload(client, match_id, size=10).json()["uploadId"] for _ in range(2))
+        assert client.put(f"/v1/uploads/{kept}/chunks?offset=0", content=b"abc").status_code == 200
+    set_upload(storage, kept, touched_at=time.time() - 27 * 3600)
+    # An upload stored before server 0.9 has no touch time and goes at the first pass (its match is
+    # LEGACY): here it shows that the pass ran.
+    set_upload(storage, stored_before_accounts, touched_at=None)
+    with serve(storage, None, start_worker=True):
+        wait_for(lambda: rows(storage, "SELECT status FROM uploads WHERE id=?", stored_before_accounts)[0]["status"] == "ABORTED")
+        assert rows(storage, "SELECT status FROM uploads WHERE id=?", kept)[0]["status"] == "UPLOADING"
+        assert (storage / "media" / f"{kept}.bin").read_bytes() == b"abc"
 
 
 def sweeper_threads():

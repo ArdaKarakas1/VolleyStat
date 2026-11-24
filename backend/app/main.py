@@ -328,14 +328,33 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
             match = access.require(db, caller, "match", match_id, READ)
         return match_payload(match)
 
-    @app.post("/v1/matches/{match_id}/uploads", status_code=201)
-    def initiate_upload(match_id: str, payload: UploadInput, caller: accounts.Caller = Depends(current_user)):
+    @app.post("/v1/matches/{match_id}/uploads", status_code=201, responses={
+        200: {"description": "This account already had an unfinished upload of the same file for this match;"
+                             " the answer names it and the offset to continue from"}})
+    def initiate_upload(match_id: str, payload: UploadInput, response: Response,
+                        caller: accounts.Caller = Depends(current_user)):
         """Start an upload of a video of the match. The quotas, the server-wide pool and the free-disk
-        floor are checked in the transaction that inserts the row (docs/API_V1.md, section 10)."""
+        floor are checked in the transaction that inserts the row (docs/API_V1.md, section 10).
+
+        A start the account repeats for the same file (same match, checksum, size, name and type) gets
+        the unfinished upload it already has, before any limit is checked: a phone that lost the first
+        answer never learned that upload's id, and a second row would hold the same bytes twice."""
         upload_id = new_id()
         with connect(write=True) as db:
             access.session_user(db, caller)
             access.require(db, caller, "match", match_id, REVIEW)
+            if payload.clientSha256 is not None:
+                same = db.execute(
+                    "SELECT id, next_offset FROM uploads WHERE match_id=? AND started_by=? AND status='UPLOADING'"
+                    " AND client_sha256=? AND expected_size=? AND file_name=? AND mime_type=? ORDER BY rowid LIMIT 1",
+                    (match_id, caller.id, payload.clientSha256, payload.sizeBytes, payload.fileName,
+                     payload.mimeType)).fetchone()
+                if same is not None:
+                    # A start is activity: the sweep waits a day from it, as from a new upload.
+                    db.execute("UPDATE uploads SET touched_at=? WHERE id=?", (time.time(), same["id"]))
+                    response.status_code = 200
+                    return {"uploadId": same["id"], "nextOffset": same["next_offset"], "chunkSizeBytes": CHUNK_SIZE,
+                            "status": "UPLOADING"}
             quotas.check_upload(db, caller, payload.sizeBytes, storage, floor)
             db.execute("INSERT INTO uploads(id,match_id,file_name,mime_type,expected_size,client_sha256,started_by,touched_at)"
                        " VALUES(?,?,?,?,?,?,?,?)",

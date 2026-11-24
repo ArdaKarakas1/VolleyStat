@@ -5,8 +5,11 @@ UPLOADING, FINALIZING or COMPLETED (a live video, a quarantined one included, be
 on disk). A declared size bounds the bytes the server accepts, so a low declaration can not get
 around the limit; a high one holds the space until the sweep closes the upload after a day.
 
-The checks of `initiate_upload` run inside its write transaction, so two uploads started at once
-can not both pass on the same free bytes.
+The free-disk floor is a reservation: the start of an upload subtracts from the free space the bytes
+every unfinished upload still has to send (LEGACY ones included). The checks of `initiate_upload` run
+inside its write transaction, so two uploads, started one after the other or at once, can not both
+pass on the same free bytes. A program that fills the disk from outside is met only by the chunk
+check at half the floor.
 """
 from __future__ import annotations
 
@@ -18,14 +21,14 @@ from .errors import fail
 
 GIB = 1024 ** 3
 
-# How the account opened (users.signup_via) sets its personal limit. An account opened with an
-# operator code (or in the open mode of tests) gets 8 GiB, two maximum-size videos. An account
-# opened through a link gets 2 GiB and one unfinished upload. Any other value gets the smaller
-# limit, so a value a later slice adds is never more generous by mistake.
-CODE_ACCOUNTS = frozenset({"SIGNUP_CODE", "CAPTAIN_CODE", "OPEN"})
-CODE_ACCOUNT_LIMIT = 8 * GIB
-LINK_ACCOUNT_LIMIT = 2 * GIB
-LINK_ACCOUNT_UNFINISHED = 1
+# How the account opened (users.signup_via) sets its personal quota. Only an account opened with an
+# operator code (SIGNUP_CODE) gets 8 GiB, two maximum-size videos, and no limit on unfinished uploads.
+# Every other value (OPEN, INVITE, OPEN_MATCH, CAPTAIN_CODE or a value a later slice adds) gets 4 GiB,
+# one maximum-size video (main.MAX_VIDEO_BYTES), and one unfinished upload, so a value nobody planned
+# for is never more generous by mistake.
+PERSONAL_LIMIT_CODE = 8 * GIB
+PERSONAL_LIMIT_OTHER = 4 * GIB
+PERSONAL_UNFINISHED_OTHER = 1
 # Every account's personal video together.
 PERSONAL_POOL = 40 * GIB
 DEFAULT_FLOOR_GIB = 20
@@ -47,13 +50,12 @@ def free_bytes(path: Path) -> int:
     return shutil.disk_usage(path).free
 
 
-def personal_limit(signup_via: str) -> int:
-    return CODE_ACCOUNT_LIMIT if signup_via in CODE_ACCOUNTS else LINK_ACCOUNT_LIMIT
-
-
-def unfinished_limit(signup_via: str) -> int | None:
-    """How many unfinished personal uploads the account may hold at once, or None for no limit."""
-    return None if signup_via in CODE_ACCOUNTS else LINK_ACCOUNT_UNFINISHED
+def personal_quota(signup_via: str) -> tuple[int, int | None]:
+    """The personal quota of an account: its limit in bytes, and how many unfinished personal uploads
+    it may hold at once (None: no limit)."""
+    if signup_via == "SIGNUP_CODE":
+        return PERSONAL_LIMIT_CODE, None
+    return PERSONAL_LIMIT_OTHER, PERSONAL_UNFINISHED_OTHER
 
 
 def _personal(db, owner_id: str | None, statuses: tuple[str, ...], what: str) -> int:
@@ -82,24 +84,30 @@ def pool_used(db) -> int:
     return _personal(db, None, COUNTED, "COALESCE(SUM(u.expected_size), 0)")
 
 
+def still_owed(db) -> int:
+    """The bytes every unfinished upload, of any match, has still to send: what they will take from the disk."""
+    return db.execute("SELECT COALESCE(SUM(MAX(expected_size - next_offset, 0)), 0) FROM uploads"
+                      " WHERE status IN ('UPLOADING', 'FINALIZING')").fetchone()[0]
+
+
 def check_upload(db, caller, declared: int, storage: Path, floor: int) -> None:
     """Refuse a new personal upload of `declared` bytes, in this order: the unfinished uploads, the
     account's limit, the server-wide pool, then the free-disk floor. The order runs from what the
     person can change to what only the operator can."""
-    used, limit = personal_used(db, caller.id), personal_limit(caller.signup_via)
-    most = unfinished_limit(caller.signup_via)
+    limit, most = personal_quota(caller.signup_via)
+    used = personal_used(db, caller.id)
     if most is not None and personal_unfinished(db, caller.id) >= most:
         fail("QUOTA_EXCEEDED", "This account already has an unfinished upload", 409,
              scope="PERSONAL", reason="UNFINISHED_UPLOAD", usedBytes=used, limitBytes=limit)
     if used + declared > limit:
         fail("QUOTA_EXCEEDED", "The personal video of this account would pass its limit", 409,
              scope="PERSONAL", usedBytes=used, limitBytes=limit)
-    pooled = pool_used(db)
-    if pooled + declared > PERSONAL_POOL:
+    # The answer names only the limit: the sum would tell one account how much the others store.
+    if pool_used(db) + declared > PERSONAL_POOL:
         fail("QUOTA_EXCEEDED", "The personal video of all accounts would pass the server's limit", 409,
-             scope="SERVER", pool="PERSONAL", usedBytes=pooled, limitBytes=PERSONAL_POOL)
+             scope="SERVER", pool="PERSONAL", limitBytes=PERSONAL_POOL)
     # No free-space number goes to the client: only the floor it met.
-    if free_bytes(storage) - declared < floor:
+    if free_bytes(storage) - still_owed(db) - declared < floor:
         fail("STORAGE_FULL", "The upload would take the free space of the server's disk below its floor", 507,
              floorBytes=floor)
 

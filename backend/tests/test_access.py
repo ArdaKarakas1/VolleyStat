@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
+from fastapi.routing import APIRoute
+from starlette.routing import Route as StarletteRoute
 
 from app import access, accounts, media
 from app.access import READ, REVIEW
@@ -109,15 +111,20 @@ OBJECT_ROUTES = {operation: route for operation, route in SESSION_ROUTES.items()
 
 def served_operations(app) -> set[tuple[str, str]]:
     """Every (method, path) the app answers. FastAPI 0.16x keeps each included router as one route entry
-    (`original_router`, `include_context.prefix`); older versions flatten them, and both are read."""
+    (`original_router`, `include_context.prefix`); older versions flatten them, and both are read. A route
+    of any other kind (a mounted folder or app, a websocket, a host) fails the walk with its path: it has
+    no methods and no row in app.openapi(), so without this it would answer without a decision here."""
     def walk(routes, prefix=""):
         for route in routes:
             inner = getattr(route, "original_router", None)
             if inner is not None:
                 yield from walk(inner.routes, prefix + route.include_context.prefix)
-            else:
-                for method in getattr(route, "methods", None) or ():
+            elif isinstance(route, (APIRoute, StarletteRoute)):
+                for method in route.methods or ():
                     yield method, prefix + route.path
+            else:
+                raise AssertionError(f"The walk can not classify {type(route).__name__} at "
+                                     f"{prefix + getattr(route, 'path', '?')}: give it a row in WALK or in access.PUBLIC")
     return set(walk(app.routes))
 
 
@@ -193,6 +200,28 @@ def test_the_walk_lists_every_route_of_the_app(storage):
         assert {(method.upper(), path) for path, operations in app.openapi()["paths"].items()
                 for method in operations} == set(WALK)
     assert len(WALK) == 37
+
+
+@pytest.mark.parametrize("extra", ["mount", "websocket", "sub-app"])
+def test_the_walk_names_a_route_it_can_not_classify(storage, extra):
+    """A mounted folder or app and a websocket route have no methods and no row in app.openapi(). The walk
+    fails on them instead of passing them by, so each needs a decision here or in access.PUBLIC."""
+    from fastapi import FastAPI
+    from fastapi.staticfiles import StaticFiles
+    from app.main import create_app
+
+    app = create_app(storage, analyzer="none", start_worker=False)
+    (storage / "pub").mkdir()
+    if extra == "mount":
+        app.mount("/v1/files", StaticFiles(directory=storage / "pub"))
+    elif extra == "sub-app":
+        app.mount("/v1/files", FastAPI())
+    else:
+        @app.websocket("/v1/files")
+        async def live(socket):  # pragma: no cover - never connected
+            await socket.close()
+    with pytest.raises(AssertionError, match="/v1/files"):
+        served_operations(app)
 
 
 def test_every_route_but_the_public_ones_answers_401_without_a_session(world):

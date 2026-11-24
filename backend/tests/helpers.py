@@ -25,12 +25,14 @@ NO_SESSION = {"Authorization": ""}
 _TOKENS: dict[tuple[Path, str], str] = {}
 
 
-def session_for(storage, username=OWNER, signup_via="OPEN", display_name=None, password=None) -> str:
+def session_for(storage, username=OWNER, signup_via="SIGNUP_CODE", display_name=None, password=None) -> str:
     """The token of one account and one session per storage folder and username.
 
     Written straight into SQLite, so no test pays for scrypt. A server restarted on the same storage
     gets the same token, because the session lives in the database. A cached token whose session row
     is gone (a test dropped the accounts tables, or deleted the account) is replaced by a new one.
+    The account opens with an operator code unless the test names another way, so it has 8 GiB of
+    personal video and no limit on unfinished uploads (backend/app/quotas.py).
     """
     storage = Path(storage).resolve()
     db_path = storage / "volleystat.sqlite3"
@@ -106,7 +108,7 @@ class As:
         return self.request("DELETE", url, **options)
 
 
-def as_account(client, storage, username, signup_via="OPEN"):
+def as_account(client, storage, username, signup_via="SIGNUP_CODE"):
     """The client acting as another account on the same storage."""
     return As(client, bearer(session_for(storage, username, signup_via)))
 

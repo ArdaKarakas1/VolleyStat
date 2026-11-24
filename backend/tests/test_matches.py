@@ -73,7 +73,7 @@ def test_a_match_stored_by_version_0_3_gets_the_new_fields(storage):
         # Stored before accounts, the match belongs to no account until the operator gives it to one.
         refused = client.get("/v1/matches/m1")
         assert (refused.status_code, refused.json()["error"]["code"]) == (403, "NOT_A_MEMBER")
-        assert admin.main(["--storage", str(storage), "legacy", "--assign", OWNER]) == 0
+        assert admin.main(["--storage", str(storage), "legacy", "--assign", OWNER, "--match", "m1"]) == 0
         body = client.get("/v1/matches/m1").json()
         assert body["status"] == "PERSONAL"
         assert (body["name"], body["playedOn"], body["venue"], body["kind"]) == (None, None, None, "TRAINING")
