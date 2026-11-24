@@ -110,12 +110,20 @@ data class MatchRecord(
     val analysis: AnalysisSummary? = null,
     /** Sent with the request that creates the match on the server, and only there. Screens show the rule the server answers with. */
     val rules: MatchRules = MatchRules.FIVB,
+    /**
+     * The server's last answer about this match was 403 NOT_A_MEMBER: it does not show the match to this account. Its next
+     * answer that shows the match clears the mark. While it stands, the lists show the refusal and not the analysis state
+     * remembered before it.
+     */
+    val noAccess: Boolean = false,
 ) {
     val title: String get() = name?.takeIf { it.isNotBlank() } ?: "$homeTeam - $awayTeam"
 }
 
-/** Where a match stands, from the least to the most advanced step. */
+/** Where a match stands, from the least to the most advanced step. NO_ACCESS stands before every step. */
 enum class MatchStatus {
+    /** The server does not show the match to this account (MatchRecord.noAccess). */
+    NO_ACCESS,
     UPLOAD_PENDING, FILE_REJECTED, FILE_UNVERIFIED,
     /** The file is fine and no analysis job exists (none requested, or the server has no analyzer). */
     FILE_ACCEPTED,
@@ -123,7 +131,7 @@ enum class MatchStatus {
 }
 
 val MatchRecord.status: MatchStatus
-    get() = when (check?.status) {
+    get() = if (noAccess) MatchStatus.NO_ACCESS else when (check?.status) {
         null -> MatchStatus.UPLOAD_PENDING
         VideoCheck.QUARANTINED -> MatchStatus.FILE_REJECTED
         VideoCheck.READY -> when (analysis?.state) {

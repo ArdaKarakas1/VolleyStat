@@ -53,6 +53,7 @@ import com.voleybolveveleybol.volleystat.model.VideoSource
 import com.voleybolveveleybol.volleystat.ui.screens.ClipPlaceholder
 import com.voleybolveveleybol.volleystat.ui.screens.HomeScreen
 import com.voleybolveveleybol.volleystat.ui.screens.MatchCreateScreen
+import com.voleybolveveleybol.volleystat.ui.screens.MatchesScreen
 import com.voleybolveveleybol.volleystat.ui.screens.PlayersScreen
 import com.voleybolveveleybol.volleystat.FEEDBACK_ADDRESS
 import com.voleybolveveleybol.volleystat.ui.screens.ProfileScreen
@@ -793,7 +794,7 @@ class ScreenStatesTest {
                 0 -> LoginScreen(account, onLogin = { _, _ -> }, onCreateAccount = {}, initialUsername = "ali", initialPassword = "uzun bir şifre 42")
                 1 -> RegisterScreen(account, onRegister = { _, _, _, _ -> }, onHaveAccount = {}, onBack = {})
                 2 -> PasswordChangeScreen(account.copy(user = ali), { _, _ -> }, onBack = {})
-                3 -> DeleteAccountScreen(account.copy(user = ali), onDelete = {}, onBack = {})
+                3 -> DeleteAccountScreen(account.copy(user = ali), holdsUploadedMatches = false, onDelete = {}, onBack = {})
                 // The row under Adı Kaydet and the logout dialog show the outcome of their call.
                 else -> AccountOutcome(account.copy(user = ali), AccountAction.LOGOUT)
             }
@@ -1058,7 +1059,7 @@ class ScreenStatesTest {
     @Test fun theDeletionNeedsThePasswordAndSaysWhatTheServerDeletes() {
         var account by mutableStateOf(AccountUi(user = ali))
         val deletions = mutableListOf<String>()
-        show { DeleteAccountScreen(account, onDelete = { deletions += it }, onBack = {}) }
+        show { DeleteAccountScreen(account, holdsUploadedMatches = false, onDelete = { deletions += it }, onBack = {}) }
         compose.onNodeWithText(text(R.string.delete_account_title)).assertIsDisplayed()
         compose.onNodeWithText(text(R.string.delete_account_body)).assertIsDisplayed()
         // From server 0.9 on the server deletes the account's matches with it, so the screen names no match that stays there.
@@ -1076,10 +1077,71 @@ class ScreenStatesTest {
     }
 
     @Test fun theDeletionSaysThatTheServerDeletesTheAccountsMatchesToo() {
-        show { DeleteAccountScreen(AccountUi(user = ali), onDelete = {}, onBack = {}) }
+        show { DeleteAccountScreen(AccountUi(user = ali), holdsUploadedMatches = false, onDelete = {}, onBack = {}) }
         compose.onNodeWithText(text(R.string.delete_account_body)).assertIsDisplayed()
-        assertTrue(text(R.string.delete_account_body).contains("Sunucu bu hesaba ait maçları, videolarını ve analizlerini de siler."))
+        assertTrue(text(R.string.delete_account_body).contains("Sunucu bu hesaba bağladığı maçları, videolarını ve analizlerini de siler."))
         assertFalse(shown("maç listendeki"))
+        // No match in the list went to a server: none of them can be a match an older server stored.
+        assertFalse(shown(text(R.string.delete_account_legacy)))
+    }
+
+    /**
+     * Review findings ACC-1 and F1: servers before 0.9 bound no match to an account, and the deletion leaves such a
+     * match on the server. The app can not tell which of its matches went to such a server, so the notice is a
+     * condition that holds for every match the list holds.
+     */
+    @Test fun theDeletionSaysThatTheServerKeepsAMatchAnOlderServerStored() {
+        show { DeleteAccountScreen(AccountUi(user = ali), holdsUploadedMatches = true, onDelete = {}, onBack = {}) }
+        compose.onNodeWithText(text(R.string.delete_account_legacy)).assertIsDisplayed()
+        assertTrue(text(R.string.delete_account_legacy).contains("sunucu maçı hesabınla birlikte silmez"))
+        // The app deletes the match records with the account: the person notes what the operator finds the match by.
+        assertTrue(text(R.string.delete_account_legacy).endsWith("hesabını silmeden önce maçın takım adlarını ve tarihini not al."))
+    }
+
+    /** Review finding F1: the card limits what the server shows, keeps and deletes with the account to the matches bound to it. */
+    @Test fun thePrivacyCardSaysWhatHappensToTheMatchesOfOlderServers() {
+        show { ProfileScreen(AppUiState(), "0.9.0", {}, {}, {}, { true }) }
+        compose.onNodeWithText(text(R.string.privacy_matches)).performScrollTo().assertIsDisplayed()
+        assertTrue(text(R.string.privacy_matches).startsWith("Sunucu hesabına bağladığı maçları ve videolarını yalnız bu hesapla giriş yapan kişiye gösterir."))
+        assertTrue(text(R.string.privacy_matches).contains("Sunucunun eski sürümleri maçları hiçbir hesaba bağlamıyordu."))
+        assertTrue(text(R.string.privacy_retention).contains("Sunucu hesabına bağladığı maçların videolarını ve bilgilerini sen maçı ya da hesabını silene kadar saklar."))
+        assertTrue(text(R.string.privacy_retention).contains("Sunucu hiçbir hesaba bağlı olmayan maçları Voleybol Ve Veleybol silene ya da bir hesaba bağlayana kadar saklar."))
+        assertTrue(text(R.string.privacy_retention).contains("Sen hesabını silince sunucu bu maçları silmez."))
+    }
+
+    /** Review finding F6: the lists show the server's refusal, not the analysis state the phone remembered before it. */
+    @Test fun aMatchTheServerDoesNotShowSaysSoOnItsCardAndCountsAsNoReport() {
+        val reported = match.copy(analysis = AnalysisSummary("j1", AnalysisSummary.COMPLETE, mock = false, reviewOpen = 0, reviewTotal = 3), noAccess = true)
+        val analyzing = match.copy(localId = "m2", homeTeam = "C Takımı", awayTeam = "D Takımı", noAccess = true,
+            analysis = AnalysisSummary("j2", AnalysisSummary.PROCESSING, mock = false, reviewOpen = 0, reviewTotal = 0))
+        val state = signedIn.copy(matches = listOf(reported, analyzing))
+        show { HomeScreen(state, {}, {}, {}, {}, {}) }
+        assertEquals(2, compose.onAllNodesWithText(text(R.string.status_no_access)).fetchSemanticsNodes().size)
+        assertFalse(shown(text(R.string.status_report_ready)))
+        assertFalse(shown(text(R.string.status_analyzing)))
+        compose.onNodeWithText(text(R.string.home_no_reports)).performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun theMatchListShowsTheRefusalToo() {
+        // A demo analysis the phone remembered is an analysis state too: the card names only the refusal.
+        val reported = match.copy(analysis = AnalysisSummary("j1", AnalysisSummary.COMPLETE, mock = true, reviewOpen = 0, reviewTotal = 3), noAccess = true)
+        show { MatchesScreen(signedIn.copy(matches = listOf(reported)), {}, {}) }
+        compose.onNodeWithText(text(R.string.status_no_access)).assertIsDisplayed()
+        assertFalse(shown(text(R.string.status_report_ready)))
+        assertFalse(shown(text(R.string.status_demo)))
+    }
+
+    /**
+     * Review finding Q3: the server counts idle time only while it runs, so a phone gets a whole day again after the
+     * server was off. Every text that names the day says so, and none promises a deletion the server does not make.
+     */
+    @Test fun theTextsAboutTheDayCountOnlyTheTimeTheServerIsOn() {
+        val day = "Sunucunun açık kaldığı bir gün boyunca yükleme sürmezse sunucu"
+        for (id in listOf(R.string.upload_kept, R.string.session_ended, R.string.logout_upload, R.string.privacy_retention)) {
+            val said = context.getString(id)
+            assertTrue(said, said.contains(day))
+            assertFalse(said, said.contains("Yükleme bir gün boyunca sürmezse"))
+        }
     }
 
     @Test fun theProfileOpensTheDeletion() {

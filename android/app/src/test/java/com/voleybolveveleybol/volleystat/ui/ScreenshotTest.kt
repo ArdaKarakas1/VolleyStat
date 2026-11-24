@@ -183,6 +183,12 @@ class ScreenshotTest {
 
     @Test fun tabs() {
         shot("maclar") { MatchesScreen(state, {}, {}) }
+        // Slice B3, review finding F6: the server answered 403 for two matches, and their cards show that instead of
+        // the analysis state the phone remembered before.
+        val refused = state.copy(matches = state.matches.mapIndexed { index, match -> if (index < 2) match.copy(noAccess = true) else match })
+        shot("maclar_erisim_yok") { MatchesScreen(refused, {}, {}) }
+        shot("maclar_erisim_yok_koyu", dark = true) { MatchesScreen(refused, {}, {}) }
+        shotOn("kucuk_buyuk_yazi_maclar_erisim_yok", "+w320dp-h568dp-port", fontScale = 1.5f) { MatchesScreen(refused, {}, {}) }
         shot("takimlar") { TeamsScreen(teams, { true }, {}) }
         shot("takim_kadro") { TeamRosterScreen(teams[0], { _, _ -> true }, {}, {}, {}) }
         shot("profil") { ProfileScreen(state, "0.9.0", {}, {}, {}, { true }) }
@@ -469,9 +475,16 @@ class ScreenshotTest {
         shot("15b_eski_veriler_tek_takim") { LegacyScreen(LegacyQuestion(listOf("Hazırlık Maçı"), teams = 1, recordings = 0, draft = false), saveFailed = false, moving = false) {} }
         val signedIn = AccountUi(user = AccountUser("user-1", "deneme", "Deneme"))
         shot("15c_sifre_degistir") { PasswordChangeScreen(signedIn.copy(problem = AuthProblem.PasswordWrong), { _, _ -> }, {}) }
-        shot("15d_hesabi_sil") { DeleteAccountScreen(signedIn, onDelete = {}, onBack = {}) }
-        shot("15d_hesabi_sil_koyu", dark = true) { DeleteAccountScreen(signedIn, onDelete = {}, onBack = {}) }
-        shotOn("kucuk_buyuk_yazi_15d_hesabi_sil", "+w320dp-h568dp-port", fontScale = 1.5f) { DeleteAccountScreen(signedIn, onDelete = {}, onBack = {}) }
+        // The list holds matches that went to a server, so the screen names those an older server stored.
+        shot("15d_hesabi_sil") { DeleteAccountScreen(signedIn, holdsUploadedMatches = true, onDelete = {}, onBack = {}) }
+        shot("15d_hesabi_sil_koyu", dark = true) { DeleteAccountScreen(signedIn, holdsUploadedMatches = true, onDelete = {}, onBack = {}) }
+        shotOn("kucuk_buyuk_yazi_15d_hesabi_sil", "+w320dp-h568dp-port", fontScale = 1.5f) {
+            DeleteAccountScreen(signedIn, holdsUploadedMatches = true, onDelete = {}, onBack = {})
+        }
+        // The same width and text size in a tall window: the notice sits below the fold of a small phone.
+        shotOn("kucuk_buyuk_yazi_15d_hesabi_sil_tamami", "+w320dp-h1300dp-port", fontScale = 1.5f) {
+            DeleteAccountScreen(signedIn, holdsUploadedMatches = true, onDelete = {}, onBack = {})
+        }
         // The account card at the top of the profile.
         shotOn("profil_hesap", "+w411dp-h1100dp-port") { ProfileScreen(state, "0.9.0", {}, {}, {}, { true }) }
         // While someone is signed in, the server choice is read-only (review finding S5).

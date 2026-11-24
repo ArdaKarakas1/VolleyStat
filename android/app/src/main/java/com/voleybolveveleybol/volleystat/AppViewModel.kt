@@ -100,8 +100,9 @@ sealed interface UploadRefusal {
     companion object {
         /**
          * Reads the refusal out of a failed upload. A variant without its numbers, a number that is not a whole
-         * number above 0, a quota with a reason (UNFINISHED_UPLOAD, which no account of a 0.9 server meets) and a
-         * scope this app has no text for (TEAM, OPEN_MATCH) give null.
+         * number above 0, a quota with a reason (UNFINISHED_UPLOAD: on a 0.9 server only an account opened without an
+         * operator code meets it, and its own text comes with a later version) and a scope this app has no text for
+         * (TEAM, OPEN_MATCH) give null.
          */
         fun of(error: Throwable): UploadRefusal? {
             if (error !is UploadException || error.failure != UploadFailure.SERVER_REFUSED) return null
@@ -576,7 +577,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         fileName = "video.${format.extension}", mimeType = format.mimeType,
                         bytes = VideoBytes(total) { inspector.open(match.video) },
                         onSession = { session -> change { state -> state.copy(matches = state.matches.map { m -> if (m.localId == matchId) m.copy(session = session) else m }) } },
-                        onProgress = { phase, done, all -> _state.update { it.copy(upload = it.upload?.copy(phase = phase, doneBytes = done, totalBytes = all)) } },
+                        onProgress = { phase, done, all ->
+                            // The engine sends or verifies only once the server opened or resumed this match's upload
+                            // for this account: the server shows the match to it again.
+                            if (phase == UploadPhase.SENDING || phase == UploadPhase.VERIFYING) markAccess(matchId, noAccess = false)
+                            _state.update { it.copy(upload = it.upload?.copy(phase = phase, doneBytes = done, totalBytes = all)) }
+                        },
                         cancelled = { !job.isActive || stopRequested },
                     )
                     Result.success(check)
@@ -588,10 +594,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 change { state ->
                     state.copy(
                         upload = null,
-                        matches = state.matches.map { m -> if (m.localId == matchId) m.copy(check = check, checkedAtMs = System.currentTimeMillis()) else m },
+                        // The server took the video of the match for this account, so it shows the match to it.
+                        matches = state.matches.map { m -> if (m.localId == matchId) m.copy(check = check, checkedAtMs = System.currentTimeMillis(), noAccess = false) else m },
                     )
                 }
             }.onFailure { error ->
+                if (UploadRefusal.of(error) == UploadRefusal.NoAccess) markAccess(matchId, noAccess = true)
                 val sent = _state.value.matches.firstOrNull { it.localId == matchId }?.session?.sentBytes ?: 0
                 _state.update { state ->
                     val current = state.upload ?: UploadProgress(matchId)
@@ -658,6 +666,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 forget(match)
                 onDone()
             } else {
+                if (failure == RemovalFailure.NO_ACCESS) markAccess(matchId, noAccess = true)
                 _state.update { it.copy(removalProblem = RemovalProblem(matchId, failure)) }
             }
         }
@@ -706,6 +715,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun markWelcomeSeen() = changeDevice { it.copy(welcomeSeen = true) }
 
+    /**
+     * Marks a match the server does not show to this account (403 NOT_A_MEMBER), or clears the mark once the server
+     * shows the match again. The mark is saved, so the lists show the refusal and not an older analysis state.
+     */
+    private fun markAccess(matchId: String, noAccess: Boolean) {
+        if (_state.value.matches.none { it.localId == matchId && it.noAccess != noAccess }) return
+        change { state -> state.copy(matches = state.matches.map { if (it.localId == matchId) it.copy(noAccess = noAccess) else it }) }
+    }
+
     /** Remembers the last job state the analysis screens saw, so lists can show it offline. */
     fun rememberAnalysis(matchId: String, summary: AnalysisSummary?) = change { state ->
         state.copy(matches = state.matches.map { if (it.localId == matchId && it.analysis != summary) it.copy(analysis = summary) else it })
@@ -720,9 +738,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private fun videoIdOf(matchId: String) = _state.value.matches.firstOrNull { it.localId == matchId }?.check
         ?.takeIf { it.status == com.voleybolveveleybol.volleystat.model.VideoCheck.READY }?.videoId
 
+    /** The server answered about the match's job, so it shows the match to this account. */
     private fun publish(matchId: String, job: AnalysisJob?) {
         _analysis.update { if (it.matchId == matchId) it.withJob(job) else it }
         rememberAnalysis(matchId, job?.summary)
+        markAccess(matchId, noAccess = false)
     }
 
     /**
@@ -776,6 +796,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     refusal != null -> {
                         // The job is gone, and with it what belonged to it: a list without a job can not be corrected.
                         _analysis.update { if (it.matchId == matchId) it.withJob(null).copy(jobLoad = refusal) else it }
+                        if (refusal == JobLoad.NO_ACCESS) markAccess(matchId, noAccess = true)
                         return@launch
                     }
                     error != null -> _analysis.update { if (it.matchId == matchId) it.copy(jobLoad = JobLoad.UNREACHABLE) else it }
@@ -917,6 +938,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 read.exceptionOrNull() is IOException -> RalliesLoad.UNREACHABLE
                 else -> RalliesLoad.OUTDATED
             }
+            if (list != null) markAccess(matchId, noAccess = false) else if (failure == RalliesLoad.NO_ACCESS) markAccess(matchId, noAccess = true)
             _analysis.update { current ->
                 if (current.matchId != matchId || current.job?.id != jobId) return@update current
                 when {
@@ -1108,6 +1130,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 outcome.exceptionOrNull() is IOException -> ReportLoad.UNREACHABLE
                 else -> ReportLoad.OUTDATED
             }
+            if (outcome.getOrNull() != null) markAccess(matchId, noAccess = false) else if (failure == ReportLoad.NO_ACCESS) markAccess(matchId, noAccess = true)
             _analysis.update { current ->
                 if (current.matchId != matchId) return@update current
                 outcome.fold(

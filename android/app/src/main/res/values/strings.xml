@@ -80,6 +80,7 @@
     <string name="status_needs_review">Doğrulama bekliyor</string>
     <string name="status_report_ready">Rapor hazır</string>
     <string name="status_analysis_failed">Analiz durdu</string>
+    <string name="status_no_access">Erişim yok</string>
     <string name="status_demo">DEMO</string>
     <string name="kind_training">Antrenman</string>
     <string name="kind_official">Resmi</string>
@@ -224,7 +225,7 @@
     <string name="action_pause">Duraklat</string>
     <string name="action_resume">Sürdür</string>
     <string name="action_cancel_upload">Yüklemeyi İptal Et</string>
-    <string name="upload_kept">Sunucu videonun %1$s kadarını aldı. Yükleme bir gün boyunca sürmezse sunucu bu kısmı siler.</string>
+    <string name="upload_kept">Sunucu videonun %1$s kadarını aldı. Sunucunun açık kaldığı bir gün boyunca yükleme sürmezse sunucu bu kısmı siler.</string>
     <string name="upload_error_unreachable">Uygulama sunucuya ulaşamadı.</string>
     <string name="upload_error_too_large">Video sunucunun boyut sınırını aşıyor.</string>
     <string name="upload_error_source">Uygulama videoyu telefondan okuyamadı. Video silinmiş ya da taşınmış olabilir.</string>
@@ -501,11 +502,12 @@
     <string name="privacy_training">Uygulama videoyu model eğitimi için göndermez.</string>
     <!-- What the users, sessions and login_devices tables of the server hold (review finding T1). -->
     <string name="privacy_accounts">Sunucu hesabın için kullanıcı adını, görünen adını ve şifrenin özetini saklar. Sunucu hesabın ne zaman ve nasıl açıldığını ve şifrenin son değiştiği zamanı da kaydeder. Her oturum ve giriş yaptığın her telefon için sunucu bir anahtar özetini ve kullanım zamanlarını saklar. Uygulama e-posta adresini ve telefon numaranı sormaz.</string>
-    <!-- B2: the match routes do not check the session until slice B3, so anyone who reaches the server reaches every video. -->
-    <string name="privacy_matches">Sunucu maçlarını ve videolarını hesabına bağlar ve yalnız bu hesapla giriş yapan kişiye gösterir. Sunucunun çalıştığı bilgisayarı kullanan kişi sunucunun dosyalarındaki videoları yine de açabilir. Oyuncuların izin vermediği videoları ve telifli yayınları yükleme.</string>
+    <!-- B3: the server shows a match only to its owner. A match stored before server 0.9 (LEGACY) belongs to no account,
+         and only the operator binds it to one or deletes it (review finding F1). -->
+    <string name="privacy_matches">Sunucu hesabına bağladığı maçları ve videolarını yalnız bu hesapla giriş yapan kişiye gösterir. Sunucunun eski sürümleri maçları hiçbir hesaba bağlamıyordu. Voleybol Ve Veleybol bu maçlardan birini bir hesaba bağlayana kadar sunucu o maçı hiçbir hesaba göstermez. Sunucunun çalıştığı bilgisayarı kullanan kişi sunucunun dosyalarındaki videoları yine de açabilir. Oyuncuların izin vermediği videoları ve telifli yayınları yükleme.</string>
     <string name="privacy_phone_accounts">Uygulama bu telefonda her hesabın maçlarını, kadrolarını ve kamera kayıtlarını ayrı tutar. Bu telefonda başka bir hesapla giriş yapan kişi uygulamada senin maçlarını görmez.</string>
     <string name="privacy_session">Uygulama şifreni telefona yazmaz ve oturum bilgisini telefonun anahtar deposundaki bir anahtarla şifreleyip saklar.</string>
-    <string name="privacy_retention">Sunucu hesabını sen silene kadar saklar. Sunucu videoyu ve maç bilgilerini sen maçı ya da hesabını silene kadar saklar. Yükleme bir gün boyunca sürmezse sunucu yarım kalan videonun aldığı kısmını siler.</string>
+    <string name="privacy_retention">Sunucu hesabını sen silene kadar saklar. Sunucu hesabına bağladığı maçların videolarını ve bilgilerini sen maçı ya da hesabını silene kadar saklar. Sunucu hiçbir hesaba bağlı olmayan maçları Voleybol Ve Veleybol silene ya da bir hesaba bağlayana kadar saklar. Sen hesabını silince sunucu bu maçları silmez. Sunucunun açık kaldığı bir gün boyunca yükleme sürmezse sunucu yarım kalan videonun aldığı kısmını siler.</string>
     <string name="privacy_delete">Sen maçı silince sunucu o maçın videosunu, analiz sonuçlarını, verdiğin kararları, yaptığın düzeltmeleri ve maç bilgilerini siler. Telefonundaki video dosyası kalır. Sen hesabını silince sunucu hesabın için sakladığı bütün bilgileri siler.</string>
     <string name="privacy_faces">Uygulama ve sunucu yüz tanımaz. Rapor bir sayıyı oyuncuya yalnızca sen forma numarasını seçince yazar.</string>
     <string name="profile_server">Sunucu bağlantısı</string>
@@ -604,7 +606,7 @@
          The design's text is adapted: the app knows only what the server answered. -->
     <string name="server_busy">Sunucu çok sayıda istek işlediğini bildirdi. Uygulama birkaç saniye sonra yeniden dener.</string>
     <!-- 401 AUTH_REQUIRED. The app keeps an upload's place, and the user resumes it after the next login. -->
-    <string name="session_ended">Sunucu oturumunu kapattı. Yeniden giriş yapınca yarım kalan bir yüklemeyi sürdürebilirsin. Yükleme bir gün boyunca sürmezse sunucu aldığı kısmı siler ve yükleme baştan başlar.</string>
+    <string name="session_ended">Sunucu oturumunu kapattı. Yeniden giriş yapınca yarım kalan bir yüklemeyi sürdürebilirsin. Sunucunun açık kaldığı bir gün boyunca yükleme sürmezse sunucu aldığı kısmı siler ve yükleme baştan başlar.</string>
     <string name="account_deleted">Sunucu hesabını sildi. Uygulama bu telefondaki maç kayıtlarını, kadroları ve kamerayla çektiğin videoları da sildi.</string>
     <!-- A deletion got no answer, a 5xx or an answer the app can not read (or the process ended while it was on its way), and the
          session then left the phone without a sign that the account is still there. The text holds in each of these states, so it
@@ -710,12 +712,16 @@
     <string name="action_logout">Çıkış Yap</string>
     <string name="logout_title">Çıkış yapmak istiyor musun?</string>
     <string name="logout_body">Uygulama bu hesabın maçlarını, kadrolarını ve kamera kayıtlarını bu telefonda saklar. Yeniden giriş yapınca hepsini yerinde bulursun.</string>
-    <string name="logout_upload">Uygulama süren yüklemeyi durdurur. Yeniden giriş yapınca yüklemeyi sürdürebilirsin. Yükleme bir gün boyunca sürmezse sunucu aldığı kısmı siler ve yükleme baştan başlar.</string>
+    <string name="logout_upload">Uygulama süren yüklemeyi durdurur. Yeniden giriş yapınca yüklemeyi sürdürebilirsin. Sunucunun açık kaldığı bir gün boyunca yükleme sürmezse sunucu aldığı kısmı siler ve yükleme baştan başlar.</string>
     <!-- Any failed logout: the session stays on the phone. %1$s is the label of action_logout_anyway. -->
     <string name="logout_not_confirmed">Uygulama sunucudan çıkışın onayını alamadı ve oturumu bu telefonda açık tuttu. %1$s düğmesine dokunursan uygulama oturumu yalnız bu telefonda kapatır. Sunucu kullanılmayan bir oturumu 30 gün sonra kapatır.</string>
     <string name="action_logout_anyway">Yine de Çıkış Yap</string>
     <string name="action_delete_account">Hesabı Sil</string>
     <string name="delete_account_title">Hesabını silmek istiyor musun?</string>
-    <string name="delete_account_body">Sunucu kullanıcı adını, görünen adını, şifrenin özetini ve oturumlarını siler. Sunucu bu hesaba ait maçları, videolarını ve analizlerini de siler. Uygulama bu telefondaki maç kayıtlarını, kadroları ve kamerayla çektiğin videoları da siler. Galeriden seçtiğin videolar galeride kalır.</string>
-    <!-- %1$d: the matches of this account's list that the server holds. Matches belong to no account before slice B3. -->
+    <string name="delete_account_body">Sunucu kullanıcı adını, görünen adını, şifrenin özetini ve oturumlarını siler. Sunucu bu hesaba bağladığı maçları, videolarını ve analizlerini de siler. Uygulama bu telefondaki maç kayıtlarını, kadroları ve kamerayla çektiğin videoları da siler. Galeriden seçtiğin videolar galeride kalır.</string>
+    <!-- Shown while the list holds a match the app started to send to a server (it has a server id). The app can not tell
+         whether an older server stored it, so the text is a condition that holds for every such match. The app deletes its
+         match records with the account, so the last sentence names what the operator finds the match by in its legacy list
+         (review finding ACC-1). -->
+    <string name="delete_account_legacy">Sunucunun eski sürümleri maçları hiçbir hesaba bağlamıyordu. Uygulama bir maçı o sürümlerden birine yüklediyse ve Voleybol Ve Veleybol o maçı hesabına bağlamadıysa sunucu maçı hesabınla birlikte silmez. Voleybol Ve Veleybol böyle bir maçı silebilir. Silmesini isteyeceksen hesabını silmeden önce maçın takım adlarını ve tarihini not al.</string>
 </resources>

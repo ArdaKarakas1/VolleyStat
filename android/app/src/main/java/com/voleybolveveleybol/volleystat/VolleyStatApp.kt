@@ -483,7 +483,10 @@ fun VolleyStatApp(
             composable(Routes.DELETE_ACCOUNT) {
                 // After the deletion the app opens the login, which says what the server deleted.
                 StopAccountCallOnLeave(viewModel)
-                DeleteAccountScreen(state.account, onDelete = viewModel::deleteAccount, onBack = { viewModel.clearAccountProblem(); nav.popBackStack() })
+                DeleteAccountScreen(
+                    state.account, holdsUploadedMatches = state.matches.any { it.session.serverMatchId != null },
+                    onDelete = viewModel::deleteAccount, onBack = { viewModel.clearAccountProblem(); nav.popBackStack() },
+                )
             }
             composable(Routes.TEAM) { entry ->
                 val team = state.teams.firstOrNull { it.id == entry.arguments?.getString("id") }

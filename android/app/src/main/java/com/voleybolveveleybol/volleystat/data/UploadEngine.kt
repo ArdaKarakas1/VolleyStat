@@ -81,10 +81,11 @@ class UploadEngine(private val api: ApiClient) {
                     return completeWhenReady(session.uploadId!!, ::checkCancelled)
                 } catch (error: ApiException) {
                     when (error.code) {
-                        // The server found different bytes than the phone hashed: send once more.
+                        // The server found different bytes than the phone hashed and dropped them all: send once
+                        // more. It drops them at every mismatch, so the phone forgets them before it gives up too.
                         "UPLOAD_CHECKSUM_MISMATCH" -> {
-                            if (++checksumRetries > 1) throw UploadException(UploadFailure.CHECKSUM_KEEPS_FAILING, error.code, error)
                             save(session.copy(sentBytes = 0))
+                            if (++checksumRetries > 1) throw UploadException(UploadFailure.CHECKSUM_KEEPS_FAILING, error.code, error)
                         }
                         // Bytes went missing on the server: go round again from its offset.
                         "UPLOAD_INCOMPLETE" -> save(session.copy(sentBytes = error.details.optLong("nextOffset", 0)))

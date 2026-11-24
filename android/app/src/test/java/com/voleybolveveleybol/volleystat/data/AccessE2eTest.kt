@@ -11,7 +11,6 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
-import org.junit.Assert.fail
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
@@ -23,8 +22,8 @@ import java.util.UUID
 
 /**
  * Slice B3 against a running VolleyStat backend (server 0.9): the server shows a match only to the
- * account that owns it, counts the declared size of every upload against the account's limit, and
- * deletes an account's matches with the account.
+ * account that owns it, counts the declared size of every upload against the account's limit and its
+ * one unfinished upload, and deletes an account's matches with the account.
  *
  * Skipped unless VOLLEYSTAT_E2E_URL and VOLLEYSTAT_E2E_VIDEO are set (see BackendE2eTest). The server
  * must run with VOLLEYSTAT_SIGNUP=open and the demo analyzer, as CI starts it. Each test opens its own
@@ -78,14 +77,15 @@ class AccessE2eTest {
         return job
     }
 
-    private fun refused(status: Int, code: String, what: String, call: () -> Unit) {
+    private fun refused(status: Int, code: String, what: String, call: () -> Unit): ApiException {
         try {
             call()
-            fail("the server answered $what instead of $status $code")
         } catch (error: ApiException) {
             assertEquals(what, code, error.code)
             assertEquals(what, status, error.status)
+            return error
         }
+        throw AssertionError("the server answered $what instead of $status $code")
     }
 
     @Test fun anotherAccountGetsNotAMemberOnEveryCallOfTheAppAndNothingChanges() {
@@ -127,27 +127,49 @@ class AccessE2eTest {
     }
 
     /**
-     * The server counts the declared size of every upload, so two declared 4 GiB uploads fill an account
-     * opened with a code (8 GiB) without one byte leaving the phone. The next upload is refused with the
-     * server's numbers, which the status screen words (UploadRefusal).
+     * The server counts the declared size of every upload. CI starts the server with VOLLEYSTAT_SIGNUP=open, so the
+     * test's account opened without an operator code: 4 GiB of personal video and one unfinished upload. After the
+     * clip, a 4 GiB declaration passes the limit and the server refuses it with its numbers, which the status screen
+     * words (UploadRefusal). A 1 GiB declaration fits and stays unfinished; the same declaration again names the same
+     * upload. The next upload of another file meets the limit of one unfinished upload, which the screen words with the
+     * general text.
      */
-    @Test fun aDeclaredSizeOverTheQuotaIsRefusedWithTheServersNumbers() {
+    @Test fun aSecondUnfinishedUploadIsRefusedWithTheServersNumbers() {
         val (_, owner) = account()
-        val matchId = UUID.randomUUID().toString()
-        owner.putMatch(matchId, MatchInfo("E2E A Takımı", "E2E B Takımı"))
-        repeat(2) { declaration ->
-            try {
-                owner.createUpload(matchId, "e2e.mp4", 4 * gib, "video/mp4", "0".repeat(64))
-            } catch (error: ApiException) {
-                fail(
-                    "declaration ${declaration + 1} of 4 GiB was refused with ${error.status} ${error.code}. Each declaration needs " +
-                        "4 GiB of free disk plus the server's floor (VOLLEYSTAT_DISK_FLOOR_GIB, 1 GiB in CI) where the server stores its files",
-                )
-            }
+        val (_, check) = upload(owner)
+        assertEquals(VideoCheck.READY, check.status)
+        val clipBytes = clip!!.length()
+
+        val second = UUID.randomUUID().toString()
+        owner.putMatch(second, MatchInfo("E2E A Takımı", "E2E B Takımı"))
+        // The server answers the account's limit before it looks at its disk, so this needs no free space.
+        val tooLarge = refused(409, "QUOTA_EXCEEDED", "a 4 GiB declaration") {
+            owner.createUpload(second, "e2e.mp4", 4 * gib, "video/mp4", "0".repeat(64))
         }
+        assertEquals("PERSONAL", tooLarge.details.getString("scope"))
+        assertTrue("a size refusal names no reason", tooLarge.details.isNull("reason"))
+        assertEquals(clipBytes, tooLarge.details.getLong("usedBytes"))
+        assertEquals(4 * gib, tooLarge.details.getLong("limitBytes"))
+        assertEquals(UploadRefusal.PersonalQuota(clipBytes, 4 * gib), UploadRefusal.of(UploadException(UploadFailure.SERVER_REFUSED, tooLarge.code, tooLarge)))
+        val held = try {
+            owner.createUpload(second, "e2e.mp4", gib, "video/mp4", "0".repeat(64))
+        } catch (error: ApiException) {
+            throw AssertionError(
+                "the 1 GiB declaration was refused with ${error.status} ${error.code}. It needs 1 GiB of free disk plus the " +
+                    "server's floor (VOLLEYSTAT_DISK_FLOOR_GIB, 1 GiB in CI) where the server stores its files",
+                error,
+            )
+        }
+        // A phone that lost the answer asks again for the same file (review finding Q1). The server names the upload it
+        // already holds, from its first byte, instead of opening a second one: the account's one unfinished upload is not
+        // spent, and the size counts once (usedBytes below).
+        val again = owner.createUpload(second, "e2e.mp4", gib, "video/mp4", "0".repeat(64))
+        assertEquals(held.uploadId, again.uploadId)
+        assertEquals(0L, again.nextOffset)
+
         val failure = try {
             upload(owner)
-            throw AssertionError("the server accepted an upload over the account's limit")
+            throw AssertionError("the server accepted a second unfinished upload of an account without an operator code")
         } catch (error: UploadException) {
             error
         }
@@ -155,9 +177,10 @@ class AccessE2eTest {
         assertEquals("QUOTA_EXCEEDED", failure.serverCode)
         val details = (failure.cause as ApiException).details
         assertEquals("PERSONAL", details.getString("scope"))
-        assertEquals(8 * gib, details.getLong("usedBytes"))
-        assertEquals(8 * gib, details.getLong("limitBytes"))
-        assertEquals(UploadRefusal.PersonalQuota(8 * gib, 8 * gib), UploadRefusal.of(failure))
+        assertEquals("UNFINISHED_UPLOAD", details.getString("reason"))
+        assertEquals(clipBytes + gib, details.getLong("usedBytes"))
+        assertEquals(4 * gib, details.getLong("limitBytes"))
+        assertEquals("the screen keeps the general text for this refusal", null, UploadRefusal.of(failure))
     }
 
     @Test fun deletingTheAccountDeletesItsMatchesOnTheServer() {

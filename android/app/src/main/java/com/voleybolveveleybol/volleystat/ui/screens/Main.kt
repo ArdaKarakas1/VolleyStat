@@ -107,6 +107,7 @@ fun matchChips(match: MatchRecord, upload: UploadProgress?): List<Pair<String, T
     val own = upload?.takeIf { it.matchId == match.localId }
     val chips = mutableListOf<Pair<String, Tone>>()
     chips += when (match.status) {
+        MatchStatus.NO_ACCESS -> stringResource(R.string.status_no_access) to Tone.CAUTION
         MatchStatus.UPLOAD_PENDING -> when {
             own?.running == true -> stringResource(R.string.status_uploading) to Tone.ACTIVE
             own?.failure != null -> stringResource(R.string.status_upload_stopped) to Tone.CAUTION
@@ -121,7 +122,8 @@ fun matchChips(match: MatchRecord, upload: UploadProgress?): List<Pair<String, T
         MatchStatus.REPORT_READY -> stringResource(R.string.status_report_ready) to Tone.POSITIVE
         MatchStatus.ANALYSIS_FAILED -> stringResource(R.string.status_analysis_failed) to Tone.NEGATIVE
     }
-    if (match.analysis?.mock == true) chips += stringResource(R.string.status_demo) to Tone.CAUTION
+    // A match the server does not show has no analysis this account can read, demo or not.
+    if (match.analysis?.mock == true && match.status != MatchStatus.NO_ACCESS) chips += stringResource(R.string.status_demo) to Tone.CAUTION
     return chips
 }
 

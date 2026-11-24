@@ -5,17 +5,20 @@ import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
 import com.voleybolveveleybol.volleystat.data.StoredState
 import com.voleybolveveleybol.volleystat.data.UploadFailure
+import com.voleybolveveleybol.volleystat.model.AnalysisSummary
 import com.voleybolveveleybol.volleystat.model.Draft
 import com.voleybolveveleybol.volleystat.model.LocalVideo
 import com.voleybolveveleybol.volleystat.model.MatchPart
 import com.voleybolveveleybol.volleystat.model.MatchRecord
 import com.voleybolveveleybol.volleystat.model.MatchReport
 import com.voleybolveveleybol.volleystat.model.MatchRules
+import com.voleybolveveleybol.volleystat.model.MatchStatus
 import com.voleybolveveleybol.volleystat.model.SetPoint
 import com.voleybolveveleybol.volleystat.model.SetScore
 import com.voleybolveveleybol.volleystat.model.UploadSession
 import com.voleybolveveleybol.volleystat.model.VideoCheck
 import com.voleybolveveleybol.volleystat.model.VideoSource
+import com.voleybolveveleybol.volleystat.model.status
 import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -1431,6 +1434,76 @@ class AppViewModelTest {
         assertNull(vm.analysis.value.rallies)
     }
 
+    private fun stored() = TestAccounts.space(context).store.load().matches.associateBy { it.localId }
+
+    /**
+     * Review finding F6: a 403 marks the match on the phone, so the lists stop showing the analysis state the phone
+     * remembered before. The mark stays on disk until the server shows the match to this account again.
+     */
+    @Test fun aNotAMemberAnswerMarksTheMatchUntilTheServerShowsItAgain() {
+        var visible = false
+        on("GET /videos/video-A/analyses/latest") { if (visible) ok(job("J", "video-A", "COMPLETE", open = 0)) else refuse(403, "NOT_A_MEMBER") }
+        val reported = accepted("A").copy(analysis = AnalysisSummary("J", AnalysisSummary.COMPLETE, mock = true, reviewOpen = 0, reviewTotal = 2))
+        val vm = viewModel(StoredState(matches = listOf(reported)))
+        assertEquals(MatchStatus.REPORT_READY, vm.state.value.matches.single().status)
+        vm.watchAnalysis("A")
+        await("the mark") { vm.state.value.matches.single().noAccess }
+        assertEquals(MatchStatus.NO_ACCESS, vm.state.value.matches.single().status)
+        assertTrue("the mark is on disk", stored().getValue("A").noAccess)
+
+        visible = true
+        vm.watchAnalysis("A")
+        await("the server's next answer") { !vm.state.value.matches.single().noAccess }
+        assertEquals(MatchStatus.REPORT_READY, vm.state.value.matches.single().status)
+        assertFalse(stored().getValue("A").noAccess)
+    }
+
+    @Test fun everyNotAMemberAnswerMarksItsMatch() {
+        on("GET /matches/server-A/report") { refuse(403, "NOT_A_MEMBER") }
+        on("GET /videos/video-B/analyses/latest") { ok(job("JB", "video-B", "NEEDS_REVIEW")) }
+        on("GET /analyses/JB/rallies") { refuse(403, "NOT_A_MEMBER") }
+        on("DELETE /matches/server-C") { refuse(403, "NOT_A_MEMBER") }
+        val vm = viewModel(StoredState(matches = listOf(accepted("A"), accepted("B"), accepted("C"))))
+        vm.loadReport("A")
+        await("the report's refusal") { vm.state.value.matches.first { it.localId == "A" }.noAccess }
+        vm.watchAnalysis("B", startIfMissing = false)
+        await("the job of B") { vm.analysis.value.job != null }
+        vm.loadRallies("B")
+        await("the list's refusal") { vm.state.value.matches.first { it.localId == "B" }.noAccess }
+        vm.removeMatch("C") { fail("the app forgot a match the server did not delete") }
+        await("the removal's refusal") { vm.state.value.matches.first { it.localId == "C" }.noAccess }
+        assertEquals(setOf("A", "B", "C"), stored().values.filter { it.noAccess }.map { it.localId }.toSet())
+    }
+
+    @Test fun aNotAMemberAnswerToAnUploadMarksItsMatch() {
+        uploadRefused { refuse(403, "NOT_A_MEMBER") }
+        assertTrue(stored().getValue("U").noAccess)
+    }
+
+    /**
+     * The operator bound the match to this account after the 403. The server opens the upload, so it shows the match
+     * again, and the card stops saying otherwise while the upload runs, even when a later chunk is refused.
+     */
+    @Test fun anUploadTheServerOpensClearsTheMark() {
+        requests.clear()
+        val file = File(TestAccounts.space(context).recordings.apply { mkdirs() }, "kayit-8.mp4").apply { writeBytes(ByteArray(10) { it.toByte() }) }
+        on("GET /health") { ok(JSONObject().put("status", "ok").put("mediaProbe", "available").put("maxVideoBytes", 1_000_000)) }
+        onMatching("PUT /matches/[0-9a-f-]{36}") { MockResponse().setResponseCode(201).setHeader("Content-Type", "application/json").setBody("{}") }
+        onMatching("POST /matches/[0-9a-f-]{36}/uploads") {
+            ok(JSONObject().put("uploadId", "upload-8").put("nextOffset", 0).put("chunkSizeBytes", 8_388_608))
+        }
+        onMatching("PUT /uploads/upload-8/chunks.*") { refuse(507, "STORAGE_FULL", JSONObject().put("floorBytes", 10 * gib)) }
+        val marked = MatchRecord("U", "Ev", "Misafir", 1L, video(file.path), noAccess = true)
+        val vm = viewModel(StoredState(matches = listOf(marked)))
+        assertEquals(MatchStatus.NO_ACCESS, vm.state.value.matches.single().status)
+        vm.resumeUpload("U")
+        await("the refusal") { vm.state.value.upload?.failure != null }
+        assertEquals(UploadRefusal.StorageFull(10 * gib), vm.state.value.upload!!.refusal)
+        assertFalse("the server opened the upload of this match for this account", vm.state.value.matches.single().noAccess)
+        assertEquals(MatchStatus.UPLOAD_PENDING, vm.state.value.matches.single().status)
+        assertFalse(stored().getValue("U").noAccess)
+    }
+
     /** Runs the upload of a fresh match against a server that refuses to open it with [answer], and returns what the screen gets. */
     private fun uploadRefused(answer: () -> MockResponse): UploadProgress {
         requests.clear()
@@ -1451,11 +1524,12 @@ class AppViewModelTest {
     @Test fun aQuotaRefusalBecomesItsOwnRefusalWithTheServersNumbers() {
         val personal = uploadRefused { refuse(409, "QUOTA_EXCEEDED", JSONObject().put("scope", "PERSONAL").put("usedBytes", 6 * gib).put("limitBytes", 8 * gib)) }
         assertEquals(UploadRefusal.PersonalQuota(6 * gib, 8 * gib), personal.refusal)
-        // A number below 2^31 arrives as an Int: 1 GiB used of a link account's 2 GiB.
-        val small = uploadRefused { refuse(409, "QUOTA_EXCEEDED", JSONObject().put("scope", "PERSONAL").put("usedBytes", gib).put("limitBytes", 2 * gib)) }
-        assertEquals(UploadRefusal.PersonalQuota(gib, 2 * gib), small.refusal)
+        // A number below 2^31 arrives as an Int: 1 GiB used of an account's 4 GiB.
+        val small = uploadRefused { refuse(409, "QUOTA_EXCEEDED", JSONObject().put("scope", "PERSONAL").put("usedBytes", gib).put("limitBytes", 4 * gib)) }
+        assertEquals(UploadRefusal.PersonalQuota(gib, 4 * gib), small.refusal)
+        // The server names only its limit here, not how much the other accounts hold.
         val pool = uploadRefused {
-            refuse(409, "QUOTA_EXCEEDED", JSONObject().put("scope", "SERVER").put("pool", "PERSONAL").put("usedBytes", 39 * gib).put("limitBytes", 40 * gib))
+            refuse(409, "QUOTA_EXCEEDED", JSONObject().put("scope", "SERVER").put("pool", "PERSONAL").put("limitBytes", 40 * gib))
         }
         assertEquals(UploadRefusal.ServerQuota(40 * gib), pool.refusal)
         val disk = uploadRefused { refuse(507, "STORAGE_FULL", JSONObject().put("floorBytes", 20 * gib)) }
@@ -1492,10 +1566,15 @@ class AppViewModelTest {
         assertNull(noLimit.refusal)
     }
 
-    /** No account a B3 server opens meets the one-unfinished-upload rule, and a later scope (TEAM, OPEN_MATCH) has no text yet. */
+    /**
+     * The one-unfinished-upload rule gets its own text with B4, when every account opened without an operator code meets it
+     * (in B3 only an account opened on a server started with VOLLEYSTAT_SIGNUP=open does). Its numbers name the space the
+     * account holds, not what the next video would need, so the size text would mislead. A later scope (TEAM, OPEN_MATCH)
+     * has no text yet either.
+     */
     @Test fun anUnfinishedUploadRefusalFallsBackToTheGeneralText() {
         val unfinished = uploadRefused {
-            refuse(409, "QUOTA_EXCEEDED", JSONObject().put("scope", "PERSONAL").put("reason", "UNFINISHED_UPLOAD").put("usedBytes", 2 * gib).put("limitBytes", 2 * gib))
+            refuse(409, "QUOTA_EXCEEDED", JSONObject().put("scope", "PERSONAL").put("reason", "UNFINISHED_UPLOAD").put("usedBytes", gib).put("limitBytes", 4 * gib))
         }
         assertNull(unfinished.refusal)
         listOf("TEAM", "OPEN_MATCH").forEach { scope ->

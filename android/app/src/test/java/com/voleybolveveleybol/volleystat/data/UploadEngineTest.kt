@@ -134,6 +134,10 @@ class UploadEngineTest {
         val failure = assertThrows(UploadException::class.java) { run() }
         assertEquals(UploadFailure.CHECKSUM_KEEPS_FAILING, failure.failure)
         assertEquals(6, server.chunksReceived)
+        // The server dropped every byte at the second mismatch too: the phone keeps no number of bytes the
+        // server deleted, so the status screen names none.
+        assertEquals(0, server.stored.size())
+        assertEquals(0L, sessions.last().sentBytes)
     }
 
     @Test fun anOversizedFileIsRefusedBeforeItIsRead() {
