@@ -1504,6 +1504,7 @@
     "/v1/me": {
       "get": {
         "summary": "Me",
+        "description": "The caller's account and teams. The teams are the list GET /v1/teams answers.",
         "operationId": "me_v1_me_get",
         "responses": {
           "200": {
@@ -1608,7 +1609,7 @@
     "/v1/me/delete": {
       "post": {
         "summary": "Delete Account",
-        "description": "Delete the account with its personal matches: their uploads, videos, analyses and bytes,\nthen the user row, its sessions and its phones. Nothing of it stays in the file.\n\nMatches that belong to no account (LEGACY) stay; the operator deletes them.",
+        "description": "Delete the account with its personal matches: their uploads, videos, analyses and bytes,\nthen the user row, its sessions, its phones, its memberships and its blocks. Nothing of it stays in\nthe file.\n\nEvery team the account captains passes to its earliest-joined other member, or goes when nobody else\nis in it. Matches that belong to no account (LEGACY) stay; the operator deletes them.",
         "operationId": "delete_account_v1_me_delete_post",
         "requestBody": {
           "content": {
@@ -1641,10 +1642,586 @@
           }
         ]
       }
+    },
+    "/v1/teams": {
+      "get": {
+        "summary": "List Teams",
+        "description": "The teams of the caller, in the order the caller joined them.",
+        "operationId": "list_teams_v1_teams_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/teams/{team_id}": {
+      "put": {
+        "summary": "Put Team",
+        "description": "Create a team under an id the client chose, or return the caller's team that already has it.\n\nThe server draws the tag, creates the team's seat pool (6 starter seats and the substitute seats) and makes\nthe caller its captain on the seat the body names. A repeat by a member answers 200 and changes nothing;\nanother account gets 409 TEAM_ID_TAKEN. A refused body writes nothing and takes no place of the day.",
+        "operationId": "put_team_v1_teams__team_id__put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Team Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TeamInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "201": {
+            "description": "The team was created under this id"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "Get Team",
+        "description": "The team as a member sees it.",
+        "operationId": "get_team_v1_teams__team_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Team Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Team",
+        "description": "Delete the team with its seat pool, memberships and blocks (captain). Nothing of it stays in the file.",
+        "operationId": "delete_team_v1_teams__team_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Team Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/teams/{team_id}/settings": {
+      "put": {
+        "summary": "Put Settings",
+        "description": "Set the team's name and usual match day and time (captain). A null schedule clears it.",
+        "operationId": "put_settings_v1_teams__team_id__settings_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Team Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingsInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/teams/{team_id}/seats": {
+      "put": {
+        "summary": "Put Seats",
+        "description": "Set the substitute count and move members between starter and substitute seats (captain).\n\nThe server checks the final state: the same body twice changes nothing. The 6 starter seats never change.",
+        "operationId": "put_seats_v1_teams__team_id__seats_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Team Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SeatsInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/teams/{team_id}/members/{user_id}/jersey": {
+      "put": {
+        "summary": "Put Jersey",
+        "description": "Set or clear a member's jersey: a member's own, or anyone's by the captain. A jersey is unique among the\nmembers of one team.",
+        "operationId": "put_jersey_v1_teams__team_id__members__user_id__jersey_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Team Id"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JerseyInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/teams/{team_id}/members/{user_id}": {
+      "delete": {
+        "summary": "Delete Member",
+        "description": "Leave the team (the caller's own id) or remove a member (captain).\n\nA removal blocks the removed account in the team's pool in the same transaction; leaving writes no block.\nEither frees the member's seat with its type. A captain with other members hands the captaincy on first\n(409 CAPTAIN_MUST_TRANSFER); a captain alone deletes the team by leaving.",
+        "operationId": "delete_member_v1_teams__team_id__members__user_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Team Id"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/teams/{team_id}/blocks": {
+      "get": {
+        "summary": "List Blocks",
+        "description": "The accounts the captain removed from the team, in the order of their removal (captain).",
+        "operationId": "list_blocks_v1_teams__team_id__blocks_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Team Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/teams/{team_id}/blocks/{user_id}": {
+      "delete": {
+        "summary": "Delete Block",
+        "description": "Lift the block of a removed account (captain). A block that does not exist answers the same.",
+        "operationId": "delete_block_v1_teams__team_id__blocks__user_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Team Id"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/teams/{team_id}/joins-seen": {
+      "post": {
+        "summary": "Joins Seen",
+        "description": "Move the captain's mark for the new-member badge to `upTo` (captain).\n\nThe mark never moves back, and never past the server's time, so a member who joins later still counts as\nnew.",
+        "operationId": "joins_seen_v1_teams__team_id__joins_seen_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Team Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JoinsSeenInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/teams/{team_id}/captain": {
+      "post": {
+        "summary": "Transfer Captaincy",
+        "description": "Hand the captaincy to another member (captain), who may captain at most CAPTAIN_LIMIT teams with it.\n\nBoth role changes happen in one transaction and the seats stay. The answer is the team as the caller now\nsees it. A transfer to the caller changes nothing.",
+        "operationId": "transfer_captaincy_v1_teams__team_id__captain_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Team Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CaptainInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
     "schemas": {
+      "CaptainInput": {
+        "properties": {
+          "userId": {
+            "type": "string",
+            "maxLength": 64,
+            "title": "Userid"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "userId"
+        ],
+        "title": "CaptainInput"
+      },
       "DecisionInput": {
         "properties": {
           "selection": {
@@ -1728,6 +2305,45 @@
           "endMs"
         ],
         "title": "IntervalInput"
+      },
+      "JerseyInput": {
+        "properties": {
+          "jersey": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 99.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Jersey"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "jersey"
+        ],
+        "title": "JerseyInput"
+      },
+      "JoinsSeenInput": {
+        "properties": {
+          "upTo": {
+            "type": "string",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
+            "title": "Upto"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "upTo"
+        ],
+        "title": "JoinsSeenInput",
+        "description": "The moment up to which the captain has seen the members who joined, as the team screen showed them."
       },
       "LinkReference": {
         "properties": {
@@ -1954,6 +2570,30 @@
         "title": "MatchRulesInput",
         "description": "The rule the user chose: the app offers exactly these values, so the server accepts nothing else."
       },
+      "Move": {
+        "properties": {
+          "userId": {
+            "type": "string",
+            "maxLength": 64,
+            "title": "Userid"
+          },
+          "seat": {
+            "type": "string",
+            "enum": [
+              "STARTER",
+              "SUBSTITUTE"
+            ],
+            "title": "Seat"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "userId",
+          "seat"
+        ],
+        "title": "Move"
+      },
       "PasswordChangeInput": {
         "properties": {
           "currentPassword": {
@@ -2053,6 +2693,78 @@
         ],
         "title": "ReopenInput"
       },
+      "Schedule": {
+        "properties": {
+          "weekday": {
+            "type": "integer",
+            "maximum": 7.0,
+            "minimum": 1.0,
+            "title": "Weekday"
+          },
+          "time": {
+            "type": "string",
+            "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
+            "title": "Time"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "weekday",
+          "time"
+        ],
+        "title": "Schedule",
+        "description": "The team's usual match day and time: 1 for Monday to 7 for Sunday, and HH:MM."
+      },
+      "SeatsInput": {
+        "properties": {
+          "substituteSeats": {
+            "type": "integer",
+            "title": "Substituteseats"
+          },
+          "moves": {
+            "items": {
+              "$ref": "#/components/schemas/Move"
+            },
+            "type": "array",
+            "maxItems": 12,
+            "title": "Moves"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "substituteSeats"
+        ],
+        "title": "SeatsInput",
+        "description": "The final state the captain wants: the substitute count and the members who change their seat type."
+      },
+      "SettingsInput": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Name"
+          },
+          "schedule": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Schedule"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "schedule"
+        ],
+        "title": "SettingsInput"
+      },
       "SplitInput": {
         "properties": {
           "expectedListVersion": {
@@ -2071,6 +2783,58 @@
           "atMs"
         ],
         "title": "SplitInput"
+      },
+      "TeamInput": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Name"
+          },
+          "substituteSeats": {
+            "type": "integer",
+            "title": "Substituteseats",
+            "default": 2
+          },
+          "captainSeat": {
+            "type": "string",
+            "enum": [
+              "STARTER",
+              "SUBSTITUTE"
+            ],
+            "title": "Captainseat",
+            "default": "STARTER"
+          },
+          "schedule": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Schedule"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "jersey": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 99.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Jersey"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "TeamInput"
       },
       "UploadInput": {
         "properties": {

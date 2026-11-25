@@ -18,7 +18,9 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import access, accounts, content, corrections, deletion, jobs, media, quotas, report, review, storagelock, sweep
+from . import (
+    access, accounts, content, corrections, deletion, jobs, media, quotas, report, review, storagelock, sweep, teams,
+)
 from .access import READ, REVIEW
 from .analyzers import load_analyzer, require_known_kind
 from .analyzers.base import MODEL, Analyzer
@@ -203,6 +205,8 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
     sweeper = sweep.Sweeper(connect, files)
     storage_lock = storagelock.StorageLock(storage)
     hash_pool = accounts.HashPool()
+    # One limiter for the whole app: the login and password counts, and the daily count of team creations.
+    limiter = accounts.Limiter()
 
     def uptime(db) -> float:
         """The server's uptime (sweep.py), read inside the caller's write transaction: what a touch and the mark
@@ -236,6 +240,7 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
     app.state.sweeper = sweeper
     app.state.storage_lock = storage_lock
     app.state.hash_pool = hash_pool
+    app.state.limiter = limiter
     app.add_middleware(BodyLimit, exempt=is_chunk_upload)
 
     @app.exception_handler(StarletteHTTPException)
@@ -659,6 +664,7 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
     app.include_router(jobs.router(connect, analyzer, worker, current_user))
     app.include_router(review.router(connect, current_user))
     app.include_router(corrections.router(connect, current_user))
-    app.include_router(accounts.router(connect, db_path, signup_mode, accounts.Limiter(), hash_pool,
+    app.include_router(accounts.router(connect, db_path, signup_mode, limiter, hash_pool,
                                        current_user, files, worker.release, uptime))
+    app.include_router(teams.router(connect, db_path, current_user, limiter))
     return app

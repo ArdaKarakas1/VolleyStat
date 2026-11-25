@@ -9,6 +9,11 @@ details, never 404, because the app reads a 404 as "deleted".
 B3 has one kind of match an account may see: its own PERSONAL match. `allowed` is a dispatch on the
 match's status with a default of no, so LEGACY rows, and any status a later slice adds before it adds
 its rule, stay closed to everyone.
+
+A team (B4) is seen by its members only, and only its captain changes it. A team route finds the team
+with `team_of` (404 TEAM_NOT_FOUND), then calls `require_member` or `require_captain` before any check of
+its own. A caller who is not a member gets 403 NOT_A_MEMBER and a member who is not the captain 403
+CAPTAIN_ONLY, both with no details, so nothing about the team reaches them.
 """
 from __future__ import annotations
 
@@ -77,6 +82,37 @@ def require(db, caller: Caller, kind: str, object_id: str, role: str) -> sqlite3
     if not allowed(caller, match, role):
         fail("NOT_A_MEMBER", "This account can not see this match", 403)
     return match
+
+
+def team_of(db, team_id: str) -> sqlite3.Row:
+    """The team row, or 404 TEAM_NOT_FOUND."""
+    team = db.execute("SELECT * FROM teams WHERE id=?", (team_id,)).fetchone()
+    if team is None:
+        fail("TEAM_NOT_FOUND", "Team does not exist", 404)
+    return team
+
+
+def require_member(db, caller: Caller, team_id: str) -> tuple[sqlite3.Row, sqlite3.Row]:
+    """The team and the caller's membership of it; 404 or 403 NOT_A_MEMBER (no details) otherwise."""
+    team = team_of(db, team_id)
+    membership = db.execute("SELECT * FROM memberships WHERE team_id=? AND user_id=?", (team_id, caller.id)).fetchone()
+    if membership is None:
+        fail("NOT_A_MEMBER", "This account can not see this team", 403)
+    return team, membership
+
+
+def refuse_unless_captain(membership: sqlite3.Row) -> None:
+    """403 CAPTAIN_ONLY (no details) unless the caller's membership is the team's captaincy. A route that serves
+    a member for their own row (a jersey, a leave) calls it once it knows the row is somebody else's."""
+    if membership["role"] != "CAPTAIN":
+        fail("CAPTAIN_ONLY", "Only the captain of this team can do this", 403)
+
+
+def require_captain(db, caller: Caller, team_id: str) -> tuple[sqlite3.Row, sqlite3.Row]:
+    """require_member, then 403 CAPTAIN_ONLY (no details) for a member who is not the captain."""
+    team, membership = require_member(db, caller, team_id)
+    refuse_unless_captain(membership)
+    return team, membership
 
 
 def session_user(db, caller: Caller) -> None:

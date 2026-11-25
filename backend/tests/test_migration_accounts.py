@@ -12,8 +12,8 @@ import pytest
 from app import admin, deletion, sweep
 from app.quotas import GIB
 from tests.helpers import (
-    OWNER, STRANGER, ScriptedAnalyzer, card_of, decide, forget_sessions, ready_video, request_job, rows, run_pending,
-    serve, user_id_of, wait_for,
+    OWNER, STRANGER, ScriptedAnalyzer, card_of, create_team, decide, forget_sessions, ready_video, request_job, rows,
+    run_pending, serve, user_id_of, wait_for,
 )
 from tests.test_api import create_match, create_upload, set_upload
 
@@ -21,6 +21,9 @@ NEW_INDEXES = ("matches_owner", "matches_status", "uploads_unfinished", "uploads
 NEW_COLUMNS = (("matches", "status"), ("matches", "owner_user_id"), ("uploads", "touched_at"), ("uploads", "started_by"),
                ("uploads", "finalize_token"), ("uploads", "touched_uptime"), ("uploads", "finalize_started_uptime"))
 ACCOUNT_TABLES = ("sessions", "login_devices", "operator_codes", "users")
+# The tables of B4 (server 0.10), children first: they reference users, and storage before accounts had none of them.
+TEAM_TABLES = ("pool_blocks", "memberships", "seat_pools", "teams")
+TEAM_INDEXES = ("memberships_one_captain", "memberships_jersey", "memberships_user")
 DAY = 24 * 3600
 STALE = deletion.FINALIZE_STALE_SECONDS
 
@@ -40,14 +43,14 @@ def database(storage):
 
 def back_to_before_accounts(storage):
     """Turn the storage into what server 0.7 and 0.8 wrote (design 8.6): the indexes first, because SQLite
-    refuses to drop an indexed column, then the columns, then the account tables, sessions first, and the
-    uptime of the sweep."""
+    refuses to drop an indexed column, then the columns, then the team tables and the account tables, children
+    first, and the uptime of the sweep."""
     with database(storage) as db, db:
         for index in NEW_INDEXES:
             db.execute(f"DROP INDEX {index}")
         for table, column in NEW_COLUMNS:
             db.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
-        for table in (*ACCOUNT_TABLES, "server_clock"):
+        for table in (*TEAM_TABLES, *ACCOUNT_TABLES, "server_clock"):
             db.execute(f"DROP TABLE {table}")
     forget_sessions(storage)
 
@@ -176,6 +179,58 @@ def test_storage_from_before_accounts_gets_legacy_matches_and_the_new_columns(st
     with serve(storage, None) as client:
         assert client.get(f"/v1/matches/{match_id}/report").content == report.content
         assert client.get(f"/v1/matches/{match_id}").json()["status"] == "PERSONAL"
+
+
+def test_storage_of_b3_opens_with_the_team_tables_and_keeps_every_row(storage):
+    """Server 0.9 (B3) wrote no team table. B4 adds only new tables, so a start creates them with their checks
+    and indexes and rebuilds nothing: users, sessions, matches, uploads and operator codes stay as they were,
+    B1's operator code columns and a CAPTAIN row of a B1 test included. A second start changes nothing."""
+    with serve(storage, None) as client:
+        match_id = create_match(client)
+        upload_id = create_upload(client, match_id, size=10).json()["uploadId"]
+        assert client.put(f"/v1/uploads/{upload_id}/chunks?offset=0", content=b"abc").status_code == 200
+        assert client.get("/v1/me").status_code == 200
+    moment, later = "2026-11-20T10:00:00Z", "2026-11-27T10:00:00Z"
+    with database(storage) as db, db:
+        for table in TEAM_TABLES:
+            db.execute(f"DROP TABLE {table}")
+        db.execute("INSERT INTO operator_codes(code_hash, kind, signup_used, used_by_user_id, team_name, created_at,"
+                   " expires_at) VALUES(?,?,?,?,?,?,?)", ("a" * 64, "CAPTAIN", 0, None, "Eski Takım", moment, later))
+        db.execute("INSERT INTO operator_codes(code_hash, kind, created_at, expires_at) VALUES(?,?,?,?)",
+                   ("b" * 64, "SIGNUP", moment, later))
+    kept_tables = ("users", "sessions", "login_devices", "operator_codes", "matches", "uploads")
+
+    def kept():
+        with database(storage) as db:
+            return {table: db.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall() for table in kept_tables}
+
+    def schema():
+        with database(storage) as db:
+            return {name: (kind, sql) for kind, name, sql in db.execute("SELECT type, name, sql FROM sqlite_master")}
+
+    before, earlier_schema = kept(), schema()
+    assert not set(earlier_schema) & {*TEAM_TABLES, *TEAM_INDEXES}
+
+    with serve(storage, None) as client:
+        found = schema()
+        assert {name for name, (kind, _sql) in found.items() if kind == "table"} >= set(TEAM_TABLES)
+        assert {name for name, (kind, _sql) in found.items() if kind == "index"} >= set(TEAM_INDEXES)
+        assert "WHERE role = 'CAPTAIN'" in found["memberships_one_captain"][1]
+        assert "CHECK (seat IN ('STARTER', 'SUBSTITUTE'))" in found["memberships"][1]
+        assert ("CHECK ((kind = 'TEAM' AND starter_seats = 6) OR (kind = 'OPEN_MATCH' AND starter_seats = 12))"
+                in found["seat_pools"][1])
+        # Nothing that was there is rebuilt or rewritten.
+        assert {name: entry for name, entry in found.items() if name in earlier_schema} == earlier_schema
+        assert kept() == before
+        assert client.get(f"/v1/matches/{match_id}").status_code == 200
+        # The new tables work at once.
+        team = create_team(client, name="Kuzey Spor")
+        assert rows(storage, "SELECT kind, starter_seats, substitute_seats FROM seat_pools WHERE team_id=?",
+                    team["id"]) == [{"kind": "TEAM", "starter_seats": 6, "substitute_seats": 2}]
+    first = dump(storage)
+    with serve(storage, None):
+        pass
+    assert dump(storage) == first, "a second start changed the storage"
 
 
 def test_an_unfinished_upload_stored_before_accounts_is_swept_at_the_first_pass(storage):

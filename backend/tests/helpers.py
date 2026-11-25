@@ -112,6 +112,38 @@ def as_account(client, storage, username, signup_via="SIGNUP_CODE"):
     """The client acting as another account on the same storage."""
     return As(client, bearer(session_for(storage, username, signup_via)))
 
+
+# --- teams (B4 has no join: members are seeded straight into SQLite, as design 14.3 seeds holders) ---
+
+def create_team(client, name="Kuzey Spor", team_id=None, **body) -> dict:
+    """Create a team through the route under a new client id and return the Team of the 201."""
+    response = client.put(f"/v1/teams/{team_id or new_id()}", json={"name": name, **body})
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def seed_member(storage, team_id, username, seat="STARTER", role="MEMBER", jersey=None, joined_at=None) -> str:
+    """Make `username` a member of the team without a join, and return the account's id.
+
+    The account and a session of it are made by session_for, so as_account() acts as it afterwards.
+    `joined_at` defaults to the moment of the call.
+    """
+    session_for(storage, username)
+    user_id = user_id_of(storage, username)
+    with closing(sqlite3.connect(Path(storage) / "volleystat.sqlite3")) as db, db:
+        db.execute("PRAGMA foreign_keys=ON")
+        db.execute("INSERT INTO memberships(team_id, user_id, role, seat, jersey, joined_at) VALUES(?,?,?,?,?,?)",
+                   (team_id, user_id, role, seat, jersey, joined_at or accounts.iso(accounts.now())))
+    return user_id
+
+
+def delete_team_rows(storage, team_id) -> None:
+    """Delete a team straight from SQLite. Foreign keys are on, so its pool and memberships go by cascade
+    (execute() below opens its connection without them and would leave the memberships behind)."""
+    with closing(sqlite3.connect(Path(storage) / "volleystat.sqlite3")) as db, db:
+        db.execute("PRAGMA foreign_keys=ON")
+        db.execute("DELETE FROM teams WHERE id=?", (team_id,))
+
 # Four rally spans inside the one-second synthetic clip.
 SPANS = ((100, 250), (300, 450), (500, 650), (700, 850))
 

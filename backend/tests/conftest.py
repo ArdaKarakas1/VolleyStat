@@ -1,10 +1,12 @@
 import os
 import shutil
 import subprocess
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app import accounts
 from app.main import create_app
 from tests.helpers import NO_SESSION, STRANGER, As, as_account, sign_in
 
@@ -20,6 +22,23 @@ def no_disk_floor(monkeypatch):
     # The server keeps 20 GiB of the disk free by default, and a test runner may have less. The
     # tests of the floor set their own floor and patch the free space (tests/test_quotas.py).
     monkeypatch.setenv("VOLLEYSTAT_DISK_FLOOR_GIB", "0")
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    """A clock the test moves by hand. It starts at a fixed moment."""
+    state = {"now": datetime(2026, 11, 17, 12, 0, 0, tzinfo=timezone.utc)}
+    monkeypatch.setattr(accounts, "now", lambda: state["now"])
+
+    class Clock:
+        def advance(self, **delta):
+            state["now"] += timedelta(**delta)
+
+        @property
+        def now(self):
+            return state["now"]
+
+    return Clock()
 
 
 @pytest.fixture
