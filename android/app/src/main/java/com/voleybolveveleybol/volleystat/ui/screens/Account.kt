@@ -577,7 +577,11 @@ fun RegisterScreen(
                 supporting = stringResource(R.string.register_code_hint), capitalization = KeyboardCapitalization.Characters, keyboardType = KeyboardType.Ascii,
             )
             if (signup == SignupMode.OPEN) {
-                Text(stringResource(R.string.register_code_empty_ok), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                // Below B2's hint and in line with it, as the rest of the field's supporting text.
+                Text(
+                    stringResource(R.string.register_code_empty_ok), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
             }
         } else {
             TextButton(onClick = { revealed = true }, modifier = Modifier.heightIn(min = Dimens.touchTarget)) {
