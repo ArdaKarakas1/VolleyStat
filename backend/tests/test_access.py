@@ -22,6 +22,7 @@ from tests.helpers import (
 )
 from tests.test_api import create_match, create_upload
 from tests.test_media import store
+from tests.webp_fixtures import logo_body
 
 PUBLIC = "PUBLIC"
 WRONG_SHAPE = {"json": {"unexpected": True}}
@@ -131,6 +132,11 @@ WALK: dict[tuple[str, str], Any] = {
     # Stale: an account that is no member of the world's team, so the captain gets NOT_A_TEAM_MEMBER.
     ("POST", "/v1/teams/{team_id}/captain"): Route("team", CAPTAIN, json={"userId": NO_MEMBER}, bad=WRONG_SHAPE),
     ("DELETE", "/v1/teams/{team_id}"): Route("team", CAPTAIN),
+    # A real lossy WebP of each size, so the body passes every check before the write transaction.
+    ("PUT", "/v1/teams/{team_id}/logo"): Route("team", CAPTAIN, json=logo_body(), bad=WRONG_SHAPE),
+    ("DELETE", "/v1/teams/{team_id}/logo"): Route("team", CAPTAIN),
+    ("GET", "/v1/teams/{team_id}/logo"): Route("team", MEMBER, params={"size": "large"},
+                                                bad={"params": {"size": "huge"}}),
 }
 NOT_FOUND = {"match": "MATCH_NOT_FOUND", "upload": "UPLOAD_NOT_FOUND", "video": "VIDEO_NOT_FOUND",
              "job": "ANALYSIS_NOT_FOUND", "card": "CARD_NOT_FOUND", "rally": "RALLY_NOT_FOUND",
@@ -189,8 +195,8 @@ class World:
 @pytest.fixture
 def world(storage, make_clip):
     """The owner's personal match with a READY video, a NEEDS_REVIEW job, its cards and rallies, and an
-    unfinished upload. The owner also captains a team with a member on a substitute seat and a removed account
-    in its blocks. The stranger owns a personal match and a team of its own."""
+    unfinished upload. The owner also captains a team with a logo, a member on a substitute seat and a removed
+    account in its blocks. The stranger owns a personal match and a team of its own."""
     with serve(storage, ScriptedAnalyzer()) as owner:
         video = ready_video(owner, make_clip)
         job = request_job(owner, video["id"])
@@ -205,6 +211,7 @@ def world(storage, make_clip):
         # The captain removed somebody, so the team has a block.
         removed = seed_member(storage, team["id"], "test.cikarilan")
         assert owner.delete(f"/v1/teams/{team['id']}/members/{removed}").status_code == 204
+        assert owner.put(f"/v1/teams/{team['id']}/logo", json=logo_body()).status_code == 200
         stranger = as_account(owner, storage, STRANGER)
         assert stranger.post("/v1/matches", json=MATCH_BODY).status_code == 201
         create_team(stranger, name="Yabancının Takımı")
@@ -242,7 +249,7 @@ def test_the_walk_lists_every_route_of_the_app(storage):
         assert {operation for operation, route in WALK.items() if route is PUBLIC} == access.PUBLIC
         assert {(method.upper(), path) for path, operations in app.openapi()["paths"].items()
                 for method in operations} == set(WALK)
-    assert len(WALK) == 49
+    assert len(WALK) == 52
 
 
 @pytest.mark.parametrize("extra", ["mount", "websocket", "sub-app"])
@@ -326,7 +333,7 @@ def test_every_captain_route_answers_a_member_403_captain_only_and_changes_nothi
         ("PUT", "/v1/teams/{team_id}/settings"), ("PUT", "/v1/teams/{team_id}/seats"),
         ("GET", "/v1/teams/{team_id}/blocks"), ("DELETE", "/v1/teams/{team_id}/blocks/{user_id}"),
         ("POST", "/v1/teams/{team_id}/joins-seen"), ("POST", "/v1/teams/{team_id}/captain"),
-        ("DELETE", "/v1/teams/{team_id}")}
+        ("DELETE", "/v1/teams/{team_id}"), ("PUT", "/v1/teams/{team_id}/logo"), ("DELETE", "/v1/teams/{team_id}/logo")}
     before = snapshot(world.storage)
     for (method, path), route in captain_routes.items():
         error = refused_as(world.member.request(method, world.url(path), **route.valid()), 403, "CAPTAIN_ONLY")

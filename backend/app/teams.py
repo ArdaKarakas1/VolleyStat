@@ -1,5 +1,5 @@
-"""Teams: creation, reading, settings, seats, members and deletion (docs/API_V1.md, section 10, Takımlar; design
-v5.1 sections 3.7, 4.1, 4.3, 4.4, 4.6 and 9.3; ADR-0120).
+"""Teams: creation, reading, settings, seats, members, logos and deletion (docs/API_V1.md, section 10, Takımlar;
+design v5.1 sections 3.7, 4.1, 4.2, 4.3, 4.4, 4.6 and 9.3; ADR-0120).
 
 Every signed-in account may create a team (v5, R6). A team always has 6 starter seats and 0 to 6 substitute
 seats, 2 by default, and its captain holds one of them. The server draws the team's tag at random. A person is a
@@ -12,19 +12,23 @@ A member sets their own jersey and leaves by themselves; the captain sets anyone
 blocks the removed account in the team's pool, lifts blocks, moves the new-member mark, hands the captaincy on and
 deletes the team. A captain alone in the team deletes it by leaving (plan U8); a captain with other members hands
 the captaincy on first. B5 reads the blocks when a removed account tries to join again.
+
+The captain sets and removes the team's logo, two lossy WebP images that pass the header check of logo.py, and every
+member reads them. The bytes live in the team row; the Team shape names the logo by its version only.
 """
 from __future__ import annotations
 
+import base64
 import secrets
 import sqlite3
 import unicodedata
 from pathlib import Path
 from typing import Any, Callable, Literal
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Header, Response
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
 
-from . import access, accounts, deletion, seats
+from . import access, accounts, deletion, logo, seats
 from .db import empty_write_ahead_log, is_canonical_id, new_id
 from .errors import fail
 
@@ -141,6 +145,46 @@ class CaptainInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     userId: str = Field(max_length=64)
+
+
+class LogoInput(BaseModel):
+    """Both images of a logo in base64: at most 256 px for members and at most 128 px for link views (design 4.2)."""
+    model_config = ConfigDict(extra="forbid")
+
+    # Base64 of 36 KiB is 49 152 characters and of 8 KiB 10 924. The bounds leave a little room and keep a body of
+    # both under the 64 KiB body limit; the decoded bytes have their own limits (logo.SIZES).
+    large: str = Field(max_length=50_000)
+    small: str = Field(max_length=11_000)
+
+
+# --- the logo ------------------------------------------------------------------------------------------------
+
+def logo_image(text: str, image: str) -> bytes:
+    """The bytes of one image of a logo, or 422 LOGO_INVALID that names the image (`large` or `small`).
+
+    Base64 with any character outside the standard alphabet, a line break included, or without its padding is
+    refused as a file that breaks the rule is.
+    """
+    max_side, max_bytes = logo.SIZES[image]
+    try:
+        data = base64.b64decode(text, validate=True)
+        logo.check_lossy_webp(data, max_side, max_bytes)
+    except ValueError as refused:  # binascii.Error is a ValueError
+        fail("LOGO_INVALID", f"The {image} logo is not a simple lossy WebP within its limits: {refused}", 422,
+             image=image)
+    return data
+
+
+def holds_tag(if_none_match: str | None, tag: str) -> bool:
+    """Whether an If-None-Match header names `tag`: by weak comparison, so W/"3" holds "3", in a list, or as * for
+    any logo (RFC 9110, section 13.1.2)."""
+    if if_none_match is None:
+        return False
+    for candidate in if_none_match.split(","):
+        candidate = candidate.strip()
+        if candidate == "*" or candidate.removeprefix("W/") == tag:
+            return True
+    return False
 
 
 # --- the tag -------------------------------------------------------------------------------------------------
@@ -483,6 +527,64 @@ def router(connect, db_path: Path, current_user: Callable[..., accounts.Caller],
                          scope="CAPTAIN", limit=CAPTAIN_LIMIT, userId=heir)
                 deletion.move_captaincy(db, team_id, caller.id, heir, accounts.iso(accounts.now()))
             return team_payload(db, team_id, caller.id)
+
+    @routes.put("/v1/teams/{team_id}/logo")
+    def put_logo(team_id: str, payload: LogoInput, caller: accounts.Caller = Depends(current_user)):
+        """Set both images of the team's logo (captain).
+
+        Each image is a simple lossy WebP: at most 256 px and 36 KiB for members, at most 128 px and 8 KiB for link
+        views. The first image that breaks the rule is named in 422 LOGO_INVALID, and nothing is written. A change
+        moves the logo's version; the same bytes again change nothing. A replaced logo leaves no bytes behind: the
+        rows are overwritten with zeros (secure_delete) and the write-ahead log is emptied after the commit.
+        """
+        replaced = False
+        with connect(write=True) as db:
+            access.session_user(db, caller)
+            team, _mine = access.require_captain(db, caller, team_id)
+            large = logo_image(payload.large, "large")
+            small = logo_image(payload.small, "small")
+            version = team["logo_version"]
+            if (team["logo"], team["logo_small"]) != (large, small):
+                replaced = team["logo"] is not None or team["logo_small"] is not None
+                version += 1
+                db.execute("UPDATE teams SET logo=?, logo_small=?, logo_version=? WHERE id=?",
+                           (large, small, version, team_id))
+        if replaced:
+            empty_write_ahead_log(db_path)
+        return {"logo": {"version": version}}
+
+    @routes.delete("/v1/teams/{team_id}/logo", status_code=204)
+    def delete_logo(team_id: str, caller: accounts.Caller = Depends(current_user)):
+        """Remove both images of the team's logo (captain) and move its version. Without a logo nothing changes."""
+        removed = False
+        with connect(write=True) as db:
+            access.session_user(db, caller)
+            team, _mine = access.require_captain(db, caller, team_id)
+            if team["logo"] is not None or team["logo_small"] is not None:
+                db.execute("UPDATE teams SET logo=NULL, logo_small=NULL, logo_version=logo_version + 1 WHERE id=?",
+                           (team_id,))
+                removed = True
+        if removed:
+            empty_write_ahead_log(db_path)
+
+    @routes.get("/v1/teams/{team_id}/logo", response_class=Response, responses={
+        200: {"description": "The image of the logo", "content": {"image/webp": {}}},
+        304: {"description": "If-None-Match names the logo's current version"},
+    })
+    def get_logo(team_id: str, size: Literal["large", "small"],
+                 if_none_match: str | None = Header(default=None, alias="If-None-Match"),
+                 caller: accounts.Caller = Depends(current_user)):
+        """One image of the team's logo (member). The ETag is the logo's version, so a phone that holds it gets 304."""
+        with connect() as db:
+            team, _mine = access.require_member(db, caller, team_id)
+        data = team["logo"] if size == "large" else team["logo_small"]
+        if data is None:
+            fail("LOGO_NOT_FOUND", "The team has no logo", 404)
+        tag = f'"{team["logo_version"]}"'
+        headers = {"ETag": tag, "Cache-Control": "private, no-cache"}
+        if holds_tag(if_none_match, tag):
+            return Response(status_code=304, headers=headers)
+        return Response(content=data, media_type="image/webp", headers=headers)
 
     @routes.delete("/v1/teams/{team_id}", status_code=204)
     def delete_team(team_id: str, caller: accounts.Caller = Depends(current_user)):
