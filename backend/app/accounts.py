@@ -261,14 +261,18 @@ def device_keys(device_hash: str) -> list[tuple[str, str, str]]:
 
 
 class Limiter:
-    """Failure counts in process memory: nothing about addresses or usernames reaches the disk.
+    """Failure counts and reservations in process memory: nothing about addresses or usernames reaches the disk.
 
     BACKOFF: five failures are free, then each failure locks the key for 30 s, doubling up to
     15 min; the count is forgotten an hour after the last failure or on a success.
     WINDOW: 50 failures within an hour lock the key for 15 min.
+    Reservations (reserve, release) count actions rather than failures, such as the teams an account
+    creates in a day: a key holds at most `limit` places within its window, and an action that ended
+    without its result gives its place back (design 3.6; B6a's open sign-up key uses the same rule).
     The limiter holds at most `max_keys` keys. It never forgets a locked key to make room, and it
     forgets the key with the fewest recent failures first, so a flood of new keys can not wash out
-    the count of a key under attack.
+    the count of a key under attack. A reservation key counts its places of the window as recent
+    failures, and it is locked while it holds `limit` of them.
     """
 
     def __init__(self, max_keys: int = 10_000):
@@ -307,6 +311,32 @@ class Limiter:
             for name, _rule, _scope in keys:
                 self._entries.pop(name, None)
 
+    def reserve(self, name: str, limit: int, window: float, scope: str, at: float) -> tuple[int, str] | None:
+        """Check the key and take one of its `limit` places in one locked step.
+
+        Returns None after the place was taken, or (seconds, scope) while the key holds `limit` places
+        from the last `window` seconds: the wait runs until the oldest of them is `window` old. A refusal
+        takes no place. Actions that arrive together each see the places of the ones before them.
+        """
+        with self._lock:
+            entry = self._entries.pop(name, None) or self._new_entry()
+            held = [moment for moment in entry["reserved"] if at - moment < window]
+            entry.update(reserved=held, window=window, limit=limit)
+            # Re-inserting moves the key to the end: among equal counts the oldest key stands first.
+            self._entries[name] = entry
+            if len(held) >= limit:
+                return math.ceil(min(held) + window - at), scope
+            held.append(at)
+            self._make_room(at, {name})
+            return None
+
+    def release(self, name: str, at: float) -> None:
+        """Give back the place that reserve() took at `at`: the action ended without its result."""
+        with self._lock:
+            entry = self._entries.get(name)
+            if entry is not None and at in entry["reserved"]:
+                entry["reserved"].remove(at)
+
     def _wait(self, keys: list[tuple[str, str, str]], at: float) -> tuple[int, str] | None:
         longest = None
         for name, _rule, scope in keys:
@@ -317,10 +347,14 @@ class Limiter:
                     longest = (seconds, scope)
         return longest
 
+    @staticmethod
+    def _new_entry() -> dict[str, Any]:
+        return {"count": 0, "last": 0.0, "times": [], "until": 0.0, "reserved": [], "window": 0.0, "limit": 0}
+
     def _fail(self, keys: list[tuple[str, str, str]], at: float) -> None:
         written = set()
         for name, rule, _scope in keys:
-            entry = self._entries.pop(name, None) or {"count": 0, "last": 0.0, "times": [], "until": 0.0}
+            entry = self._entries.pop(name, None) or self._new_entry()
             if rule == BACKOFF:
                 if at - entry["last"] >= FORGET_AFTER:
                     entry["count"] = 0
@@ -338,24 +372,35 @@ class Limiter:
         self._make_room(at, written)
 
     @staticmethod
-    def _recent_failures(entry: dict[str, Any], at: float) -> int:
+    def _places(entry: dict[str, Any], at: float) -> int:
+        return sum(1 for moment in entry["reserved"] if at - moment < entry["window"])
+
+    @classmethod
+    def _recent_failures(cls, entry: dict[str, Any], at: float) -> int:
         count = entry["count"] if at - entry["last"] < FORGET_AFTER else 0
-        return count + sum(1 for moment in entry["times"] if at - moment < FORGET_AFTER)
+        return count + sum(1 for moment in entry["times"] if at - moment < FORGET_AFTER) + cls._places(entry, at)
+
+    @classmethod
+    def _locked(cls, entry: dict[str, Any], at: float) -> bool:
+        return entry["until"] > at or (entry["limit"] > 0 and cls._places(entry, at) >= entry["limit"])
 
     def _make_room(self, at: float, written: set[str]) -> None:
-        # The limiter grows only by a key's first failure, and a first failure never locks a key,
-        # so there is always an unlocked key to forget: at worst the one just written.
+        # The limiter grows by a key's first failure or first reservation. A first failure never locks a
+        # key, so there is an unlocked key to forget: at worst the one just written. A first reservation
+        # locks its key when its limit is 1; when every key is then locked, the new key is not tracked.
         while len(self._entries) > self.max_keys:
             victim, fewest = None, None
             for name, entry in self._entries.items():
-                if entry["until"] > at:
+                if self._locked(entry, at):
                     continue
                 failures = self._recent_failures(entry, at)
                 if fewest is None or failures < fewest:
                     victim, fewest = name, failures
+            if victim is None:
+                victim = next(name for name in self._entries if name in written)
             if victim in written and time.monotonic() - self._full_logged_at > 60:
                 self._full_logged_at = time.monotonic()
-                log.warning("The login limiter is full; a new key is not tracked")
+                log.warning("The limiter is full; a new key is not tracked")
             del self._entries[victim]
 
 
@@ -757,8 +802,11 @@ def router(connect, db_path: Path, signup_mode: str, limiter: Limiter, pool: Has
 
     @routes.get("/v1/me")
     def me(caller: Caller = Depends(current_user)):
-        # Teams come with their own slice; until then a person belongs to none.
-        return {"user": user_payload(caller.user), "teams": []}
+        """The caller's account and teams. The teams are the list GET /v1/teams answers."""
+        # Imported here: the teams module imports this one.
+        from . import teams
+        with connect() as db:
+            return {"user": user_payload(caller.user), "teams": teams.teams_of(db, caller.id)}
 
     @routes.put("/v1/me/display-name")
     def change_display_name(payload: DisplayNameInput, caller: Caller = Depends(current_user)):

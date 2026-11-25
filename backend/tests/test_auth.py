@@ -9,7 +9,7 @@ import logging
 import sqlite3
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 import httpx
 import pytest
@@ -28,23 +28,6 @@ OTHER_PASSWORD = "baska-uzun-bir-sifre-42"
 def cheap_hashing(monkeypatch):
     # The real cost (2**15) takes about 170 ms a hash; test_the_stored_hash_names_the_production_cost checks it.
     monkeypatch.setattr(accounts, "SCRYPT_N", 2 ** 10)
-
-
-@pytest.fixture
-def clock(monkeypatch):
-    """A clock the test moves by hand. It starts at a fixed moment."""
-    state = {"now": datetime(2026, 11, 17, 12, 0, 0, tzinfo=timezone.utc)}
-    monkeypatch.setattr(accounts, "now", lambda: state["now"])
-
-    class Clock:
-        def advance(self, **delta):
-            state["now"] += timedelta(**delta)
-
-        @property
-        def now(self):
-            return state["now"]
-
-    return Clock()
 
 
 @pytest.fixture

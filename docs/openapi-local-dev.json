@@ -1504,6 +1504,7 @@
     "/v1/me": {
       "get": {
         "summary": "Me",
+        "description": "The caller's account and teams. The teams are the list GET /v1/teams answers.",
         "operationId": "me_v1_me_get",
         "responses": {
           "200": {
@@ -1640,6 +1641,231 @@
             "HTTPBearer": []
           }
         ]
+      }
+    },
+    "/v1/teams": {
+      "get": {
+        "summary": "List Teams",
+        "description": "The teams of the caller, in the order the caller joined them.",
+        "operationId": "list_teams_v1_teams_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/teams/{team_id}": {
+      "put": {
+        "summary": "Put Team",
+        "description": "Create a team under an id the client chose, or return the caller's team that already has it.\n\nThe server draws the tag, creates the team's seat pool (6 starter seats and the substitute seats) and makes\nthe caller its captain on the seat the body names. A repeat by a member answers 200 and changes nothing;\nanother account gets 409 TEAM_ID_TAKEN. A refused body writes nothing and takes no place of the day.",
+        "operationId": "put_team_v1_teams__team_id__put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Team Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TeamInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "201": {
+            "description": "The team was created under this id"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "Get Team",
+        "description": "The team as a member sees it.",
+        "operationId": "get_team_v1_teams__team_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Team Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/teams/{team_id}/settings": {
+      "put": {
+        "summary": "Put Settings",
+        "description": "Set the team's name and usual match day and time (captain). A null schedule clears it.",
+        "operationId": "put_settings_v1_teams__team_id__settings_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Team Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingsInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/teams/{team_id}/seats": {
+      "put": {
+        "summary": "Put Seats",
+        "description": "Set the substitute count and move members between starter and substitute seats (captain).\n\nThe server checks the final state: the same body twice changes nothing. The 6 starter seats never change.",
+        "operationId": "put_seats_v1_teams__team_id__seats_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Team Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SeatsInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     }
   },
@@ -1954,6 +2180,30 @@
         "title": "MatchRulesInput",
         "description": "The rule the user chose: the app offers exactly these values, so the server accepts nothing else."
       },
+      "Move": {
+        "properties": {
+          "userId": {
+            "type": "string",
+            "maxLength": 64,
+            "title": "Userid"
+          },
+          "seat": {
+            "type": "string",
+            "enum": [
+              "STARTER",
+              "SUBSTITUTE"
+            ],
+            "title": "Seat"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "userId",
+          "seat"
+        ],
+        "title": "Move"
+      },
       "PasswordChangeInput": {
         "properties": {
           "currentPassword": {
@@ -2053,6 +2303,78 @@
         ],
         "title": "ReopenInput"
       },
+      "Schedule": {
+        "properties": {
+          "weekday": {
+            "type": "integer",
+            "maximum": 7.0,
+            "minimum": 1.0,
+            "title": "Weekday"
+          },
+          "time": {
+            "type": "string",
+            "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
+            "title": "Time"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "weekday",
+          "time"
+        ],
+        "title": "Schedule",
+        "description": "The team's usual match day and time: 1 for Monday to 7 for Sunday, and HH:MM."
+      },
+      "SeatsInput": {
+        "properties": {
+          "substituteSeats": {
+            "type": "integer",
+            "title": "Substituteseats"
+          },
+          "moves": {
+            "items": {
+              "$ref": "#/components/schemas/Move"
+            },
+            "type": "array",
+            "maxItems": 12,
+            "title": "Moves"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "substituteSeats"
+        ],
+        "title": "SeatsInput",
+        "description": "The final state the captain wants: the substitute count and the members who change their seat type."
+      },
+      "SettingsInput": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Name"
+          },
+          "schedule": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Schedule"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "schedule"
+        ],
+        "title": "SettingsInput"
+      },
       "SplitInput": {
         "properties": {
           "expectedListVersion": {
@@ -2071,6 +2393,58 @@
           "atMs"
         ],
         "title": "SplitInput"
+      },
+      "TeamInput": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Name"
+          },
+          "substituteSeats": {
+            "type": "integer",
+            "title": "Substituteseats",
+            "default": 2
+          },
+          "captainSeat": {
+            "type": "string",
+            "enum": [
+              "STARTER",
+              "SUBSTITUTE"
+            ],
+            "title": "Captainseat",
+            "default": "STARTER"
+          },
+          "schedule": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Schedule"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "jersey": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 99.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Jersey"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "TeamInput"
       },
       "UploadInput": {
         "properties": {

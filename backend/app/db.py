@@ -241,6 +241,74 @@ CREATE TABLE IF NOT EXISTS operator_codes (
   created_at TEXT NOT NULL,
   expires_at TEXT NOT NULL
 );
+
+-- Teams (ADR-0120). Any signed-in account creates one (design 4.1).
+CREATE TABLE IF NOT EXISTS teams (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  -- Four characters of the code alphabet that the server draws at random
+  tag TEXT NOT NULL UNIQUE,
+  -- 1 for Monday to 7 for Sunday or NULL
+  match_weekday INTEGER,
+  -- HH:MM or NULL
+  match_time TEXT,
+  -- Lossy WebP of 256 px for members or NULL
+  logo BLOB,
+  -- Lossy WebP of 128 px for link views or NULL
+  logo_small BLOB,
+  logo_version INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS memberships (
+  team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  -- CAPTAIN or MEMBER
+  role TEXT NOT NULL DEFAULT 'MEMBER',
+  -- STARTER or SUBSTITUTE: the seat this member holds in the team's pool. No default: every insert names it.
+  seat TEXT NOT NULL CHECK (seat IN ('STARTER', 'SUBSTITUTE')),
+  -- 1 to 99 or NULL
+  jersey INTEGER,
+  joined_at TEXT NOT NULL,
+  -- The captain's mark for the new-member badge. Members who joined later count as new.
+  joins_seen_at TEXT,
+  PRIMARY KEY (team_id, user_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS memberships_one_captain ON memberships(team_id) WHERE role = 'CAPTAIN';
+CREATE UNIQUE INDEX IF NOT EXISTS memberships_jersey ON memberships(team_id, jersey) WHERE jersey IS NOT NULL;
+CREATE INDEX IF NOT EXISTS memberships_user ON memberships(user_id);
+
+-- The unit of the join engine: one per team and one per open match (2.1)
+CREATE TABLE IF NOT EXISTS seat_pools (
+  id TEXT PRIMARY KEY,
+  -- TEAM or OPEN_MATCH
+  kind TEXT NOT NULL,
+  -- The team of a TEAM pool and NULL otherwise
+  team_id TEXT UNIQUE REFERENCES teams(id) ON DELETE CASCADE,
+  -- The open match record of an OPEN_MATCH pool and NULL otherwise
+  match_id TEXT UNIQUE REFERENCES matches(id) ON DELETE CASCADE,
+  -- Seats of each type with the captain or a playing organiser counted (2.3)
+  starter_seats INTEGER NOT NULL,
+  substitute_seats INTEGER NOT NULL,
+  -- The queue number the next claim takes. Only a write transaction moves it.
+  queue_seq INTEGER NOT NULL DEFAULT 0,
+  -- Moves by one in every write transaction that changes the join state of the pool. The snapshot carries it.
+  queue_version INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  CHECK ((kind = 'TEAM' AND team_id IS NOT NULL AND match_id IS NULL)
+      OR (kind = 'OPEN_MATCH' AND match_id IS NOT NULL AND team_id IS NULL)),
+  -- v5: six on the court. A team always has 6 starter seats and an open match 12 (R1 and R2).
+  -- The upper bound of the substitute seats lives in the seats engine and the creation routes (2.3).
+  CHECK ((kind = 'TEAM' AND starter_seats = 6) OR (kind = 'OPEN_MATCH' AND starter_seats = 12)),
+  CHECK (substitute_seats >= 0)
+);
+
+-- People a captain or an organiser removed. They cannot claim a seat of this pool until the block goes.
+CREATE TABLE IF NOT EXISTS pool_blocks (
+  pool_id TEXT NOT NULL REFERENCES seat_pools(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (pool_id, user_id)
+);
 """
 
 # Storage folders created by earlier previews lack the newer columns.

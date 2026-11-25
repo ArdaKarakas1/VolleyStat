@@ -39,6 +39,11 @@ CONTRACT_ROUTES = [
     ("/v1/me/display-name", "put"),
     ("/v1/me/password", "put"),
     ("/v1/me/delete", "post"),
+    ("/v1/teams", "get"),
+    ("/v1/teams/{team_id}", "put"),
+    ("/v1/teams/{team_id}", "get"),
+    ("/v1/teams/{team_id}/settings", "put"),
+    ("/v1/teams/{team_id}/seats", "put"),
 ]
 
 

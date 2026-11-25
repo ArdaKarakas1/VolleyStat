@@ -17,8 +17,8 @@ from app import access, accounts, media
 from app.access import READ, REVIEW
 from app.bodylimit import MAX_JSON_BODY_BYTES
 from tests.helpers import (
-    NO_SESSION, OWNER, STRANGER, As, ScriptedAnalyzer, as_account, bearer, card_of, decide, execute, ready_video,
-    request_job, rows, run_pending, serve, session_for, user_id_of,
+    NO_SESSION, OWNER, STRANGER, As, ScriptedAnalyzer, as_account, bearer, card_of, create_team, decide, execute,
+    ready_video, request_job, rows, run_pending, seed_member, serve, session_for, user_id_of,
 )
 from tests.test_api import create_match, create_upload
 from tests.test_media import store
@@ -30,14 +30,20 @@ MATCH_BODY = {"homeTeamName": "Erişim Ev", "awayTeamName": "Erişim Konuk"}
 OTHER_RULE = {"setsToWin": 2, "setTarget": 21, "decidingSetTarget": 15}
 UPLOAD_BODY = {"fileName": "mac.mp4", "sizeBytes": 10, "mimeType": "video/mp4", "rightsAttested": True,
                "allowTraining": False}
+TEAM_BODY = {"name": "Erişim Takımı"}
+# The access roles of the team routes: any member, or the captain only.
+MEMBER, CAPTAIN = "MEMBER", "CAPTAIN"
+# The seeded member of the world's team (a substitute), whose session the captain-only walk uses.
+TEAM_MEMBER = "test.takim.uyesi"
 
 
 @dataclass(frozen=True)
 class Route:
     """How the walk calls a route. `kind` is the object the path names (None: the caller's own account,
-    or a new match) and `role` the access role the route checks. The valid request is stale where the
-    route checks a version, an offset or a bound, so only the access check stands between a stranger and
-    an answer that names something. `bad` is a request whose body, query or header has the wrong form."""
+    or a new match) and `role` the access role the route checks (READ or REVIEW on a match; MEMBER or
+    CAPTAIN on a team). The valid request is stale where the route checks a version, an offset or a bound,
+    so only the access check stands between a stranger and an answer that names something. `bad` is a
+    request whose body, query or header has the wrong form."""
     kind: str | None
     role: str | None
     json: Any = None
@@ -102,9 +108,18 @@ WALK: dict[tuple[str, str], Any] = {
                                                              bad=WRONG_SHAPE),
     ("POST", "/v1/analyses/{job_id}/rally-list/confirm"): Route("job", REVIEW, json={"expectedListVersion": 999},
                                                                 bad=WRONG_SHAPE),
+    ("GET", "/v1/teams"): OWN_ACCOUNT,
+    # A new id creates a team; another account's id answers 409 TEAM_ID_TAKEN (design 4.1), not 403.
+    ("PUT", "/v1/teams/{team_id}"): Route("team", MEMBER, json=TEAM_BODY, bad=WRONG_SHAPE),
+    ("GET", "/v1/teams/{team_id}"): Route("team", MEMBER),
+    ("PUT", "/v1/teams/{team_id}/settings"): Route("team", CAPTAIN, json={"name": "Yeni Ad", "schedule": None},
+                                                   bad=WRONG_SHAPE),
+    # Stale: 0 substitute seats while the world's team has a substitute, so the captain gets SEATS_BELOW_HOLDERS.
+    ("PUT", "/v1/teams/{team_id}/seats"): Route("team", CAPTAIN, json={"substituteSeats": 0}, bad=WRONG_SHAPE),
 }
 NOT_FOUND = {"match": "MATCH_NOT_FOUND", "upload": "UPLOAD_NOT_FOUND", "video": "VIDEO_NOT_FOUND",
-             "job": "ANALYSIS_NOT_FOUND", "card": "CARD_NOT_FOUND", "rally": "RALLY_NOT_FOUND"}
+             "job": "ANALYSIS_NOT_FOUND", "card": "CARD_NOT_FOUND", "rally": "RALLY_NOT_FOUND",
+             "team": "TEAM_NOT_FOUND"}
 SESSION_ROUTES = {operation: route for operation, route in WALK.items() if route is not PUBLIC}
 OBJECT_ROUTES = {operation: route for operation, route in SESSION_ROUTES.items() if route.kind is not None}
 
@@ -150,6 +165,7 @@ class World:
     stranger: As
     ids: dict[str, str]
     storage: Any
+    member: As
 
     def url(self, path, **override):
         return path.format(**{**self.ids, **override})
@@ -158,7 +174,8 @@ class World:
 @pytest.fixture
 def world(storage, make_clip):
     """The owner's personal match with a READY video, a NEEDS_REVIEW job, its cards and rallies, and an
-    unfinished upload. The stranger owns a personal match of its own."""
+    unfinished upload. The owner also captains a team with a member on a substitute seat. The stranger owns a
+    personal match and a team of its own."""
     with serve(storage, ScriptedAnalyzer()) as owner:
         video = ready_video(owner, make_clip)
         job = request_job(owner, video["id"])
@@ -168,9 +185,12 @@ def world(storage, make_clip):
         assert upload.status_code == 201, upload.text
         ids = {"match_id": video["matchId"], "upload_id": upload.json()["uploadId"], "video_id": video["id"],
                "job_id": job["id"], "card_id": card_of(owner, job["id"], 2)["id"], "rally_id": rallies[1]["id"]}
+        team = create_team(owner, name="Sahibin Takımı")
+        ids.update(team_id=team["id"], user_id=seed_member(storage, team["id"], TEAM_MEMBER, seat="SUBSTITUTE"))
         stranger = as_account(owner, storage, STRANGER)
         assert stranger.post("/v1/matches", json=MATCH_BODY).status_code == 201
-        yield World(owner, stranger, ids, storage)
+        create_team(stranger, name="Yabancının Takımı")
+        yield World(owner, stranger, ids, storage, as_account(owner, storage, TEAM_MEMBER))
 
 
 def refused_as(response, status, code):
@@ -204,7 +224,7 @@ def test_the_walk_lists_every_route_of_the_app(storage):
         assert {operation for operation, route in WALK.items() if route is PUBLIC} == access.PUBLIC
         assert {(method.upper(), path) for path, operations in app.openapi()["paths"].items()
                 for method in operations} == set(WALK)
-    assert len(WALK) == 37
+    assert len(WALK) == 42
 
 
 @pytest.mark.parametrize("extra", ["mount", "websocket", "sub-app"])
@@ -247,6 +267,8 @@ def test_every_route_but_the_public_ones_answers_401_without_a_session(world):
 def test_every_route_answers_a_stranger_403_not_a_member_and_changes_nothing(world):
     before = snapshot(world.storage)
     for (method, path), route in OBJECT_ROUTES.items():
+        if (method, path) == ("PUT", "/v1/teams/{team_id}"):
+            continue  # another account's team id answers 409 (test_put_of_another_accounts_team_id_...)
         error = refused_as(world.stranger.request(method, world.url(path), **route.valid()), 403, "NOT_A_MEMBER")
         assert error["details"] == {}
     assert snapshot(world.storage) == before
@@ -257,6 +279,8 @@ def test_every_route_of_a_legacy_match_answers_403_even_to_its_former_owner(worl
         db.execute("UPDATE matches SET status='LEGACY', owner_user_id=NULL WHERE id=?", (world.ids["match_id"],))
     before = snapshot(world.storage)
     for (method, path), route in OBJECT_ROUTES.items():
+        if route.kind == "team":
+            continue  # a team has no LEGACY state, and the owner still captains the world's team
         error = refused_as(world.owner.request(method, world.url(path), **route.valid()), 403, "NOT_A_MEMBER")
         assert error["details"] == {}
     # A repeated PUT of the id and the deletion of the match are refused too.
@@ -270,12 +294,48 @@ def test_a_missing_object_answers_404_with_its_own_code(world):
     before = snapshot(world.storage)
     for caller in (world.owner, world.stranger):
         for (method, path), route in OBJECT_ROUTES.items():
-            if (method, path) == ("PUT", "/v1/matches/{match_id}"):
-                continue  # a new id creates the match
+            if (method, path) in (("PUT", "/v1/matches/{match_id}"), ("PUT", "/v1/teams/{team_id}")):
+                continue  # a new id creates the match or the team
             url = world.url(path, **{name: missing for name in world.ids})
             error = refused_as(caller.request(method, url, **route.valid()), 404, NOT_FOUND[route.kind])
             assert error["code"] == NOT_FOUND[route.kind]
     assert snapshot(world.storage) == before
+
+
+def test_every_captain_route_answers_a_member_403_captain_only_and_changes_nothing(world):
+    captain_routes = {operation: route for operation, route in OBJECT_ROUTES.items() if route.role == CAPTAIN}
+    assert set(captain_routes) == {("PUT", "/v1/teams/{team_id}/settings"), ("PUT", "/v1/teams/{team_id}/seats")}
+    before = snapshot(world.storage)
+    for (method, path), route in captain_routes.items():
+        error = refused_as(world.member.request(method, world.url(path), **route.valid()), 403, "CAPTAIN_ONLY")
+        assert error["details"] == {}
+    # The member still reads the team, and the stranger is no member at all.
+    assert world.member.get(world.url("/v1/teams/{team_id}")).status_code == 200
+    for (method, path), route in captain_routes.items():
+        refused_as(world.stranger.request(method, world.url(path), **route.valid()), 403, "NOT_A_MEMBER")
+    assert snapshot(world.storage) == before
+
+
+def test_the_captain_gets_the_answer_a_stale_seats_body_hides_from_others(world):
+    # The walk's seats body is stale: only access stands between the member or the stranger and these numbers.
+    refused = world.owner.put(world.url("/v1/teams/{team_id}/seats"), json={"substituteSeats": 0})
+    error = refused_as(refused, 409, "SEATS_BELOW_HOLDERS")
+    assert error["details"] == {"seat": "SUBSTITUTE", "holders": 1, "seats": 0}
+
+
+def test_put_of_another_accounts_team_id_answers_409_team_id_taken_and_creates_nothing(world):
+    team_id = world.ids["team_id"]
+    before = snapshot(world.storage)
+    refused = world.stranger.put(f"/v1/teams/{team_id}", json={"name": "Başkasının Takımı"})
+    assert refused_as(refused, 409, "TEAM_ID_TAKEN")["details"] == {}
+    assert "Sahibin Takımı" not in refused.text
+    assert snapshot(world.storage) == before
+    # The member repeats the id and gets the team back, as its captain does.
+    assert world.member.put(f"/v1/teams/{team_id}", json=TEAM_BODY).status_code == 200
+    assert world.owner.put(f"/v1/teams/{team_id}", json=TEAM_BODY).status_code == 200
+    assert snapshot(world.storage) == before
+    # A malformed id is refused before anything is looked up.
+    refused_as(world.stranger.put("/v1/teams/NOT-A-UUID", json=TEAM_BODY), 422, "TEAM_ID_INVALID")
 
 
 def test_the_owner_reaches_every_reading_route(world):
