@@ -3,7 +3,8 @@
 B3 has one step: an unfinished upload that took no chunk for a day of server uptime is aborted and its
 bytes are deleted, and so is a verification that started a day of server uptime ago and never ended.
 Only the time this server runs counts: a phone can not send a chunk to a server that is off, and the
-owner's computer, which is the server, is switched off every night.
+owner's computer, which is the server, is switched off every night. It may also sleep instead: the
+process then keeps running, but no pass comes until the computer wakes, and no phone can reach it.
 
 The server keeps its own uptime clock in two tables. server_clock holds the last moment the server was
 seen running: every pass writes it, and so does a stop. A start (resume) records the time from that
@@ -12,6 +13,13 @@ minus every time off after that touch. The touch times themselves stay as the se
 them, because the 15-minute takeover of a dead verification reads finalize_started_at as well. After a
 crash or a power cut the last pass stands in for the stop, so the time off is about one sweep interval
 (a minute) longer than it was: an upload then stays a little longer, never shorter.
+
+A pass and a stop record a gap since the last clock write that is longer than MAX_PASS_GAP_SECONDS as
+time off too: the computer slept, or the clock jumped forward. A clock write also cuts every time off at
+the moment it writes, since a time off can not end later than now: one that does was written while the
+clock ran ahead. A clock that reads earlier than the last write (wrong at a start, or set back while the
+server runs) records no time off, and the write moves last_alive back with it. Uptime then counts by the
+clock again: an upload stays longer by at most the time the clock went back, never shorter, and still goes.
 
 A server that never wrote its clock (the first start of this version) can not tell how long it was off
 before the start, so it counts all of that time as time off: every unfinished upload then gets a full
@@ -34,6 +42,13 @@ log = logging.getLogger(__name__)
 # Both count only the time the server runs.
 IDLE_UPLOAD_SECONDS = 24 * 3600
 SWEEP_SECONDS = 60.0
+# The longest gap between two clock writes that still counts as uptime. A running server writes its clock
+# at every pass, a minute apart. A pass comes later when its two write transactions waited for the
+# database (up to 30 s each) or a step waited for the disk, so three intervals cover a slow pass. A longer
+# gap means that no pass could run: the computer slept, or the clock jumped forward. Recording a slow pass
+# as time off would only keep an upload a little longer; a nap shorter than this counts as uptime, and an
+# upload can then go that much early.
+MAX_PASS_GAP_SECONDS = 3 * SWEEP_SECONDS
 STOP_JOIN_SECONDS = 5.0
 THREAD_NAME = "volleystat-sweeper"
 
@@ -59,6 +74,13 @@ _FORGET = ("DELETE FROM server_downtimes WHERE started_at <= COALESCE((SELECT MI
            " UNION ALL SELECT finalize_started_at FROM uploads WHERE status = 'FINALIZING')), :now)")
 
 _ALIVE = "INSERT OR REPLACE INTO server_clock(id, last_alive) VALUES(1, :now)"
+_DOWN = "INSERT INTO server_downtimes(stopped_at, started_at) VALUES(?, ?)"
+
+# A time off can not end after now. One that does was written while the clock ran ahead: it would give
+# every upload touched before it that much more time, and _FORGET would never delete it. The clock write
+# cuts it at now, and deletes a time off that then ends before it began.
+_CUT = ("UPDATE server_downtimes SET started_at = :now WHERE started_at > :now",
+        "DELETE FROM server_downtimes WHERE stopped_at >= started_at")
 
 
 class Sweeper:
@@ -69,7 +91,8 @@ class Sweeper:
         self._connect = connect
         self._files = files
         # True once this process recorded the time off before its start. Until then it neither
-        # sweeps nor writes its clock: either would count the time off as uptime.
+        # sweeps nor writes its clock. Only a start records the whole time off: a pass records only a
+        # gap longer than MAX_PASS_GAP_SECONDS, and nothing when the server never wrote its clock.
         self._resumed = False
         self._stopping = threading.Event()
         self._thread: threading.Thread | None = None
@@ -110,28 +133,41 @@ class Sweeper:
         with self._connect(write=True) as db:
             row = db.execute("SELECT last_alive FROM server_clock WHERE id = 1").fetchone()
             stopped = 0.0 if row is None else row["last_alive"]
+            # A clock that reads earlier than the last write records nothing: a time off can not end
+            # before it began. The first pass cuts what the earlier clock leaves in the future.
             if stopped < moment:
-                db.execute("INSERT INTO server_downtimes(stopped_at, started_at) VALUES(?, ?)", (stopped, moment))
+                db.execute(_DOWN, (stopped, moment))
             db.execute(_FORGET, {"now": moment})
             db.execute(_ALIVE, {"now": moment})
         self._resumed = True
 
     def mark_alive(self, now: float | None = None) -> None:
-        """Write the moment this server was last seen running."""
+        """The clock write of a pass and of a stop, in one write transaction: cut every time off at `now`,
+        record a gap since the last write that is longer than MAX_PASS_GAP_SECONDS as time off, forget what
+        no unfinished upload needs, and write `now` as the moment this server was last seen running. A clock
+        that went back records nothing and moves last_alive back with it."""
         moment = time.time() if now is None else now
         with self._connect(write=True) as db:
+            row = db.execute("SELECT last_alive FROM server_clock WHERE id = 1").fetchone()
+            for statement in _CUT:
+                db.execute(statement, {"now": moment})
+            if row is not None and moment - row["last_alive"] > MAX_PASS_GAP_SECONDS:
+                db.execute(_DOWN, (row["last_alive"], moment))
+            db.execute(_FORGET, {"now": moment})
             db.execute(_ALIVE, {"now": moment})
 
     def run_once(self, now: float | None = None) -> dict[str, int]:
         """Write the clock, then run every step once, each in its own write transaction. A step that fails
         is logged and the next one still runs. Returns how many rows each step closed; a step that failed
-        is missing."""
+        is missing. A pass that could not write the clock runs no step and returns {}."""
         moment = time.time() if now is None else now
         try:
             self.mark_alive(moment)
         except Exception:
-            # The next start then counts a longer time off, so no upload goes too early.
-            log.exception("The sweep could not write the server clock")
+            # This pass could not record a sleep before it, so it closes nothing. The next clock write
+            # records the whole gap since the last one.
+            log.exception("The sweep could not write the server clock; this pass closes nothing")
+            return {}
         closed: dict[str, int] = {}
         for name, step in self._steps:
             try:

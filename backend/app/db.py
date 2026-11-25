@@ -181,9 +181,10 @@ CREATE TABLE IF NOT EXISTS server_clock (
   last_alive REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS server_downtimes (
-  -- last_alive before the start. 0 when the server had no clock yet: all time before the start is time off
+  -- last_alive before the start or before a gap of more than three minutes between two clock writes.
+  -- 0 when the server had no clock yet: all time before the start is time off
   stopped_at REAL NOT NULL,
-  -- The start that ended the time off
+  -- The start or the clock write that ended the time off. A clock write that reads an earlier time cuts it there
   started_at REAL NOT NULL
 );
 

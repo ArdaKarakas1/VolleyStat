@@ -22,6 +22,15 @@ NEW_COLUMNS = (("matches", "status"), ("matches", "owner_user_id"), ("uploads", 
 ACCOUNT_TABLES = ("sessions", "login_devices", "operator_codes", "users")
 
 
+@pytest.fixture
+def client(storage):
+    """The signed-in client without the background threads. The sweep thread writes its clock (server_clock)
+    when it starts, and a test that compares two dumps of the storage would see that write if it came
+    between them."""
+    with serve(storage, None) as signed_in:
+        yield signed_in
+
+
 def database(storage):
     return closing(sqlite3.connect(storage / "volleystat.sqlite3"))
 
