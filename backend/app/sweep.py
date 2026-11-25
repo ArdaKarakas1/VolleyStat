@@ -10,7 +10,8 @@ seen running: every pass writes it, and so does a stop. A start (resume) records
 moment to the start in server_downtimes. The idle time of an upload is the time since its last touch
 minus every time off after that touch. The touch times themselves stay as the server's clock wrote
 them, because the 15-minute takeover of a dead verification reads finalize_started_at as well. After a
-crash the last pass stands in for the stop, so the time off is at most a minute longer than it was.
+crash or a power cut the last pass stands in for the stop, so the time off is about one sweep interval
+(a minute) longer than it was: an upload then stays a little longer, never shorter.
 
 A server that never wrote its clock (the first start of this version) can not tell how long it was off
 before the start, so it counts all of that time as time off: every unfinished upload then gets a full

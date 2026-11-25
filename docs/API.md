@@ -144,7 +144,7 @@ Bütün hatalar bu zarfla döner. Tanımsız adres `NOT_FOUND`, yanlış yöntem
 ## Bilinen sınırlar
 
 - Tek süreç, tek bilgisayar. Eşzamanlı çok süreçli kullanım desteklenmez.
-- Sunucu istemcinin bıraktığı bir yüklemeyi ancak açık kaldığı toplam bir günün sonunda siler. Her gece kapanan bir sunucuda bu süre takvimde bir günden uzun sürer. O zamana kadar sunucu yüklemeyi istemcinin bildirdiği boyutla hesabın ve sunucunun sınırına sayar ve henüz gelmeyen baytlarını diskteki boş yerden düşer. İstemci yüklemeden daha önce vazgeçerse `DELETE /uploads/{id}` ya da `DELETE /matches/{id}` çağırır.
+- Sunucu istemcinin bıraktığı bir yüklemeyi ancak açık kaldığı toplam bir günün sonunda siler. Sunucu her gece kapanıyorsa yüklemeyi takvimde bir günden daha geç siler. O zamana kadar sunucu yüklemeyi istemcinin bildirdiği boyutla hesabın ve sunucunun sınırına sayar ve henüz gelmeyen baytlarını diskteki boş yerden düşer. İstemci yüklemeden daha önce vazgeçerse `DELETE /uploads/{id}` ya da `DELETE /matches/{id}` çağırır.
 - Sunucu boş disk yerini yükleme başlarken ve her parçada okur. Başka bir program diski bu arada doldurursa yükleme yarıda kalabilir.
 - `POST /matches` kullanan bir istemci yanıtı kaybederse sunucuda adresleyemediği bir maç bırakır. `PUT /matches/{id}` bu boşluğu kapatır ve Android uygulaması yalnız onu kullanır.
 - Sunucu silinen dosyanın diskteki bloklarının üzerine yazmaz. Dosya sistemi o blokları yeniden kullanana kadar bir disk kurtarma aracı video baytlarını bulabilir.
