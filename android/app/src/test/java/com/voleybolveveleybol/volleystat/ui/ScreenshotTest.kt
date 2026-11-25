@@ -83,6 +83,18 @@ import com.voleybolveveleybol.volleystat.ui.screens.ReviewScreen
 import com.voleybolveveleybol.volleystat.ui.screens.StatusScreen
 import com.voleybolveveleybol.volleystat.ui.screens.TeamRosterScreen
 import com.voleybolveveleybol.volleystat.ui.screens.TeamsScreen
+import com.voleybolveveleybol.volleystat.ui.screens.TeamCreateScreen
+import com.voleybolveveleybol.volleystat.ui.screens.TeamScreen
+import com.voleybolveveleybol.volleystat.ui.screens.TeamSeatsScreen
+import com.voleybolveveleybol.volleystat.TeamsUi
+import com.voleybolveveleybol.volleystat.data.TeamProblem
+import com.voleybolveveleybol.volleystat.model.Schedule
+import com.voleybolveveleybol.volleystat.model.Seat
+import com.voleybolveveleybol.volleystat.model.SeatCount
+import com.voleybolveveleybol.volleystat.model.SeatCounts
+import com.voleybolveveleybol.volleystat.model.TeamInfo
+import com.voleybolveveleybol.volleystat.model.TeamMember
+import com.voleybolveveleybol.volleystat.model.TeamRole
 import com.voleybolveveleybol.volleystat.ui.screens.VideoCheckScreen
 import com.voleybolveveleybol.volleystat.ui.screens.VideoSourceScreen
 import com.voleybolveveleybol.volleystat.ui.screens.WelcomeScreen
@@ -127,7 +139,35 @@ class ScreenshotTest {
     private val uploading = match("m1", check = null, session = UploadSession("abc", "srv", "up", 533_000_000))
     private val reviewing = match("m2", analysis = AnalysisSummary("j1", AnalysisSummary.NEEDS_REVIEW, mock = true, reviewOpen = 11, reviewTotal = 18), name = "Hazırlık Maçı")
     private val finished = match("m3", analysis = AnalysisSummary("j2", AnalysisSummary.COMPLETE, mock = false, reviewOpen = 0, reviewTotal = 42))
+    private fun teamMember(id: String, name: String, seat: Seat, jersey: Int?, role: TeamRole = TeamRole.MEMBER, joined: String = "2026-11-20T10:00:00Z") =
+        TeamMember(id, name, jersey, role, seat, joined)
+
+    private val squad = listOf(
+        teamMember("u1", "Deniz Kaptan", Seat.STARTER, 7, TeamRole.CAPTAIN),
+        teamMember("u2", "Ece Yıldız", Seat.STARTER, 9),
+        teamMember("u3", "Fatma Er", Seat.STARTER, 11),
+        teamMember("u4", "Gül Ak", Seat.STARTER, null, joined = "2026-11-22T18:00:00Z"),
+        teamMember("u5", "Hale Su", Seat.SUBSTITUTE, 14, joined = "2026-11-22T19:00:00Z"),
+    )
+
+    /** A team as the server shows it; the seat counts follow [members]. */
+    private fun serverTeam(
+        id: String, name: String, role: TeamRole = TeamRole.CAPTAIN, members: List<TeamMember> = squad, substitutes: Int = 2, newJoins: Int? = 2,
+        schedule: Schedule? = Schedule(2, "20:00"), tag: String = "K7Q2",
+    ): TeamInfo {
+        fun count(seats: Int, seat: Seat) = members.count { it.seat == seat }.let { SeatCount(seats, it, seats - it, 0) }
+        return TeamInfo(
+            id, "p-$id", name, tag, schedule, null, role, Seat.STARTER, 7, if (role == TeamRole.CAPTAIN) newJoins else null, members,
+            SeatCounts(count(6, Seat.STARTER), count(substitutes, Seat.SUBSTITUTE)), if (role == TeamRole.CAPTAIN) 0 else null,
+        )
+    }
+
+    private val captainTeam = serverTeam("s1", "Kuzey Spor")
+    private val memberTeam = serverTeam("s2", "Güney Gençlik", role = TeamRole.MEMBER, tag = "M3XR", schedule = null)
+    private val aloneTeam = serverTeam("s3", "Batı Voleybol", members = squad.take(1), newJoins = 0, tag = "B9TZ")
+
     private val state = AppUiState(
+        serverTeams = TeamsUi(teams = listOf(captainTeam, memberTeam)),
         matches = listOf(uploading, reviewing, finished), teams = teams, settings = Settings(welcomeSeen = true, accountSeen = true, legacyHandled = true),
         account = AccountUi(user = AccountUser("user-1", "deneme", "Deneme")),
         upload = UploadProgress("m1", UploadPhase.SENDING, 533_000_000, 1_240_000_000, running = true),
@@ -190,11 +230,51 @@ class ScreenshotTest {
         shot("maclar_erisim_yok") { MatchesScreen(refused, {}, {}) }
         shot("maclar_erisim_yok_koyu", dark = true) { MatchesScreen(refused, {}, {}) }
         shotOn("kucuk_buyuk_yazi_maclar_erisim_yok", "+w320dp-h568dp-port", fontScale = 1.5f) { MatchesScreen(refused, {}, {}) }
-        shot("takimlar") { TeamsScreen(teams, { true }, {}) }
         shot("takim_kadro") { TeamRosterScreen(teams[0], { _, _ -> true }, {}, {}, {}) }
         shot("profil") { ProfileScreen(state, "0.10.0", {}, {}, {}, { true }) }
         // The privacy lines sit below the first screen; a tall window keeps all of them in one picture.
         shotOn("profil_gizlilik", "+w411dp-h2600dp-port") { ProfileScreen(state, "0.10.0", {}, {}, {}, { true }) }
+    }
+
+    /**
+     * Slice B4 (plan P6): the Teams tab, Takım Kur, the team screen and As ve Yedek Yerleri with their loading, empty, error
+     * and full states (design 10.9).
+     */
+    @Test fun s16_s18_teams() {
+        val list = TeamsUi(teams = listOf(captainTeam, memberTeam, aloneTeam))
+        shot("16_takimlar") { TeamsScreen(list, {}, {}, {}) }
+        shot("16_takimlar_bos") { TeamsScreen(TeamsUi(teams = emptyList()), {}, {}, {}) }
+        shot("16_takimlar_yukleniyor") { TeamsScreen(TeamsUi(loading = true), {}, {}, {}) }
+        shot("16_takimlar_eski_sunucu") { TeamsScreen(TeamsUi(loadProblem = TeamProblem.ServerOutdated), {}, {}, {}) }
+        shot("16_takimlar_baglanti_yok") { TeamsScreen(TeamsUi(loadProblem = TeamProblem.Unreachable), {}, {}, {}) }
+        shot("16_takimlar_koyu", dark = true) { TeamsScreen(list, {}, {}, {}) }
+        shotOn("kucuk_buyuk_yazi_16_takimlar", "+w320dp-h900dp-port", fontScale = 1.5f) { TeamsScreen(list, {}, {}, {}) }
+
+        // A tall window keeps Takım Kur's whole form in one picture.
+        shotOn("16b_takim_kur", "+w411dp-h1400dp-port") { TeamCreateScreen(busy = false, problem = null, onCreate = {}, onEdit = {}, onBack = {}) }
+        shotOn("16b_takim_kur_koyu", "+w411dp-h1400dp-port", dark = true) { TeamCreateScreen(busy = false, problem = null, onCreate = {}, onEdit = {}, onBack = {}) }
+        shotOn("16b_takim_kur_sinir", "+w411dp-h1400dp-port") {
+            TeamCreateScreen(busy = false, problem = TeamProblem.Limit(com.voleybolveveleybol.volleystat.data.TeamLimitScope.CAPTAIN, 3), onCreate = {}, onEdit = {}, onBack = {})
+        }
+        shotOn("16b_takim_kur_bekle", "+w411dp-h1400dp-port") { TeamCreateScreen(busy = false, problem = TeamProblem.TooMany(5400), onCreate = {}, onEdit = {}, onBack = {}) }
+
+        shotOn("17_takim", "+w411dp-h1200dp-port") { TeamScreen(captainTeam, loading = false, problem = null, onSeats = {}, onRetry = {}, onBack = {}) }
+        shotOn("17_takim_uye", "+w411dp-h1200dp-port") { TeamScreen(memberTeam, loading = false, problem = null, onSeats = {}, onRetry = {}, onBack = {}) }
+        shot("17_takim_tek") { TeamScreen(aloneTeam, loading = false, problem = null, onSeats = {}, onRetry = {}, onBack = {}) }
+        shot("17_takim_yukleniyor") { TeamScreen(null, loading = true, problem = null, onSeats = {}, onRetry = {}, onBack = {}) }
+        shot("17_takim_yok") { TeamScreen(null, loading = false, problem = TeamProblem.Gone, onSeats = {}, onRetry = {}, onBack = {}) }
+        shotOn("17_takim_koyu", "+w411dp-h1200dp-port", dark = true) { TeamScreen(captainTeam, loading = false, problem = null, onSeats = {}, onRetry = {}, onBack = {}) }
+        shotOn("kucuk_buyuk_yazi_17_takim", "+w320dp-h1600dp-port", fontScale = 1.5f) { TeamScreen(captainTeam, loading = false, problem = null, onSeats = {}, onRetry = {}, onBack = {}) }
+
+        shotOn("18a_as_yedek", "+w411dp-h1200dp-port") { TeamSeatsScreen(captainTeam, busy = false, problem = null, onSave = { _, _ -> }, onEdit = {}, onBack = {}) }
+        shot("18a_as_yedek_tek") { TeamSeatsScreen(aloneTeam, busy = false, problem = null, onSave = { _, _ -> }, onEdit = {}, onBack = {}) }
+        shotOn("18a_as_yedek_ret", "+w411dp-h1400dp-port") {
+            TeamSeatsScreen(captainTeam, busy = false, problem = TeamProblem.SeatsBelowHolders(Seat.SUBSTITUTE, 3, 2, movedStarterDown = true), onSave = { _, _ -> }, onEdit = {}, onBack = {})
+        }
+        shotOn("18a_as_yedek_koyu", "+w411dp-h1200dp-port", dark = true) { TeamSeatsScreen(captainTeam, busy = false, problem = null, onSave = { _, _ -> }, onEdit = {}, onBack = {}) }
+        shotOn("kucuk_buyuk_yazi_18a_as_yedek", "+w320dp-h1800dp-port", fontScale = 1.5f) {
+            TeamSeatsScreen(captainTeam, busy = false, problem = null, onSave = { _, _ -> }, onEdit = {}, onBack = {})
+        }
     }
 
     @Test fun s03_s04_s05_newMatch() {

@@ -102,7 +102,10 @@ class JourneyTest {
     @Test fun tabsOpenTheirScreens() {
         passWelcome()
         tap(R.string.nav_teams)
-        app.onNodeWithText(text(R.string.teams_new_label)).assertIsDisplayed()
+        // Slice B4: the tab lists the server's teams, which arrive from GET /teams off the main thread (plan C4).
+        waitFor(text(R.string.teams_empty_title))
+        app.onNodeWithText(text(R.string.teams_empty_title)).assertIsDisplayed()
+        app.onNode(hasClickAction() and hasText(text(R.string.action_create_team))).assertIsDisplayed()
         tap(R.string.nav_profile)
         app.onNodeWithText(text(R.string.profile_today)).assertIsDisplayed()
         tap(R.string.nav_matches)

@@ -43,6 +43,12 @@ class AccountStandIn : AutoCloseable {
      */
     @Volatile var signup: String? = "OPEN"
 
+    /**
+     * The teams GET /teams answers with (slice B4), whatever the session: the screens that walk the whole app read the list
+     * on Home, and a session the stand-in does not know must not end there. Empty by default.
+     */
+    @Volatile var teams: org.json.JSONArray = org.json.JSONArray()
+
     /** Routes as "METHOD /path" that answer this way instead of as the stand-in would, while they are in here. */
     val answers = ConcurrentHashMap<String, () -> MockResponse>()
 
@@ -131,6 +137,7 @@ class AccountStandIn : AutoCloseable {
                     ok(JSONObject().put("user", user(signedIn)))
                 }
             }
+            "GET /teams" -> ok(JSONObject().put("teams", teams))
             "POST /me/delete" -> when {
                 signedIn == null -> refuse(401, "AUTH_REQUIRED")
                 body.getString("password") != signedIn.password -> refuse(403, "PASSWORD_WRONG")

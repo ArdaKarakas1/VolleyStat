@@ -375,22 +375,30 @@ fun SelectCard(selected: Boolean, icon: Int, title: String, subtitle: String, on
     }
 }
 
-/** Two or three mutually exclusive options side by side. */
+/** Two or more mutually exclusive options side by side. An option in [disabled] shows and takes no tap. */
 @Composable
-fun SegmentedChoice(options: List<String>, selectedIndex: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
+fun SegmentedChoice(options: List<String>, selectedIndex: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier, disabled: Set<Int> = emptySet()) {
     val scheme = MaterialTheme.colorScheme
     Row(
         modifier.fillMaxWidth().clip(MaterialTheme.shapes.medium).border(1.dp, scheme.outline, MaterialTheme.shapes.medium).selectableGroup(),
     ) {
         options.forEachIndexed { index, label ->
             val selected = index == selectedIndex
+            val enabled = index !in disabled
             Box(
                 Modifier.weight(1f).heightIn(min = Dimens.touchTarget)
                     .background(if (selected) scheme.primary else scheme.surface)
-                    .selectable(selected = selected, role = Role.RadioButton, onClick = { onSelect(index) }),
+                    .selectable(selected = selected, enabled = enabled, role = Role.RadioButton, onClick = { onSelect(index) }),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(label, style = MaterialTheme.typography.labelLarge, color = if (selected) scheme.onPrimary else scheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    label, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    color = when {
+                        selected -> scheme.onPrimary
+                        enabled -> scheme.onSurface
+                        else -> scheme.onSurface.copy(alpha = 0.38f)
+                    },
+                )
             }
         }
     }

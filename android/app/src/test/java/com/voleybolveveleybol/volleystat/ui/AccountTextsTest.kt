@@ -13,6 +13,9 @@ import com.voleybolveveleybol.volleystat.ui.screens.AccountAction
 import com.voleybolveveleybol.volleystat.ui.screens.accountProblemText
 import com.voleybolveveleybol.volleystat.ui.screens.resolve
 import com.voleybolveveleybol.volleystat.ui.screens.waitText
+import com.voleybolveveleybol.volleystat.ui.screens.teamProblemText
+import com.voleybolveveleybol.volleystat.data.TeamProblem
+import com.voleybolveveleybol.volleystat.model.TeamRules
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -184,6 +187,65 @@ class AccountTextsTest {
         assertEquals("a button label", "Kayıt Kodum Var", label)
         // The text of an unread health names the button the start screen shows.
         assertTrue(string(R.string.start_body_any, string(R.string.action_create_account)).contains(string(R.string.action_create_account)))
+    }
+
+    /**
+     * Slice B4 (plan D6): the text of 422 NAME_INVALID states exactly the rule the server checks, with the bounds the app
+     * shares with the server (TeamRules, tied to the server by TeamE2eTest). The server takes any other character ("Kuzey
+     * Spor & Co." passes), so the text names no character class as the only allowed one.
+     */
+    @Test fun theTeamNameRuleNamesTheServersBoundsAndNoCharacterClassAsTheOnlyOne() {
+        val rule = string(R.string.team_name_invalid, TeamRules.NAME_MIN, TeamRules.NAME_MAX)
+        assertEquals(rule, teamProblemText(TeamProblem.NameInvalid).resolve(context))
+        assertTrue(rule, rule.contains("2") && rule.contains("40"))
+        assertTrue(rule, rule.contains("en az bir harf ya da rakam"))
+        listOf("yalnız", "sadece").forEach { assertFalse("$it in: $rule", rule.contains(it, ignoreCase = true)) }
+        listOf(" - ", " – ", " — ", "--", "olabilir.").forEach { assertFalse(rule, rule.contains(it)) }
+        assertFalse(rule, Regex("%[0-9]").containsMatchIn(rule))
+    }
+
+    /** Slice B4: every text of the team screens passes the checks of every account text, and the seat texts state the server's numbers. */
+    @Test fun theTeamTextsJoinNoClausesWithADashAndNameNoCode() {
+        val sentences = listOf(
+            string(R.string.teams_empty_body, string(R.string.action_create_team)), string(R.string.team_new_seats_body),
+            string(R.string.team_limit_captain, 3), string(R.string.team_limit_member, 20), string(R.string.team_wait_create, "2 dakika"),
+            string(R.string.team_seats_body), string(R.string.lineup_body, string(R.string.action_save)), string(R.string.seats_invalid),
+            string(R.string.seats_invalid_captain), string(R.string.seats_below_starter, 7, 6), string(R.string.seats_below_substitute, 3, 2),
+            string(R.string.seats_raise_or_swap_hint), string(R.string.seats_swap_hint), string(R.string.team_starter_free_hint, 1, 2),
+            string(R.string.team_no_access), string(R.string.team_gone), string(R.string.team_captain_only), string(R.string.teams_server_older),
+            string(R.string.team_time_invalid),
+        )
+        val labels = listOf(
+            string(R.string.team_new_my_seat), string(R.string.seat_starter), string(R.string.seat_substitute), string(R.string.seats_title),
+            string(R.string.team_recent_joins, 2), string(R.string.team_starters), string(R.string.team_substitutes), string(R.string.action_create_team),
+            string(R.string.team_seat_line, 5, 6, 1, 2), string(R.string.team_role_captain), string(R.string.team_role_member),
+            string(R.string.team_new_joins_a11y, 2), string(R.string.field_team_name), string(R.string.field_substitute_seats),
+            string(R.string.field_schedule_day), string(R.string.field_schedule_time), string(R.string.team_schedule_none),
+            string(R.string.field_my_jersey), string(R.string.action_save), string(R.string.teams_loading), string(R.string.team_loading),
+            string(R.string.teams_empty_title), string(R.string.team_schedule, "Salı", "20:00"),
+        )
+        sentences.forEach { shown -> assertTrue(shown, shown.isNotBlank() && shown.endsWith(".")) }
+        (sentences + labels).forEach { shown ->
+            listOf(" - ", " – ", " — ", "--", "olabilir.").forEach { assertFalse(shown, shown.contains(it)) }
+            listOf("TEAM", "SEATS", "CAPTAIN", "NOT_FOUND", "STARTER", "SUBSTITUTE", "TOO_MANY").forEach { assertFalse(shown, shown.contains(it)) }
+            assertFalse(shown, Regex("%[0-9]").containsMatchIn(shown))
+        }
+        // The fixed numbers of the texts are the server's (design 2.3; backend/app/teams.py).
+        assertTrue(string(R.string.team_new_seats_body).startsWith("Bir takımda her zaman ${TeamRules.STARTERS} as yeri olur."))
+        assertTrue(string(R.string.team_new_seats_body).contains("yedek yeri sayısını ${TeamRules.DEFAULT_SUBSTITUTES} olarak"))
+        listOf(R.string.team_new_seats_body, R.string.team_seats_body, R.string.seats_invalid).forEach {
+            assertTrue(string(it), string(it).contains("0 ile ${TeamRules.SUBSTITUTES_MAX} arasında"))
+        }
+        // The team texts read the server's limits and waits through their arguments.
+        assertEquals(string(R.string.team_wait_create, "2 dakika"), teamProblemText(TeamProblem.TooMany(120)).resolve(context))
+        assertEquals(string(R.string.team_captain_only), teamProblemText(TeamProblem.CaptainOnly).resolve(context))
+        assertEquals(string(R.string.teams_server_older), teamProblemText(TeamProblem.ServerOutdated).resolve(context))
+        assertEquals(string(R.string.net_no_answer), teamProblemText(TeamProblem.Unreachable).resolve(context))
+        // Any other answer reads as the account calls read it: a refusal changed nothing, a 5xx leaves the outcome open.
+        assertEquals(string(R.string.account_refused), teamProblemText(TeamProblem.Failed(422, "VALIDATION_ERROR")).resolve(context))
+        assertEquals(string(R.string.account_outcome_unknown), teamProblemText(TeamProblem.Failed(500, "INTERNAL")).resolve(context))
+        assertEquals(string(R.string.account_outcome_unknown_on_the_way), teamProblemText(TeamProblem.Failed(502, "HTTP_502")).resolve(context))
+        assertEquals(string(R.string.account_unexpected_change_signed_in), teamProblemText(TeamProblem.Failed(200, "UNEXPECTED_ANSWER")).resolve(context))
     }
 
     /**

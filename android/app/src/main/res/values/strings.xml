@@ -38,7 +38,6 @@
     <string name="home_new_match_body">Maç kaydet veya video yükle</string>
     <string name="home_matches">Maçlarım</string>
     <string name="home_teams">Takımlarım</string>
-    <string name="home_players">Oyuncular</string>
     <string name="home_reports">Raporlar</string>
     <plurals name="count_matches">
         <item quantity="one">%1$d maç</item>
@@ -48,17 +47,12 @@
         <item quantity="one">%1$d takım</item>
         <item quantity="other">%1$d takım</item>
     </plurals>
-    <plurals name="count_players">
-        <item quantity="one">%1$d oyuncu</item>
-        <item quantity="other">%1$d oyuncu</item>
-    </plurals>
     <plurals name="count_reports">
         <item quantity="one">%1$d rapor</item>
         <item quantity="other">%1$d rapor</item>
     </plurals>
     <string name="home_no_matches">Henüz maç yok</string>
     <string name="home_no_teams">Henüz takım yok</string>
-    <string name="home_no_players">Henüz oyuncu yok</string>
     <string name="home_no_reports">Henüz rapor yok</string>
     <string name="home_section_now">Devam edenler</string>
     <string name="home_draft_title">Yarım kalan maç kurulumu</string>
@@ -85,9 +79,10 @@
     <string name="kind_training">Antrenman</string>
     <string name="kind_official">Resmi</string>
 
-    <!-- Teams and rosters -->
+    <!-- Teams and rosters. The Teams tab lists the teams the server holds (slice B4); the local rosters of the personal flow
+         stay in New Match's team sheet and roster/{id}. %1$s of teams_empty_body is the label of action_create_team. -->
     <string name="teams_empty_title">Henüz takım yok</string>
-    <string name="teams_empty_body">Takımı bir kez kaydedersin. Sonraki maçlarda listeden seçersin.</string>
+    <string name="teams_empty_body">Bu hesap sunucuda hiçbir takımın üyesi değil. %1$s düğmesiyle yeni bir takım kurabilirsin.</string>
     <string name="teams_new_label">Yeni takım adı</string>
     <string name="teams_add_error">Takım adı en az iki harf olmalı ve listede bulunmamalı.</string>
     <string name="roster_title">Kadro</string>
@@ -101,6 +96,65 @@
     <string name="roster_unnamed">Adsız oyuncu</string>
     <string name="team_delete_title">Bu takımı sileyim mi?</string>
     <string name="team_delete_body">Uygulama %1$s takımını ve kadrosunu bu telefondan siler. Eski maçlar listede kalır.</string>
+
+    <!-- The server's teams (slice B4; design 2.12 F, 10.1 and 10.7; plan P6). The texts from the design are verbatim: team_new_seats_body,
+         team_new_my_seat with seat_starter and seat_substitute, team_limit_captain, team_wait_create, seats_title, team_seats_body (its
+         first three sentences, plan U5), lineup_body, seats_invalid, seats_invalid_captain, seats_below_starter, seats_below_substitute,
+         seats_raise_or_swap_hint, seats_swap_hint, team_starter_free_hint, team_recent_joins, team_starters, team_substitutes and
+         action_create_team. The others are new proposals of the plan (U7). The numbers 6, 2 and 0 to 6 are the server's (TeamRules). -->
+    <string name="action_create_team">Takım Kur</string>
+    <string name="action_save">Kaydet</string>
+    <string name="teams_loading">Uygulama takımları alıyor</string>
+    <string name="team_loading">Uygulama takımı alıyor</string>
+    <!-- 404 NOT_FOUND or 405 on the team routes: a server before 0.10. -->
+    <string name="teams_server_older">Sunucunun sürümü bu uygulamadan eski. Uygulama bu sunucuda takım kuramaz ve takımları gösteremez.</string>
+    <!-- The row of a team: taken starter seats of the starter seats, taken substitute seats of the substitute seats, by the server's numbers. -->
+    <string name="team_seat_line">As yeri %1$d/%2$d · Yedek yeri %3$d/%4$d</string>
+    <string name="team_role_captain">Kaptan</string>
+    <string name="team_role_member">Üye</string>
+    <!-- The content description of the new-member badge, on the Teams tab and on a team's row. -->
+    <string name="team_new_joins_a11y">%1$d yeni üye</string>
+    <!-- %1$s is a weekday ("Salı"), %2$s the time ("20:00"). -->
+    <string name="team_schedule">%1$s günleri saat %2$s</string>
+    <string name="field_team_name">Takım adı</string>
+    <string name="field_substitute_seats">Yedek yeri sayısı</string>
+    <string name="field_schedule_day">Maç günü</string>
+    <string name="field_schedule_time">Maç saati</string>
+    <string name="team_schedule_none">Yok</string>
+    <string name="field_my_jersey">Forma numaran</string>
+    <string name="team_time_invalid">Saat 00:00 ile 23:59 arasında olmalı.</string>
+    <string name="team_new_seats_body">Bir takımda her zaman 6 as yeri olur. Uygulama yedek yeri sayısını 2 olarak doldurdu. Yedek yeri sayısını 0 ile 6 arasında seçebilirsin.</string>
+    <string name="team_new_my_seat">Senin yerin</string>
+    <string name="seat_starter">As</string>
+    <string name="seat_substitute">Yedek</string>
+    <!-- 422 NAME_INVALID. %1$d and %2$d are TeamRules.NAME_MIN and NAME_MAX, the bounds the server checks (plan U9, D6). The server
+         takes any other character, so the text names no character class as the only allowed one. -->
+    <string name="team_name_invalid">Takım adı %1$d ile %2$d karakter arasında olmalı, en az bir harf ya da rakam içermeli ve satır sonu, sekme ya da görünmez bir karakter içermemeli.</string>
+    <!-- 409 TEAM_LIMIT_REACHED on Takım Kur. %1$d is details.limit. -->
+    <string name="team_limit_captain">En çok %1$d takımın kaptanı olabilirsin. Yeni bir takım kurmak için önce bir takımın kaptanlığını devredebilir ya da bir takımı silebilirsin.</string>
+    <string name="team_limit_member">En çok %1$d takımın üyesi olabilirsin. Yeni bir takım kurmak için önce bir takımdan ayrılabilirsin.</string>
+    <!-- 429 TOO_MANY_ATTEMPTS, scope TEAMS. %1$s is the server's wait, as wait_seconds or wait_minutes write it. -->
+    <string name="team_wait_create">Sunucu bu hesaptan son bir günde çok sayıda yeni takım aldı ve yeni takım kurmayı %1$s süreyle durdurdu.</string>
+    <string name="team_no_access">Sunucu bu takımı artık bu hesaba göstermiyor.</string>
+    <string name="team_gone">Bu takım artık sunucuda yok.</string>
+    <string name="team_captain_only">Sunucu bu değişikliği yalnız takımın kaptanından kabul eder. Bu hesap şu an takımın kaptanı değil.</string>
+    <!-- The team screen. team_starter_free_hint: %1$d free starter seats, %2$d substitutes; shown to the captain while nobody waits. -->
+    <string name="team_starters">Aslar</string>
+    <string name="team_substitutes">Yedekler</string>
+    <string name="team_recent_joins">Son katılanlar · %1$d yeni üye</string>
+    <string name="team_starter_free_hint">Takımda %1$d boş as yeri ve %2$d yedek oyuncu var. İstersen bir yedek oyuncuyu as yapabilirsin.</string>
+    <!-- As ve Yedek Yerleri. %1$s of lineup_body is the label of action_save. -->
+    <string name="seats_title">As ve Yedek Yerleri</string>
+    <string name="team_seats_body">Bir takımda her zaman 6 as yeri olur. Yedek yeri sayısını 0 ile 6 arasında seçebilirsin. Bu sayılar senin yerini de içerir.</string>
+    <string name="lineup_body">Bir oyuncuyu as ya da yedek yapabilirsin. %1$s düğmesine dokununca sunucu yeni dağılımı yer sayılarıyla birlikte kontrol eder.</string>
+    <!-- 422 SEATS_INVALID by details.reason; 409 SEATS_BELOW_HOLDERS by details.seat (%1$d holders after the change, %2$d seats). A hint
+         follows a substitute refusal of a call that moved a starter down: raise or swap while details.holders fits 6, else swap (S8). -->
+    <string name="seats_invalid">Bir takımda yedek yeri sayısı 0 ile 6 arasında olur.</string>
+    <string name="seats_invalid_captain">Yedek yeri yokken sen yedek olamazsın. Yedek yeri sayısını artırabilir ya da as yerini seçebilirsin.</string>
+    <string name="seats_below_starter">Bu değişiklikle takımda %1$d as oyuncu olur ama yalnız %2$d as yeri var. Bir yedeği as yapmak için bir as oyuncuyu da yedek yapıp birlikte kaydedebilirsin.</string>
+    <string name="seats_below_substitute">Bu değişiklikle takımda %1$d yedek oyuncu olur ama yalnız %2$d yedek yeri var. Yedek yeri sayısı yedek oyuncu sayısından az olamaz.</string>
+    <string name="seats_raise_or_swap_hint">Bir as oyuncuyu yedek yapmak için yedek yeri sayısını artırabilir ya da bir yedeği as yapıp birlikte kaydedebilirsin.</string>
+    <string name="seats_swap_hint">Bir as oyuncuyu yedek yapmak için bir yedeği as yapıp birlikte kaydedebilirsin.</string>
 
     <!-- 03 Match create -->
     <string name="match_new_title">Yeni Maç</string>

@@ -10,6 +10,7 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithText
@@ -297,8 +298,38 @@ class AccountFlowTest {
         blocker.delete()
         button(R.string.legacy_move).performClick()
         waitFor(greeting("Ali Yılmaz"))
-        tap(R.string.nav_teams)
+        // Slice B4: the local rosters left the Teams tab for New Match's team sheet (design 10.1, roster/{id}).
+        compose.onNodeWithText(text(R.string.home_new_match_body)).performClick()
+        tap(R.string.action_continue)
+        compose.onAllNodesWithText(text(R.string.match_team_pick)).onFirst().performClick()
         waitFor("Eski Takım")
+    }
+
+    /**
+     * Slice B4 (plan D2): every login ends on Home, and Home reads the teams, so the Teams tab carries the captain's
+     * badge before the user ever opens it.
+     */
+    @Test fun theTeamsTabCarriesTheBadgeBeforeItWasOpened() {
+        TestAccounts.device(context, Settings(welcomeSeen = true, accountSeen = true, legacyHandled = true))
+        standIn.add("ali", "Ali Yılmaz", PASSWORD)
+        fun member(id: String, name: String, role: String, joined: String) = org.json.JSONObject().put("userId", id).put("displayName", name)
+            .put("jersey", org.json.JSONObject.NULL).put("role", role).put("seat", "STARTER").put("joinedAt", joined)
+        fun count(seats: Int, taken: Int) = org.json.JSONObject().put("seats", seats).put("taken", taken).put("left", seats - taken).put("deciding", 0)
+        standIn.teams = org.json.JSONArray().put(
+            org.json.JSONObject().put("id", "t1").put("poolId", "p1").put("name", "Kuzey Spor").put("tag", "K7Q2").put("schedule", org.json.JSONObject.NULL)
+                .put("logo", org.json.JSONObject.NULL).put("myRole", "CAPTAIN").put("mySeat", "STARTER").put("myJersey", org.json.JSONObject.NULL).put("newJoins", 1)
+                .put("members", org.json.JSONArray().put(member("u-1", "Ali Yılmaz", "CAPTAIN", "2026-11-20T10:00:00Z")).put(member("u-2", "Ece", "MEMBER", "2026-11-21T10:00:00Z")))
+                .put("seats", org.json.JSONObject().put("starter", count(6, 2)).put("substitute", count(2, 0)).put("waiting", 0)).put("invite", org.json.JSONObject.NULL),
+        )
+        launch()
+        logIn("ali")
+        waitFor(greeting("Ali Yılmaz"))
+        val badge = text(R.string.team_new_joins_a11y, 1)
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription(badge, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+        assertTrue("Home read the teams", standIn.requests.any { it.first == "GET /teams" && it.second?.startsWith("Bearer ") == true })
+        assertFalse("the Teams tab was never opened", shown(text(R.string.teams_empty_title)) || shown("Kuzey Spor"))
+        // Home counts the team the server holds.
+        assertTrue(shown(context.resources.getQuantityString(R.plurals.count_teams, 1, 1)))
     }
 
     @Test fun aRefusedLoginWhoseAnswerArrivesAfterTheScreenWasRecreatedIsStillShown() {

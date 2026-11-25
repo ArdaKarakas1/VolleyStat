@@ -90,7 +90,7 @@ import com.voleybolveveleybol.volleystat.ui.theme.LocalVsColors
 
 /** A top-level tab: title at the top, scrolling content, system bars respected. */
 @Composable
-private fun TabScaffold(content: @Composable ColumnScope.() -> Unit) {
+internal fun TabScaffold(content: @Composable ColumnScope.() -> Unit) {
     Scaffold(contentWindowInsets = WindowInsets.safeDrawing, containerColor = MaterialTheme.colorScheme.background) { insets ->
         Column(
             Modifier.fillMaxSize().padding(insets).verticalScroll(rememberScrollState())
@@ -204,7 +204,9 @@ fun HomeScreen(
     // The name the account gave the server. The phone keeps no name of its own.
     val name = state.account.user?.displayName?.trim().orEmpty()
     val reports = state.matches.count { it.status == MatchStatus.REPORT_READY || it.status == MatchStatus.NEEDS_REVIEW }
-    val players = state.teams.sumOf { it.players.size }
+    // The teams the server holds (slice B4). While the list is unread, or its read failed, the row names no count: "Henüz
+    // takım yok" would be false for an account with teams (plan D2).
+    val serverTeams = state.serverTeams.teams
     // What needs the user now: unfinished uploads, rejected files, analysis in progress, open reviews.
     val attention = state.matches.filter { it.status != MatchStatus.REPORT_READY && it.status != MatchStatus.FILE_ACCEPTED }
     TabScaffold {
@@ -238,11 +240,15 @@ fun HomeScreen(
             ListRow(R.drawable.ic_calendar_today, stringResource(R.string.home_matches),
                 if (state.matches.isEmpty()) stringResource(R.string.home_no_matches) else pluralStringResource(R.plurals.count_matches, state.matches.size, state.matches.size), onOpenMatches)
             RowDivider()
-            ListRow(R.drawable.ic_apparel, stringResource(R.string.home_teams),
-                if (state.teams.isEmpty()) stringResource(R.string.home_no_teams) else pluralStringResource(R.plurals.count_teams, state.teams.size, state.teams.size), onOpenTeams)
-            RowDivider()
-            ListRow(R.drawable.ic_groups, stringResource(R.string.home_players),
-                if (players == 0) stringResource(R.string.home_no_players) else pluralStringResource(R.plurals.count_players, players, players), onOpenTeams)
+            ListRow(
+                R.drawable.ic_apparel, stringResource(R.string.home_teams),
+                when {
+                    serverTeams == null -> null
+                    serverTeams.isEmpty() -> stringResource(R.string.home_no_teams)
+                    else -> pluralStringResource(R.plurals.count_teams, serverTeams.size, serverTeams.size)
+                },
+                onOpenTeams,
+            )
             RowDivider()
             ListRow(R.drawable.ic_bar_chart, stringResource(R.string.home_reports),
                 if (reports == 0) stringResource(R.string.home_no_reports) else pluralStringResource(R.plurals.count_reports, reports, reports), onOpenMatches)
@@ -265,37 +271,6 @@ fun MatchesScreen(state: AppUiState, onNewMatch: () -> Unit, onOpenMatch: (Match
             }
         } else {
             state.matches.forEach { match -> MatchCard(match, state.upload, onClick = { onOpenMatch(match) }) }
-        }
-    }
-}
-
-@Composable
-fun TeamsScreen(teams: List<Team>, onAddTeam: (String) -> Boolean, onOpenTeam: (Team) -> Unit) {
-    var newName by rememberSaveable { mutableStateOf("") }
-    var failed by rememberSaveable { mutableStateOf(false) }
-    TabScaffold {
-        ScreenTitle(stringResource(R.string.nav_teams))
-        VsCard {
-            OutlinedTextField(
-                value = newName, onValueChange = { newName = it.take(80); failed = false },
-                label = { Text(stringResource(R.string.teams_new_label)) },
-                isError = failed,
-                supportingText = if (failed) ({ Text(stringResource(R.string.teams_add_error)) }) else null,
-                singleLine = true, modifier = Modifier.fillMaxWidth(),
-                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words, imeAction = ImeAction.Done),
-            )
-            Spacer(Modifier.height(12.dp))
-            PrimaryButton(stringResource(R.string.action_add), onClick = { if (onAddTeam(newName)) newName = "" else failed = true }, enabled = newName.isNotBlank(), icon = R.drawable.ic_add)
-        }
-        if (teams.isEmpty()) {
-            EmptyState(R.drawable.ic_apparel, stringResource(R.string.teams_empty_title), stringResource(R.string.teams_empty_body))
-        } else {
-            VsCard(padding = PaddingValues(vertical = 4.dp)) {
-                teams.forEachIndexed { index, team ->
-                    if (index > 0) RowDivider()
-                    ListRow(R.drawable.ic_apparel, team.name, pluralStringResource(R.plurals.count_players, team.players.size, team.players.size), onClick = { onOpenTeam(team) })
-                }
-            }
         }
     }
 }

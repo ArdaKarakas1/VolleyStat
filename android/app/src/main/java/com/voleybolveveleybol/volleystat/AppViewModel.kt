@@ -27,6 +27,7 @@ import com.voleybolveveleybol.volleystat.data.SignedIn
 import com.voleybolveveleybol.volleystat.data.SignupClosedReason
 import com.voleybolveveleybol.volleystat.data.SignupMode
 import com.voleybolveveleybol.volleystat.data.StoredState
+import com.voleybolveveleybol.volleystat.data.TeamProblem
 import com.voleybolveveleybol.volleystat.data.UnansweredRegistrationStore
 import com.voleybolveveleybol.volleystat.data.sha256Hex
 import com.voleybolveveleybol.volleystat.data.UploadCancelled
@@ -50,12 +51,17 @@ import com.voleybolveveleybol.volleystat.model.MatchRules
 import com.voleybolveveleybol.volleystat.model.Player
 import com.voleybolveveleybol.volleystat.model.ServerTarget
 import com.voleybolveveleybol.volleystat.model.Settings
+import com.voleybolveveleybol.volleystat.model.Schedule
+import com.voleybolveveleybol.volleystat.model.Seat
 import com.voleybolveveleybol.volleystat.model.Team
+import com.voleybolveveleybol.volleystat.model.TeamDraft
+import com.voleybolveveleybol.volleystat.model.TeamInfo
 import com.voleybolveveleybol.volleystat.model.normalizeUsername
 import com.voleybolveveleybol.volleystat.model.uploadFormat
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -252,6 +258,31 @@ data class AccountUi(
     val signup: SignupMode? = null,
 )
 
+/**
+ * The teams the server holds for the signed-in account (slice B4, plan P6). They belong to the session: a logout, an ended
+ * session, an account deletion and every login empty them (plan D1). Nothing of them reaches the disk (design 10.3, U20).
+ */
+data class TeamsUi(
+    /** The list as the server last sent it. Null until the server answered: an unread list is no empty one (plan D2). */
+    val teams: List<TeamInfo>? = null,
+    /** A read of the list is on its way. */
+    val loading: Boolean = false,
+    /** Why the last read of the list or of one team failed. The next read clears it. */
+    val loadProblem: TeamProblem? = null,
+    /** The team the team screen read last, also while the list is unread. */
+    val opened: TeamInfo? = null,
+    /** A team action is on its way (Takım Kur, a seat change, the settings). Its screen waits and takes no second tap. */
+    val busy: Boolean = false,
+    /** Why the last team action failed. The next action and clearTeamProblem() clear it. */
+    val problem: TeamProblem? = null,
+) {
+    /** The new members of the teams this account captains: the Teams tab's badge. */
+    val badge: Int get() = teams.orEmpty().sumOf { it.newJoins ?: 0 }
+
+    /** The team [id] as the app knows it: from the list, else as the team screen read it. */
+    fun teamOf(id: String): TeamInfo? = teams?.firstOrNull { it.id == id } ?: opened?.takeIf { it.id == id }
+}
+
 data class AppUiState(
     val matches: List<MatchRecord> = emptyList(),
     val teams: List<Team> = emptyList(),
@@ -269,6 +300,8 @@ data class AppUiState(
     /** The last change did not reach the disk. It is still in memory and the next change tries again. */
     val saveFailed: Boolean = false,
     val account: AccountUi = AccountUi(),
+    /** The server's teams of the signed-in account (slice B4). [teams] are the local rosters of the personal flow. */
+    val serverTeams: TeamsUi = TeamsUi(),
 ) {
     /**
      * The screen the app opens on (design 10.1): the welcome until it was seen; without a session
@@ -777,10 +810,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         if (baseUrl(state.settings.serverTarget) != address) state else state.copy(account = state.account.copy(signup = mode))
     }
 
-    /** Another server: the mode the last one named no longer holds. A screen that wanted it gets it read again. */
+    /**
+     * Another server: the mode the last one named no longer holds, and nor do the teams it sent. A screen that wanted
+     * either gets it read again. setServerTarget runs only without a session, so its reset of the teams is defensive; the
+     * test hook [baseUrlOverride] can change the address under a session.
+     */
     private fun anotherServer() {
         _state.update { it.copy(account = it.account.copy(signup = null)) }
         if (signupWanted) readSignupMode()
+        resetTeams()
+        if (teamsWanted) loadTeams()
     }
 
     fun markWelcomeSeen() = changeDevice { it.copy(welcomeSeen = true) }
@@ -1273,6 +1312,183 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         recordingsFolder.listFiles().orEmpty().filter { it.isFile && it.length() > 0 }
             .sortedByDescending { it.lastModified() }
             .map { RecordingFile(it.name, it.absolutePath, it.length()) }
+
+    // ----- The server's teams (slice B4; design 9.3, 10.1, 10.3 and 10.7; plan P6) -----
+    // Every team call notes the session it started with. Its answer counts only while that session is still the
+    // signed-in one (plan D1), and switchAccount cancels the calls of the session that leaves.
+
+    /** The parent of every team call. switchAccount and another server cancel it at once and put a new one in its place. */
+    @Volatile private var teamCalls = SupervisorJob(viewModelScope.coroutineContext[Job])
+    /** The read of the list on its way. A new read replaces it. */
+    @Volatile private var listJob: Job? = null
+    /**
+     * The id this phone chose for the Takım Kur whose answer it has not had yet. A repeat after a lost answer sends the
+     * same id, so the server answers 200 with the team the lost request created (design 9.6). A process that ends loses
+     * it (plan U39). The server's 201 or 200 spends it.
+     */
+    @Volatile private var pendingTeamId: String? = null
+    /** A screen asked for the teams. Only from then on does another address read them again (as [signupWanted] does). */
+    @Volatile private var teamsWanted = false
+
+    private fun cancelTeamCalls() {
+        teamCalls.cancel()
+        teamCalls = SupervisorJob(viewModelScope.coroutineContext[Job])
+        listJob = null
+        pendingTeamId = null
+    }
+
+    private fun resetTeams() {
+        cancelTeamCalls()
+        _state.update { it.copy(serverTeams = TeamsUi()) }
+    }
+
+    /** Changes the team state, only while [token] is still the signed-in session's (plan D1). */
+    private fun teamState(token: String, transform: (TeamsUi) -> TeamsUi) =
+        _state.update { if (session?.token != token) it else it.copy(serverTeams = transform(it.serverTeams)) }
+
+    /**
+     * Runs a team call of the session [token] off the main thread. The request carries that session's token, whichever
+     * session is signed in when it leaves, and its outcome reaches [done] only while that session is still signed in.
+     */
+    private fun <T> teamCall(token: String, call: (ApiClient) -> T, done: (Result<T>) -> Unit): Job {
+        val api = ApiClient(
+            baseUrl(_state.value.settings.serverTarget), correctionTimeoutMs ?: ApiClient.CORRECTION_TIMEOUT_MS, token = token, onAuthRequired = ::onSessionEnded,
+        )
+        return viewModelScope.launch(teamCalls) {
+            val outcome = withContext(Dispatchers.IO) { runCatching { call(api) } }
+            if (session?.token == token) done(outcome)
+        }
+    }
+
+    /** The list without the team [id], which the server no longer shows to this account. */
+    private fun TeamsUi.without(id: String) = copy(teams = teams?.filterNot { it.id == id }, opened = opened?.takeUnless { it.id == id })
+
+    /** The list with [team] as the server just sent it, in its place. A list that is unread stays unread. */
+    private fun TeamsUi.with(team: TeamInfo, add: Boolean = false) = copy(
+        teams = teams?.let { list -> if (list.any { it.id == team.id }) list.map { if (it.id == team.id) team else it } else if (add) list + team else list },
+        opened = if (opened?.id == team.id) team else opened,
+    )
+
+    /**
+     * Reads the teams of the signed-in account: on Home's opening, on the Teams tab's opening, on every resume, after every
+     * team action (plan D2). Without a session nothing goes out. A new read replaces the one on its way.
+     */
+    fun loadTeams() {
+        teamsWanted = true
+        val token = session?.token ?: return
+        listJob?.cancel()
+        teamState(token) { it.copy(loading = true) }
+        listJob = teamCall(token, { it.teams() }) { outcome ->
+            teamState(token) { ui ->
+                outcome.fold(
+                    onSuccess = { ui.copy(teams = it, loading = false, loadProblem = null, opened = ui.opened?.let { open -> it.firstOrNull { team -> team.id == open.id } ?: open }) },
+                    onFailure = { ui.copy(loading = false, loadProblem = TeamProblem.of(it)) },
+                )
+            }
+        }
+    }
+
+    /**
+     * Reads the team [id] for the team screen. A captain whose team has members who joined after the captain's mark marks
+     * them seen up to the newest join of this answer (plan D4); a member sends nothing, because the route answers a member
+     * 403 CAPTAIN_ONLY. A team the server no longer shows to this account, or no longer holds, leaves the list.
+     */
+    fun openTeam(id: String) {
+        val token = session?.token ?: return
+        teamState(token) { it.copy(loadProblem = null, opened = it.teamOf(id)) }
+        teamCall(token, { it.team(id) }) { outcome ->
+            val team = outcome.getOrNull()
+            if (team == null) {
+                val problem = TeamProblem.of(outcome.exceptionOrNull()!!)
+                teamState(token) { ui -> (if (problem == TeamProblem.NoAccess || problem == TeamProblem.Gone) ui.without(id) else ui).copy(loadProblem = problem) }
+                return@teamCall
+            }
+            teamState(token) { it.with(team).copy(opened = team) }
+            val newest = team.members.maxOfOrNull { it.joinedAt }
+            if (team.captain && (team.newJoins ?: 0) > 0 && newest != null) {
+                teamCall(token, { it.joinsSeen(id, newest) }) { loadTeams() }
+            }
+        }
+    }
+
+    /** Clears the refusal of the last team action: its screen was edited or left. */
+    fun clearTeamProblem() = _state.update { it.copy(serverTeams = it.serverTeams.copy(problem = null)) }
+
+    /**
+     * Runs one team action of the signed-in session. One action at a time: a second tap while one is on its way does
+     * nothing. [apply] puts the server's answer into the team state and [then] runs after it, both only while the session
+     * that sent the action is signed in. A refusal becomes the action's problem, and a team the server no longer shows or
+     * holds leaves the list. Every action ends with a read of the list, so the badge and Home follow it.
+     */
+    private fun <T> teamAction(
+        teamId: String?, call: (ApiClient) -> T, onRefused: (TeamProblem) -> TeamProblem = { it }, apply: (TeamsUi, T) -> TeamsUi, then: (T) -> Unit,
+    ) {
+        val token = session?.token ?: return
+        var started = false
+        _state.update {
+            if (session?.token != token || it.serverTeams.busy) return@update it
+            started = true
+            it.copy(serverTeams = it.serverTeams.copy(busy = true, problem = null))
+        }
+        if (!started) return
+        teamCall(token, call) { outcome ->
+            outcome.fold(
+                onSuccess = { answer ->
+                    teamState(token) { apply(it, answer).copy(busy = false) }
+                    then(answer)
+                },
+                onFailure = { error ->
+                    val problem = onRefused(TeamProblem.of(error))
+                    teamState(token) { ui ->
+                        val left = if (teamId != null && (problem == TeamProblem.NoAccess || problem == TeamProblem.Gone)) ui.without(teamId) else ui
+                        left.copy(busy = false, problem = problem)
+                    }
+                },
+            )
+            loadTeams()
+        }
+    }
+
+    /**
+     * Takım Kur: creates the team under an id this phone chose and keeps it until the server answered 201 or 200, so a
+     * repeat after a lost answer creates no second team (design 9.6). [onCreated] gets the team's id.
+     */
+    fun createTeam(draft: TeamDraft, onCreated: (String) -> Unit) {
+        if (session == null) return
+        val id = pendingTeamId ?: UUID.randomUUID().toString().also { pendingTeamId = it }
+        teamAction(
+            null,
+            { it.putTeam(id, draft.name.trim(), draft.substituteSeats, draft.captainSeat, draft.schedule, draft.jersey) },
+            onRefused = { problem ->
+                // Another account's team has this id: the next try takes a new one.
+                if (problem == TeamProblem.IdTaken && pendingTeamId == id) pendingTeamId = null
+                problem
+            },
+            apply = { ui, (team, _) -> ui.with(team, add = true).copy(opened = team) },
+        ) { (team, _) ->
+            if (pendingTeamId == id) pendingTeamId = null
+            onCreated(team.id)
+        }
+    }
+
+    /**
+     * Sends the substitute count and the members whose seat type changes (captain). A refusal keeps the screen and its
+     * input; a refusal of the substitute type after a starter moved down carries that fact for the hint (S8).
+     */
+    fun saveSeats(teamId: String, substituteSeats: Int, moves: Map<String, Seat>, onDone: () -> Unit) {
+        val held = _state.value.serverTeams.teamOf(teamId)?.members?.associate { it.userId to it.seat }.orEmpty()
+        val movedStarterDown = moves.any { (userId, seat) -> seat == Seat.SUBSTITUTE && held[userId] == Seat.STARTER }
+        teamAction(
+            teamId, { it.teamSeats(teamId, substituteSeats, moves) },
+            onRefused = { problem -> if (problem is TeamProblem.SeatsBelowHolders) problem.copy(movedStarterDown = movedStarterDown) else problem },
+            apply = { ui, team -> ui.with(team) },
+        ) { onDone() }
+    }
+
+    /** Sends the team's name and usual match day and time (captain). A null [schedule] clears it. */
+    fun saveTeamSettings(teamId: String, name: String, schedule: Schedule?, onDone: () -> Unit) {
+        teamAction(teamId, { it.teamSettings(teamId, name.trim(), schedule) }, apply = { ui, team -> ui.with(team) }) { onDone() }
+    }
 
     // ----- Accounts (design 3, 10.3, 10.5 and 10.7; docs/API_V1.md section 10) -----
     // The app says that someone is signed in, registered, renamed or logged out only after the
@@ -1801,6 +2017,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private fun switchAccount(next: Session?, nextSpace: AccountSpace?, account: (AccountUi) -> AccountUi) {
         uploadJob?.cancel()
         watchJob?.cancel()
+        // The team calls of the account that leaves stop, and its pending Takım Kur id goes (plan D1).
+        cancelTeamCalls()
         synchronized(storeLock) {
             session = next
             space = nextSpace
@@ -1809,6 +2027,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 it.copy(
                     matches = stored.matches, teams = stored.teams, draft = stored.draft, upload = null, readingVideo = false,
                     sourceProblem = null, removalProblem = null, saveFailed = false, recordings = listRecordings(), account = account(it.account),
+                    serverTeams = TeamsUi(),
                 )
             }
         }

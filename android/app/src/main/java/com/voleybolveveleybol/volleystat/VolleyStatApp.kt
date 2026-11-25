@@ -7,6 +7,7 @@ import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBarItemDefaults
@@ -28,6 +29,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavBackStackEntry
@@ -71,6 +73,10 @@ import com.voleybolveveleybol.volleystat.ui.screens.ReviewScreen
 import com.voleybolveveleybol.volleystat.ui.screens.StatusScreen
 import com.voleybolveveleybol.volleystat.ui.screens.TeamRosterScreen
 import com.voleybolveveleybol.volleystat.ui.screens.TeamsScreen
+import com.voleybolveveleybol.volleystat.ui.screens.TeamCreateScreen
+import com.voleybolveveleybol.volleystat.ui.screens.TeamScreen
+import com.voleybolveveleybol.volleystat.ui.screens.TeamSeatsScreen
+import com.voleybolveveleybol.volleystat.ui.screens.NewJoinsBadge
 import com.voleybolveveleybol.volleystat.ui.screens.VideoCheckScreen
 import com.voleybolveveleybol.volleystat.ui.screens.VideoSourceScreen
 import com.voleybolveveleybol.volleystat.ui.screens.WelcomeScreen
@@ -93,7 +99,14 @@ private object Routes {
     const val MATCHES = "matches"
     const val TEAMS = "teams"
     const val PROFILE = "profile"
+    /** A team the server holds (slice B4, design 10.1). */
     const val TEAM = "team/{id}"
+    /** Takım Kur. */
+    const val NEW_TEAM = "teams/new"
+    /** As ve Yedek Yerleri of a team (captain). */
+    const val TEAM_SEATS = "team/{id}/seats"
+    /** A local roster of the personal flow, opened from New Match's team step (design 10.1). */
+    const val ROSTER = "roster/{id}"
     const val NEW_MATCH = "new/match"
     /** Screen 13 on the rule of the draft. Saving only changes the draft. */
     const val NEW_RULES = "new/rules"
@@ -116,6 +129,8 @@ private object Routes {
     /** The range editor on the pause that holds the moment {at} of the video. */
     const val GAP = "gap/{id}/{at}"
     fun team(id: String) = "team/$id"
+    fun teamSeats(id: String) = "team/$id/seats"
+    fun roster(id: String) = "roster/$id"
     fun status(id: String) = "status/$id"
     fun review(id: String) = "review/$id"
     fun reviewAt(id: String, rallyId: String) = "review/$id/at/$rallyId"
@@ -378,15 +393,26 @@ fun VolleyStatApp(
         navigationSuiteItems = {
             tabs.forEach { tab ->
                 val selected = route == tab.route
+                // The Teams tab carries the captain's new members, read on Home before the tab is ever opened (plan D2).
+                val badge = if (tab.route == Routes.TEAMS) state.serverTeams.badge else 0
                 item(
                     selected = selected, onClick = { goTab(tab.route) },
-                    icon = { Icon(painterResource(if (selected) tab.selectedIcon else tab.icon), contentDescription = null) },
+                    icon = {
+                        BadgedBox(badge = { NewJoinsBadge(badge) }) {
+                            Icon(painterResource(if (selected) tab.selectedIcon else tab.icon), contentDescription = null)
+                        }
+                    },
                     label = { Text(stringResource(tab.label), style = MaterialTheme.typography.labelSmall) },
                     colors = itemColors,
                 )
             }
         },
     ) {
+        // A resume while signed in reads the teams again (design 10.3: on start and on resume). Signed out it sends nothing.
+        LifecycleResumeEffect(Unit) {
+            viewModel.loadTeams()
+            onPauseOrDispose {}
+        }
         NavHost(nav, startDestination = start) {
             // The entry moves on once the welcome was seen, and the navigation follows it.
             composable(Routes.WELCOME) { WelcomeScreen(onStart = viewModel::markWelcomeSeen) }
@@ -439,6 +465,8 @@ fun VolleyStatApp(
                 if (question != null) LegacyScreen(question, state.saveFailed, state.account.legacyMoving, viewModel::answerLegacy)
             }
             composable(Routes.HOME) {
+                // Every login and every start with a session ends here, so the badge is there before the Teams tab opens (plan D2).
+                LaunchedEffect(Unit) { viewModel.loadTeams() }
                 HomeScreen(
                     state, onNewMatch = { go(Routes.NEW_MATCH) }, onOpenMatch = ::open,
                     onOpenMatches = { goTab(Routes.MATCHES) }, onOpenTeams = { goTab(Routes.TEAMS) }, onOpenGuide = { go(Routes.GUIDE) },
@@ -446,7 +474,49 @@ fun VolleyStatApp(
             }
             composable(Routes.MATCHES) { MatchesScreen(state, onNewMatch = { go(Routes.NEW_MATCH) }, onOpenMatch = ::open) }
             composable(Routes.TEAMS) {
-                TeamsScreen(state.teams, onAddTeam = { viewModel.addTeam(it) != null }, onOpenTeam = { go(Routes.team(it.id)) })
+                LaunchedEffect(Unit) { viewModel.loadTeams() }
+                TeamsScreen(
+                    state.serverTeams, onCreate = { viewModel.clearTeamProblem(); go(Routes.NEW_TEAM) }, onOpen = { go(Routes.team(it)) },
+                    onRetry = viewModel::loadTeams,
+                )
+            }
+            composable(Routes.NEW_TEAM) {
+                TeamCreateScreen(
+                    state.serverTeams.busy, state.serverTeams.problem,
+                    onCreate = { draft ->
+                        // Takım Kur ends on the team screen (plan U36), unless the user left the form meanwhile.
+                        viewModel.createTeam(draft) { id ->
+                            if (nav.currentDestination?.route == Routes.NEW_TEAM) nav.navigate(Routes.team(id)) { popUpTo(Routes.NEW_TEAM) { inclusive = true } }
+                        }
+                    },
+                    onEdit = viewModel::clearTeamProblem, onBack = { viewModel.clearTeamProblem(); nav.popBackStack() },
+                )
+            }
+            composable(Routes.TEAM) { entry ->
+                val id = entry.arguments?.getString("id").orEmpty()
+                val team = state.serverTeams.teamOf(id)
+                // The new members the screen opened with: the mark the screen sends right after does not take the line away.
+                var opened by rememberSaveable(id) { mutableStateOf<Int?>(null) }
+                LaunchedEffect(id) { viewModel.openTeam(id) }
+                LaunchedEffect(team != null) { if (opened == null && team != null) opened = team.newJoins ?: 0 }
+                TeamScreen(
+                    team, loading = team == null && state.serverTeams.loadProblem == null, problem = state.serverTeams.loadProblem,
+                    onSeats = { viewModel.clearTeamProblem(); go(Routes.teamSeats(id)) }, onRetry = { viewModel.openTeam(id) },
+                    onBack = { nav.popBackStack() }, recentJoins = opened ?: team?.newJoins,
+                )
+            }
+            composable(Routes.TEAM_SEATS) { entry ->
+                val id = entry.arguments?.getString("id").orEmpty()
+                val team = state.serverTeams.teamOf(id)
+                if (team == null || !team.captain) {
+                    LaunchedEffect(Unit) { leave(Routes.TEAM_SEATS) }
+                } else {
+                    TeamSeatsScreen(
+                        team, state.serverTeams.busy, state.serverTeams.problem,
+                        onSave = { count, moves -> viewModel.saveSeats(id, count, moves) { leave(Routes.TEAM_SEATS) } },
+                        onEdit = viewModel::clearTeamProblem, onBack = { viewModel.clearTeamProblem(); nav.popBackStack() },
+                    )
+                }
             }
             composable(Routes.PROFILE) {
                 val context = LocalContext.current
@@ -495,10 +565,10 @@ fun VolleyStatApp(
                     onDelete = viewModel::deleteAccount, onBack = { viewModel.clearAccountProblem(); nav.popBackStack() },
                 )
             }
-            composable(Routes.TEAM) { entry ->
+            composable(Routes.ROSTER) { entry ->
                 val team = state.teams.firstOrNull { it.id == entry.arguments?.getString("id") }
                 if (team == null) {
-                    LaunchedEffect(Unit) { leave(Routes.TEAM) }
+                    LaunchedEffect(Unit) { leave(Routes.ROSTER) }
                 } else {
                     TeamRosterScreen(
                         team, onAddPlayer = { name, jersey -> viewModel.addPlayer(team.id, name, jersey) },
@@ -522,7 +592,7 @@ fun VolleyStatApp(
             composable(Routes.NEW_TEAMS) {
                 MatchTeamsScreen(
                     state.draft, state.teams, onChoose = { home, team -> viewModel.chooseTeam(home, team) }, onAddTeam = viewModel::addTeam,
-                    onOpenRoster = { go(Routes.team(it.id)) }, onContinue = { go(Routes.NEW_VIDEO) }, onBack = { nav.popBackStack() },
+                    onOpenRoster = { go(Routes.roster(it.id)) }, onContinue = { go(Routes.NEW_VIDEO) }, onBack = { nav.popBackStack() },
                 )
             }
             composable(Routes.NEW_VIDEO) { VideoRoute(state, viewModel, nav) }

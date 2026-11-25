@@ -635,6 +635,40 @@ class ScreenStatesTest {
         assertEquals(1, opens)
     }
 
+    /**
+     * Slice B4 (plan D2): "Takımlarım" counts the teams the server holds. While the list is unread, or its read failed,
+     * the row names no count: "Henüz takım yok" would be false for an account with teams. The local rosters count no longer.
+     */
+    @Test fun homeShowsNoTeamCountUntilTheServerAnswered() {
+        fun serverTeam(id: String) = com.voleybolveveleybol.volleystat.model.TeamInfo(
+            id, "pool-$id", "Takım $id", "K7Q2", null, null, com.voleybolveveleybol.volleystat.model.TeamRole.MEMBER,
+            com.voleybolveveleybol.volleystat.model.Seat.STARTER, null, null, emptyList(),
+            com.voleybolveveleybol.volleystat.model.SeatCounts(
+                com.voleybolveveleybol.volleystat.model.SeatCount(6, 1, 5, 0), com.voleybolveveleybol.volleystat.model.SeatCount(2, 0, 2, 0),
+            ),
+            null,
+        )
+        val local = listOf(com.voleybolveveleybol.volleystat.model.Team("r1", "Yerel Kadro"))
+        var home by mutableStateOf(AppUiState(teams = local, serverTeams = com.voleybolveveleybol.volleystat.TeamsUi(loading = true)))
+        var opened = 0
+        show { HomeScreen(home, {}, {}, {}, { opened++ }, {}) }
+        compose.onNodeWithText(text(R.string.home_teams)).performScrollTo().assertIsDisplayed()
+        assertFalse("an unread list is no empty one", shown(text(R.string.home_no_teams)))
+        assertFalse("the local rosters are no server teams", shown(context.resources.getQuantityString(R.plurals.count_teams, 1, 1)))
+        assertFalse("the players row is gone (plan U19)", shown("Oyuncular"))
+        home = home.copy(serverTeams = com.voleybolveveleybol.volleystat.TeamsUi(loadProblem = com.voleybolveveleybol.volleystat.data.TeamProblem.Unreachable))
+        compose.waitForIdle()
+        assertFalse("a failed read is no empty list", shown(text(R.string.home_no_teams)))
+        home = home.copy(serverTeams = com.voleybolveveleybol.volleystat.TeamsUi(teams = emptyList()))
+        compose.waitForIdle()
+        assertTrue(shown(text(R.string.home_no_teams)))
+        home = home.copy(serverTeams = com.voleybolveveleybol.volleystat.TeamsUi(teams = listOf(serverTeam("a"), serverTeam("b"))))
+        compose.waitForIdle()
+        assertTrue(shown(context.resources.getQuantityString(R.plurals.count_teams, 2, 2)))
+        compose.onNodeWithText(text(R.string.home_teams)).performClick()
+        assertEquals("the row opens the Teams tab", 1, opened)
+    }
+
     @Test fun homeNamesNoRuleForASetupWithTheStandardRule() {
         show { HomeScreen(AppUiState(draft = Draft(name = "Hazırlık Maçı")), {}, {}, {}, {}, {}) }
         compose.onNodeWithText(text(R.string.home_draft_title)).performScrollTo().assertIsDisplayed()

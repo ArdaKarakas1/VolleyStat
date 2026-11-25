@@ -11,6 +11,13 @@ import com.voleybolveveleybol.volleystat.model.Rally
 import com.voleybolveveleybol.volleystat.model.RallyList
 import com.voleybolveveleybol.volleystat.model.ReviewCard
 import com.voleybolveveleybol.volleystat.model.ReviewDeck
+import com.voleybolveveleybol.volleystat.model.Schedule
+import com.voleybolveveleybol.volleystat.model.Seat
+import com.voleybolveveleybol.volleystat.model.SeatCount
+import com.voleybolveveleybol.volleystat.model.SeatCounts
+import com.voleybolveveleybol.volleystat.model.TeamInfo
+import com.voleybolveveleybol.volleystat.model.TeamMember
+import com.voleybolveveleybol.volleystat.model.TeamRole
 import com.voleybolveveleybol.volleystat.model.SetPoint
 import com.voleybolveveleybol.volleystat.model.SetScore
 import com.voleybolveveleybol.volleystat.model.StatValue
@@ -177,6 +184,77 @@ class ApiClient(
     private class Received {
         var status = 200
         var contentType: String? = null
+    }
+
+    // ----- Teams (docs/API_V1.md, section 10, Takımlar; slice B4) -----
+    // A team id is chosen by the phone, so a creation whose answer was lost is repeated with the same id (design 9.6).
+
+    /** The teams of the signed-in account, in the order it joined them. */
+    fun teams(): List<TeamInfo> = readable { request("GET", "/teams").getJSONArray("teams").objects().map(::parseTeamInfo) }
+
+    /**
+     * Creates the team under [teamId], or reads the caller's team that already has it. The second value is true for the
+     * server's 201 (a new team) and false for its 200 (the repeat of a creation that already happened). A null
+     * [schedule] or [jersey] is left out of the body.
+     */
+    fun putTeam(teamId: String, name: String, substituteSeats: Int, captainSeat: Seat, schedule: Schedule?, jersey: Int?): Pair<TeamInfo, Boolean> {
+        val body = JSONObject().put("name", name).put("substituteSeats", substituteSeats).put("captainSeat", captainSeat.name)
+            .putOpt("schedule", schedule?.let(::scheduleJson)).putOpt("jersey", jersey)
+        val received = Received()
+        val team = readable(received) { parseTeamInfo(request("PUT", "/teams/$teamId", body.toString().toByteArray(), received = received)) }
+        return team to (received.status == 201)
+    }
+
+    fun team(teamId: String): TeamInfo = readable { parseTeamInfo(request("GET", "/teams/$teamId")) }
+
+    /** Sets the name and the usual match day and time (captain). Both are named: a null [schedule] clears it. */
+    fun teamSettings(teamId: String, name: String, schedule: Schedule?): TeamInfo {
+        val body = JSONObject().put("name", name).put("schedule", schedule?.let(::scheduleJson) ?: JSONObject.NULL)
+        return readable { parseTeamInfo(request("PUT", "/teams/$teamId/settings", body.toString().toByteArray())) }
+    }
+
+    /**
+     * The final state the captain wants: the substitute count and the members whose seat type changes. The server checks
+     * the final state, so the same request twice changes nothing; the 6 starter seats are never named.
+     */
+    fun teamSeats(teamId: String, substituteSeats: Int, moves: Map<String, Seat>): TeamInfo {
+        val body = JSONObject().put("substituteSeats", substituteSeats)
+            .put("moves", JSONArray(moves.map { (userId, seat) -> JSONObject().put("userId", userId).put("seat", seat.name) }))
+        return readable { parseTeamInfo(request("PUT", "/teams/$teamId/seats", body.toString().toByteArray())) }
+    }
+
+    /** Moves the captain's mark for the new-member badge to [upTo], the newest join the team screen showed. */
+    fun joinsSeen(teamId: String, upTo: String) {
+        request("POST", "/teams/$teamId/joins-seen", JSONObject().put("upTo", upTo).toString().toByteArray(), expectedStatus = 204)
+    }
+
+    /** Deletes the team with its seats, memberships and blocks (captain). Only the route's own 204 counts. */
+    fun deleteTeam(teamId: String) {
+        request("DELETE", "/teams/$teamId", expectedStatus = 204)
+    }
+
+    private fun scheduleJson(schedule: Schedule) = JSONObject().put("weekday", schedule.weekday).put("time", schedule.time)
+
+    /** A value of an enum this app knows. Any other value is an answer the app can not read, as a missing field is. */
+    private inline fun <reified T : Enum<T>> JSONObject.enumOf(name: String): T =
+        enumValues<T>().firstOrNull { it.name == getString(name) } ?: throw org.json.JSONException("$name: ${getString(name)}")
+
+    private fun parseSeatCount(json: JSONObject) = SeatCount(json.getInt("seats"), json.getInt("taken"), json.getInt("left"), json.getInt("deciding"))
+
+    /** The Team shape of design 9.3 (B4 form). Its invite is null until slice B5, so the app reads none. */
+    private fun parseTeamInfo(json: JSONObject): TeamInfo {
+        val seats = json.getJSONObject("seats")
+        return TeamInfo(
+            id = json.getString("id"), poolId = json.getString("poolId"), name = json.getString("name"), tag = json.getString("tag"),
+            schedule = json.optJSONObject("schedule")?.let { Schedule(it.getInt("weekday"), it.getString("time")) },
+            logoVersion = json.optJSONObject("logo")?.getInt("version"),
+            myRole = json.enumOf("myRole"), mySeat = json.enumOf("mySeat"), myJersey = json.intOrNull("myJersey"), newJoins = json.intOrNull("newJoins"),
+            members = json.getJSONArray("members").objects().map {
+                TeamMember(it.getString("userId"), it.getString("displayName"), it.intOrNull("jersey"), it.enumOf<TeamRole>("role"), it.enumOf<Seat>("seat"), it.getString("joinedAt"))
+            },
+            seats = SeatCounts(parseSeatCount(seats.getJSONObject("starter")), parseSeatCount(seats.getJSONObject("substitute"))),
+            waiting = seats.intOrNull("waiting"),
+        )
     }
 
     fun health(): Health {
