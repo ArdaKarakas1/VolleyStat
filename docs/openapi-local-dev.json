@@ -3,7 +3,7 @@
   "info": {
     "title": "VolleyStat Local Development API",
     "description": "LOCAL TEST DATA ONLY. Every route except health, register and login needs a session. No trained AI. Never expose to the internet.",
-    "version": "0.9.0"
+    "version": "0.10.0"
   },
   "paths": {
     "/v1/health": {

@@ -203,7 +203,7 @@ CREATE TABLE IF NOT EXISTS users (
   password_temporary_until TEXT,
   created_at TEXT NOT NULL,
   password_changed_at TEXT NOT NULL,
-  -- How the account opened: SIGNUP_CODE or OPEN (and INVITE or CAPTAIN_CODE from later slices).
+  -- How the account opened: INVITE or OPEN_MATCH or SIGNUP_CODE or OPEN (no link and no code). Only SIGNUP_CODE gets the larger video quotas.
   signup_via TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS sessions (
@@ -226,17 +226,17 @@ CREATE TABLE IF NOT EXISTS login_devices (
   last_used_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS login_devices_user ON login_devices(user_id);
--- One-time codes the operator prints. A registration removes the SIGNUP code it used.
+-- One-time codes the operator prints. A registration removes the SIGNUP code it used. Since v5 only SIGNUP codes exist.
 CREATE TABLE IF NOT EXISTS operator_codes (
   -- SHA-256 hex of the code without dashes
   code_hash TEXT PRIMARY KEY,
-  -- SIGNUP opens one registration. CAPTAIN (the teams slice) also allows one team.
+  -- SIGNUP opens one registration. B1 reserved CAPTAIN for v4's captain code and v5 removed it.
   kind TEXT NOT NULL,
-  -- The teams slice: 1 once a registration used a CAPTAIN code
+  -- Unused since v5. B1 created it for the captain code and older storage folders keep it.
   signup_used INTEGER NOT NULL DEFAULT 0,
-  -- The teams slice: the account that registered with a CAPTAIN code
+  -- Unused since v5 (as above)
   used_by_user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
-  -- The teams slice: the team name a CAPTAIN code allows
+  -- Unused since v5 (as above)
   team_name TEXT,
   created_at TEXT NOT NULL,
   expires_at TEXT NOT NULL

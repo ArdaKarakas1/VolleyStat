@@ -502,7 +502,7 @@ def test_the_api_docs_routes_are_off(client, anonymous):
             assert response.status_code == 404, path
             assert response.json()["error"]["code"] == "NOT_FOUND"
     # The committed document is still built from the app (tests/test_openapi.py).
-    assert client.app.openapi()["info"]["version"] == "0.9.0"
+    assert client.app.openapi()["info"]["version"] == "0.10.0"
 
 
 # --- the decision replay ----------------------------------------------------------------------------

@@ -5,6 +5,7 @@ Every username, display name and password below is made up by the tests.
 import asyncio
 import hashlib
 import json
+import logging
 import sqlite3
 import threading
 import time
@@ -221,16 +222,114 @@ def test_an_unknown_field_is_refused(api):
 
 @pytest.fixture
 def gated(storage, monkeypatch):
+    """A server the operator closed to open sign-up (VOLLEYSTAT_SIGNUP=link). Open is the default since 0.10."""
+    monkeypatch.setenv("VOLLEYSTAT_SIGNUP", "link")
+    with TestClient(create_app(storage, analyzer="none")) as client:
+        yield client
+
+
+@pytest.fixture
+def unset(storage, monkeypatch):
+    """A server started without VOLLEYSTAT_SIGNUP."""
     monkeypatch.delenv("VOLLEYSTAT_SIGNUP", raising=False)
     with TestClient(create_app(storage, analyzer="none")) as client:
         yield client
 
 
-def test_the_gate_is_closed_by_default_and_health_says_so(gated):
+def b1_operator_code(storage, plain, kind):
+    """Store a code row exactly as B1's issue_operator_code wrote it, valid for 7 days from now."""
+    from app.db import migrate
+    db_path = storage / "volleystat.sqlite3"
+    migrate(db_path)
+    moment = accounts.now()
+    conn = sqlite3.connect(db_path)
+    try:
+        with conn:
+            conn.execute("INSERT INTO operator_codes(code_hash, kind, created_at, expires_at) VALUES(?,?,?,?)",
+                         (hashlib.sha256(plain.encode()).hexdigest(), kind, accounts.iso(moment),
+                          accounts.iso(moment + timedelta(days=7))))
+    finally:
+        conn.close()
+
+
+def test_with_the_setting_unset_a_registration_without_a_link_or_a_code_opens_an_open_account(unset, storage):
+    response = register(unset)
+    assert response.status_code == 201, response.text
+    assert rows(storage, "SELECT username, signup_via FROM users") == [("ayse.k", "OPEN")]
+    assert unset.get("/v1/health").json()["accounts"] == {"signup": "OPEN"}
+
+
+def test_under_link_a_registration_without_a_link_or_a_code_answers_signup_closed_no_link(gated, storage):
     response = register(gated)
     assert response.status_code == 403
-    assert error(response)["code"] == "SIGNUP_CLOSED"
-    assert gated.get("/v1/health").json()["accounts"] == {"signup": "LINK", "teams": "OPERATOR"}
+    assert (error(response)["code"], error(response)["details"]) == ("SIGNUP_CLOSED", {"reason": "NO_LINK"})
+    assert rows(storage, "SELECT COUNT(*) FROM users") == [(0,)]
+    assert gated.get("/v1/health").json()["accounts"] == {"signup": "LINK"}
+
+
+def test_an_operator_code_under_open_records_signup_code(unset, storage):
+    code = accounts.issue_operator_code(storage / "volleystat.sqlite3", "SIGNUP")
+    assert register(unset, operatorCode=code).status_code == 201
+    assert rows(storage, "SELECT signup_via FROM users") == [("SIGNUP_CODE",)]
+    assert rows(storage, "SELECT COUNT(*) FROM operator_codes") == [(0,)]
+
+
+def test_a_wrong_operator_code_under_open_answers_signup_code_invalid_and_opens_no_account(unset, storage):
+    # Open sign-up never turns a refused code into an OPEN account.
+    response = register(unset, operatorCode="ABCD-EFGH-JKMN-PQRS")
+    assert (response.status_code, error(response)["code"]) == (403, "SIGNUP_CODE_INVALID")
+    assert rows(storage, "SELECT COUNT(*) FROM users") == [(0,)]
+
+
+def test_operator_codes_of_any_kind_but_signup_can_not_be_issued(tmp_path):
+    fresh = tmp_path / "taze"
+    fresh.mkdir()
+    for kind in ("CAPTAIN", "", "signup"):
+        with pytest.raises(ValueError):
+            accounts.issue_operator_code(fresh / "volleystat.sqlite3", kind)
+    # The kind is checked before the database is created.
+    assert not (fresh / "volleystat.sqlite3").exists()
+    started = tmp_path / "baslamis"
+    with TestClient(create_app(started, analyzer="none")):
+        pass
+    for kind in ("CAPTAIN", "", "signup"):
+        with pytest.raises(ValueError):
+            accounts.issue_operator_code(started / "volleystat.sqlite3", kind)
+    assert rows(started, "SELECT COUNT(*) FROM operator_codes") == [(0,)]
+
+
+def test_a_captain_code_row_left_by_b1_opens_no_registration(gated, storage):
+    b1_operator_code(storage, "K7QF2M9XAB3DEF4G", "CAPTAIN")
+    # The gate answers before the fields: a bad username still gets the code's answer.
+    response = register(gated, username="X", operatorCode="K7QF-2M9X-AB3D-EF4G")
+    assert (response.status_code, error(response)["code"]) == (403, "SIGNUP_CODE_INVALID")
+    assert error(register(gated, operatorCode="K7QF-2M9X-AB3D-EF4G"))["code"] == "SIGNUP_CODE_INVALID"
+    assert rows(storage, "SELECT COUNT(*) FROM users") == [(0,)]
+
+
+def test_a_signup_code_printed_before_this_version_still_opens_a_registration(storage, monkeypatch):
+    b1_operator_code(storage, "K7QF2M9XAB3DEF4G", "SIGNUP")
+    assert rows(storage, "SELECT signup_used, used_by_user_id, team_name FROM operator_codes") == [(0, None, None)]
+    monkeypatch.setenv("VOLLEYSTAT_SIGNUP", "link")
+    with TestClient(create_app(storage, analyzer="none")) as client:
+        assert register(client, operatorCode="K7QF-2M9X-AB3D-EF4G").status_code == 201
+        again = register(client, username="mert.b", operatorCode="K7QF-2M9X-AB3D-EF4G")
+        assert (again.status_code, error(again)["code"]) == (403, "SIGNUP_CODE_INVALID")
+    assert rows(storage, "SELECT signup_via FROM users") == [("SIGNUP_CODE",)]
+    assert rows(storage, "SELECT COUNT(*) FROM operator_codes") == [(0,)]
+
+
+@pytest.mark.parametrize("value", ["operator", "open", "herkes", ""])
+def test_the_server_starts_with_volleystat_teams_set_and_logs_that_it_ignores_it(storage, monkeypatch, caplog, value):
+    monkeypatch.delenv("VOLLEYSTAT_SIGNUP", raising=False)
+    monkeypatch.setenv("VOLLEYSTAT_TEAMS", value)
+    with caplog.at_level(logging.WARNING, logger="app.accounts"):
+        app = create_app(storage, analyzer="none")
+    with TestClient(app) as client:
+        assert client.get("/v1/health").json()["accounts"] == {"signup": "OPEN"}
+        assert register(client).status_code == 201
+    named = [record for record in caplog.records if "VOLLEYSTAT_TEAMS" in record.getMessage()]
+    assert [record.levelno for record in named] == [logging.WARNING]
 
 
 def test_health_names_an_open_gate(api):
@@ -253,7 +352,7 @@ def test_a_closed_gate_answers_a_taken_and_a_free_username_alike(gated, storage)
 def test_the_gate_comes_before_the_fields(gated):
     # Nothing about the username, the display name or the password is checked before the gate.
     response = register(gated, username="X", display_name="", password="kisa")
-    assert error(response)["code"] == "SIGNUP_CLOSED"
+    assert (error(response)["code"], error(response)["details"]) == ("SIGNUP_CLOSED", {"reason": "NO_LINK"})
     wrong_code = register(gated, username="X", display_name="", password="kisa", operatorCode="ABCD-EFGH-JKMN-PQRS")
     assert error(wrong_code)["code"] == "SIGNUP_CODE_INVALID" and wrong_code.status_code == 403
 
@@ -1009,13 +1108,6 @@ def test_a_text_that_can_not_be_an_operator_code_is_read_as_none(text):
     assert accounts.normalize_operator_code(text) is None
 
 
-def test_a_captain_code_does_not_open_a_registration_before_the_teams_slice(gated, storage):
-    code = accounts.issue_operator_code(storage / "volleystat.sqlite3", "CAPTAIN")
-    # The gate answers before the fields: a bad username still gets the code's answer.
-    response = register(gated, username="X", operatorCode=code)
-    assert (response.status_code, error(response)["code"]) == (403, "SIGNUP_CODE_INVALID")
-
-
 @pytest.mark.parametrize("display_name", ["张伟", "Ǆemal Öz", "Ana Lı"])
 def test_letters_of_every_script_are_letters(display_name):
     assert accounts.clean_display_name(display_name) == display_name
@@ -1126,13 +1218,6 @@ def test_the_gate_setting_is_read_without_case_or_spaces(storage, monkeypatch, v
     monkeypatch.setenv("VOLLEYSTAT_SIGNUP", value)
     with TestClient(create_app(storage, analyzer="none")) as client:
         assert client.get("/v1/health").json()["accounts"]["signup"] == mode
-
-
-def test_an_unknown_team_setting_stops_the_start_before_storage_is_touched(tmp_path, monkeypatch):
-    monkeypatch.setenv("VOLLEYSTAT_TEAMS", "herkes")
-    with pytest.raises(ValueError, match="VOLLEYSTAT_TEAMS"):
-        create_app(tmp_path / "hic-yok", analyzer="none")
-    assert not (tmp_path / "hic-yok").exists()
 
 
 def test_an_unknown_gate_setting_stops_the_start_before_storage_is_touched(tmp_path, monkeypatch):

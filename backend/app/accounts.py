@@ -62,7 +62,6 @@ CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
 OPERATOR_CODE_LENGTH = 16
 
 SIGNUP_MODES = {"link": "LINK", "open": "OPEN"}
-TEAM_MODES = {"operator": "OPERATOR", "open": "OPEN"}
 
 USERNAME = re.compile(r"[a-z][a-z0-9._]{2,29}")
 DISPLAY_NAME_MARKS = frozenset(" .'-")
@@ -89,15 +88,18 @@ def digest(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def settings() -> tuple[str, str]:
-    """The sign-up gate and the team-creation gate, read from the environment."""
-    signup = os.environ.get("VOLLEYSTAT_SIGNUP", "link").strip().lower()
-    teams = os.environ.get("VOLLEYSTAT_TEAMS", "operator").strip().lower()
+def settings() -> str:
+    """The sign-up gate, read from the environment: OPEN unless the operator set VOLLEYSTAT_SIGNUP=link.
+
+    VOLLEYSTAT_TEAMS (B1's team-creation gate) is no longer read. A start script that still sets it
+    gets one warning and a server that starts, because a refusal would stop the server for nothing.
+    """
+    signup = os.environ.get("VOLLEYSTAT_SIGNUP", "open").strip().lower()
     if signup not in SIGNUP_MODES:
         raise ValueError(f"VOLLEYSTAT_SIGNUP must be one of {sorted(SIGNUP_MODES)}, not {signup!r}")
-    if teams not in TEAM_MODES:
-        raise ValueError(f"VOLLEYSTAT_TEAMS must be one of {sorted(TEAM_MODES)}, not {teams!r}")
-    return SIGNUP_MODES[signup], TEAM_MODES[teams]
+    if "VOLLEYSTAT_TEAMS" in os.environ:
+        log.warning("VOLLEYSTAT_TEAMS is no longer read: every account may create a team (ADR-0120)")
+    return SIGNUP_MODES[signup]
 
 
 # --- what the person gives ------------------------------------------------------------------------
@@ -397,7 +399,13 @@ def normalize_operator_code(text: str) -> str | None:
 
 
 def issue_operator_code(db_path: Path, kind: str) -> str:
-    """Store a new one-time code of `kind` and return it as four groups of four (XXXX-XXXX-XXXX-XXXX)."""
+    """Store a new one-time code of `kind` and return it as four groups of four (XXXX-XXXX-XXXX-XXXX).
+
+    Only SIGNUP codes exist since v5 of the accounts design. Another kind raises before the database
+    is created or written.
+    """
+    if kind != "SIGNUP":
+        raise ValueError(f"Only SIGNUP operator codes exist, not {kind!r}")
     migrate(db_path)
     plain = "".join(secrets.choice(CODE_ALPHABET) for _ in range(OPERATOR_CODE_LENGTH))
     moment = now()
@@ -635,7 +643,8 @@ def router(connect, db_path: Path, signup_mode: str, limiter: Limiter, pool: Has
     async def register(payload: RegisterInput, request: Request):
         """Open an account. The gate comes first, so nothing about the username leaks while it is closed."""
         moment = now()
-        # The gate: an invite link (later slices), an operator code or the open setting of tests.
+        # The gate: an invite link (later slices), an operator code, or nothing while sign-up is open (the
+        # default; the operator closes it with VOLLEYSTAT_SIGNUP=link). A wrong code never opens an OPEN account.
         code_hash = None
         if payload.link is not None:
             fail("LINK_NOT_FOUND", "No live link has this token or code", 404)
@@ -652,7 +661,7 @@ def router(connect, db_path: Path, signup_mode: str, limiter: Limiter, pool: Has
             if not await run_in_threadpool(code_is_live):
                 fail("SIGNUP_CODE_INVALID", "The operator code is not valid", 403)
         elif signup_mode != "OPEN":
-            fail("SIGNUP_CLOSED", "Registration needs an invite link or an operator code", 403)
+            fail("SIGNUP_CLOSED", "Registration needs an invite link or an operator code", 403, reason="NO_LINK")
         # The fields, in the order the app shows them.
         if not username_ok(payload.username):
             fail("USERNAME_INVALID", "The username does not meet the rule", 422)

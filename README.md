@@ -38,7 +38,7 @@ python -m app      # 127.0.0.1:8000, yalnız bu bilgisayardan erişilir
 pytest -q          # başka bir terminalde
 ```
 
-Sunucuda TLS yoktur. İnternete açmayın. Kayıt için operatör kodu `python -m app.admin signup-code` ile çıkar. Yalnızca sentetik ya da kullanım izni açık test videoları yükleyin.
+Sunucuda TLS yoktur. İnternete açmayın. Sunucu kayıt kodu olmadan da hesap açar ve kodsuz hesabın kişisel videolarına 4 GiB ayırır. `python -m app.admin signup-code` komutunun çıkardığı kayıt koduyla açılan hesap 8 GiB alır. Kodsuz kaydı kapatmak için sunucuyu `VOLLEYSTAT_SIGNUP=link python -m app` komutuyla başlatın. Yalnızca sentetik ya da kullanım izni açık test videoları yükleyin.
 
 Bir depolama klasörünü aynı anda tek bir sunucu kullanır. Aynı klasörde ikinci bir `python -m app` başlatırsanız ikinci sunucu bir hata yazar ve çıkar. Operatör komutları (`python -m app.admin`) sunucu çalışırken de çalışır.
 

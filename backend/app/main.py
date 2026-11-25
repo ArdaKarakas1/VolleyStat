@@ -30,7 +30,7 @@ CHUNK_SIZE = 4 * 1024 * 1024
 CHUNK_ROUTE = re.compile(r"/v1/uploads/[^/]+/chunks")
 MAX_VIDEO_BYTES = 4 * 1024 * 1024 * 1024
 ALLOWED_MIMES = {"video/mp4", "video/quicktime", "video/webm", "video/x-matroska"}
-VERSION = "0.9.0"
+VERSION = "0.10.0"
 
 
 class MatchRulesInput(BaseModel):
@@ -158,7 +158,7 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
     if analyzer is not None:
         require_known_kind(analyzer)
     # An unknown gate setting or disk floor must stop the start-up too, before storage is touched.
-    signup_mode, team_mode = accounts.settings()
+    signup_mode = accounts.settings()
     floor = quotas.settings()
     storage = Path(storage_root or os.environ.get("VOLLEYSTAT_STORAGE") or (Path(__file__).parent.parent / "storage")).resolve()
     storage.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -260,7 +260,7 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
                 "analyzer": {"id": info.id, "version": info.version, "kind": info.kind} if info is not None else None,
                 "mediaProbe": "available" if media.probe_available() else "unavailable",
                 "maxVideoBytes": MAX_VIDEO_BYTES, "chunkSizeBytes": CHUNK_SIZE,
-                "accounts": {"signup": signup_mode, "teams": team_mode}}
+                "accounts": {"signup": signup_mode}}
 
     def insert_match(db, match_id: str, payload: MatchInput, caller: accounts.Caller):
         """A personal match of the caller (design 5.6): only that account sees it."""
