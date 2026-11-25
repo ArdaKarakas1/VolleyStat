@@ -848,6 +848,33 @@ class ScreenStatesTest {
         field(R.string.field_signup_code).performScrollTo().assertIsDisplayed()
     }
 
+    /**
+     * Checker finding P2-C1. The mode can leave LINK under a form that holds a typed code: a debug
+     * build switches the server (anotherServer() sets it to null), or a stale health answer says OPEN
+     * after a NO_LINK answer set LINK. The field keeps the code in sight, and the form sends only
+     * what the user sees.
+     */
+    @Test fun aFieldThatHoldsACodeStaysInSightWhenTheModeLeavesLink() {
+        val sent = mutableListOf<String>()
+        var signup by mutableStateOf<SignupMode?>(SignupMode.LINK)
+        show {
+            RegisterScreen(
+                AccountUi(signup = signup), onRegister = { _, _, _, c -> sent += c }, onHaveAccount = {}, onBack = {},
+                signup = signup, initialDisplayName = "Ali Yılmaz", initialPassword = "uzun bir şifre 42",
+            )
+        }
+        field(R.string.field_signup_code).performScrollTo().performTextInput("ABCD-EFGH-JKMN-PQRS")
+        // LINK to unread (the server switch), back to LINK, then LINK to OPEN (the stale answer). Kayıt Kodum Var was never tapped.
+        for (mode in listOf(null, SignupMode.LINK, SignupMode.OPEN)) {
+            signup = mode
+            field(R.string.field_signup_code).performScrollTo().assertIsDisplayed().assertTextContains("ABCD-EFGH-JKMN-PQRS")
+            assertFalse("mode $mode", shown(text(R.string.action_have_signup_code)))
+            compose.onNode(hasClickAction() and hasText(text(R.string.action_create_account))).performClick()
+            assertEquals("mode $mode", "ABCD-EFGH-JKMN-PQRS", sent.last())
+        }
+        assertEquals(3, sent.size)
+    }
+
     @Test fun aRevealedFieldStaysOpenWhenTheScreenIsRebuilt() {
         val restoration = StateRestorationTester(compose)
         restoration.setContent { VolleyStatTheme(dark = false) { RegisterScreen(AccountUi(), onRegister = { _, _, _, _ -> }, onHaveAccount = {}, onBack = {}, signup = SignupMode.OPEN) } }
