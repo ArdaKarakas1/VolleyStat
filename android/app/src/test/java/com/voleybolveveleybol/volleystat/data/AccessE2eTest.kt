@@ -131,8 +131,8 @@ class AccessE2eTest {
      * test's account opened without an operator code: 4 GiB of personal video and one unfinished upload. After the
      * clip, a 4 GiB declaration passes the limit and the server refuses it with its numbers, which the status screen
      * words (UploadRefusal). A 1 GiB declaration fits and stays unfinished; the same declaration again names the same
-     * upload. The next upload of another file meets the limit of one unfinished upload, which the screen words with the
-     * general text.
+     * upload. The next upload of another file meets the limit of one unfinished upload, which the screen words with
+     * `upload_one_unfinished`.
      */
     @Test fun aSecondUnfinishedUploadIsRefusedWithTheServersNumbers() {
         val (_, owner) = account()
@@ -180,7 +180,7 @@ class AccessE2eTest {
         assertEquals("UNFINISHED_UPLOAD", details.getString("reason"))
         assertEquals(clipBytes + gib, details.getLong("usedBytes"))
         assertEquals(4 * gib, details.getLong("limitBytes"))
-        assertEquals("the screen keeps the general text for this refusal", null, UploadRefusal.of(failure))
+        assertEquals("the screen words this refusal with upload_one_unfinished", UploadRefusal.OneUnfinished, UploadRefusal.of(failure))
     }
 
     @Test fun deletingTheAccountDeletesItsMatchesOnTheServer() {

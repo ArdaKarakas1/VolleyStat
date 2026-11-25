@@ -81,6 +81,7 @@ import com.voleybolveveleybol.volleystat.data.AccountUser
 import com.voleybolveveleybol.volleystat.data.AttemptScope
 import com.voleybolveveleybol.volleystat.data.AuthProblem
 import com.voleybolveveleybol.volleystat.data.PasswordRule
+import com.voleybolveveleybol.volleystat.data.SignupMode
 import com.voleybolveveleybol.volleystat.model.normalizeUsername
 import com.voleybolveveleybol.volleystat.model.suggestAnotherUsername
 import com.voleybolveveleybol.volleystat.model.suggestUsername
@@ -112,8 +113,10 @@ data class AccountText(@param:StringRes val id: Int, val arguments: List<Any> = 
 /**
  * The text that tells the user what the server answered to an account call. Every case of
  * [AuthProblem] has one; no text shows a server code, and none guesses a cause the app does not know.
+ * [signup] is the sign-up mode health named (null: unread). A text that holds under only one mode
+ * needs that mode (slice B4, F3 of the v5.1 checker).
  */
-fun accountProblemText(problem: AuthProblem, action: AccountAction): AccountText {
+fun accountProblemText(problem: AuthProblem, action: AccountAction, signup: SignupMode? = null): AccountText {
     // A logout that did not get its 204 leaves the session on the phone, whatever the reason. The text names the way out.
     if (action == AccountAction.LOGOUT) return AccountText(R.string.logout_not_confirmed, listOf(LabelArgument(R.string.action_logout_anyway)))
     return when (problem) {
@@ -156,7 +159,8 @@ fun accountProblemText(problem: AuthProblem, action: AccountAction): AccountText
         )
         // This app sends no link, so the gate it meets is the one a code opens.
         is AuthProblem.SignupClosed -> AccountText(R.string.register_gate)
-        AuthProblem.SignupCodeInvalid -> AccountText(R.string.register_code_invalid)
+        // Only after health said OPEN does the text offer to open the account without the code.
+        AuthProblem.SignupCodeInvalid -> AccountText(if (signup == SignupMode.OPEN) R.string.register_code_invalid_open else R.string.register_code_invalid)
         AuthProblem.UsernameTaken -> AccountText(R.string.username_taken)
         AuthProblem.UsernameInvalid -> AccountText(R.string.username_invalid)
         AuthProblem.DisplayNameInvalid -> AccountText(R.string.display_name_invalid)
@@ -185,7 +189,8 @@ fun AccountText.resolve(context: Context): String = context.getString(
 )
 
 @Composable
-fun accountProblemMessage(problem: AuthProblem, action: AccountAction): String = accountProblemText(problem, action).resolve(LocalContext.current)
+fun accountProblemMessage(problem: AuthProblem, action: AccountAction, signup: SignupMode? = null): String =
+    accountProblemText(problem, action, signup).resolve(LocalContext.current)
 
 // ----- Shared parts -----
 
@@ -350,13 +355,15 @@ private fun AccountField(
 
 /**
  * The first start without any account on this phone (design 10.1, `start`). Kod Gir, the main
- * action of the design, comes with the invite links (slice B6); until then a registration takes
- * the operator's code. A build without a server address (a release build until the hosting slice)
- * can neither open an account nor log in: the screen says so in place of the promise, and its
- * buttons open no form (third review, B5).
+ * action of the design, comes with the invite links (slice B6). The text follows health's
+ * [signup] mode (slice B4): under OPEN anyone opens an account, under LINK a registration takes
+ * the operator's code, and while health is unread (null) the text says only what holds under
+ * both. A build without a server address (a release build until the hosting slice) can neither
+ * open an account nor log in: the screen says so in place of the promise, and its buttons open
+ * no form (third review, B5).
  */
 @Composable
-fun StartScreen(onCreateAccount: () -> Unit, onLogin: () -> Unit, serverConfigured: Boolean = true) {
+fun StartScreen(onCreateAccount: () -> Unit, onLogin: () -> Unit, serverConfigured: Boolean = true, signup: SignupMode? = null) {
     AccountScaffold(
         title = null, onBack = null,
         actions = {
@@ -371,7 +378,12 @@ fun StartScreen(onCreateAccount: () -> Unit, onLogin: () -> Unit, serverConfigur
             Text(stringResource(R.string.tagline), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
         }
         if (serverConfigured) {
-            VsCard { Text(stringResource(R.string.start_body), style = MaterialTheme.typography.bodyLarge) }
+            val body = when (signup) {
+                SignupMode.OPEN -> stringResource(R.string.start_body)
+                SignupMode.LINK -> stringResource(R.string.start_body_link)
+                null -> stringResource(R.string.start_body_any, stringResource(R.string.action_create_account))
+            }
+            VsCard { Text(body, style = MaterialTheme.typography.bodyLarge) }
         } else {
             Notice(stringResource(R.string.server_none), Tone.NEUTRAL)
             VsCard { Text(stringResource(R.string.start_no_server), style = MaterialTheme.typography.bodyLarge) }
@@ -472,7 +484,9 @@ private fun UnconfirmedDeletionCard(doubt: UnconfirmedDeletion, enabled: Boolean
 /**
  * Hesap Oluştur (design 10.1, `register`): the display name, the username the app suggests from it
  * (editable), the password and the operator's sign-up code. A taken username gets two digits once,
- * and the screen says why.
+ * and the screen says why. The code field follows health's [signup] mode (slice B4): under LINK it
+ * shows at once (B2's layout); under OPEN, and in the same layout while health is unread, it hides
+ * behind Kayıt Kodum Var. A text that holds only under OPEN shows only after health said OPEN.
  */
 @Composable
 fun RegisterScreen(
@@ -486,6 +500,7 @@ fun RegisterScreen(
     initialUsername: String? = null,
     initialPassword: String = "",
     initialCode: String = "",
+    signup: SignupMode? = account.signup,
 ) {
     var displayName by rememberSaveable { mutableStateOf(initialDisplayName) }
     var username by rememberSaveable { mutableStateOf(initialUsername ?: suggestUsername(initialDisplayName)) }
@@ -494,6 +509,10 @@ fun RegisterScreen(
     // The password and the one-time code are never saved into the instance state.
     var password by remember { mutableStateOf(initialPassword) }
     var code by remember { mutableStateOf(initialCode) }
+    // Kayıt Kodum Var opened the field. The choice survives a rebuild of the screen; the code itself does not (above).
+    var revealed by rememberSaveable { mutableStateOf(initialCode.isNotBlank()) }
+    // A field that holds a code always shows: the form never sends a code the user can not see.
+    val codeShown = signup == SignupMode.LINK || revealed || code.isNotEmpty()
     // The username of the last request, so that a USERNAME_TAKEN changes the field once.
     var sent by rememberSaveable { mutableStateOf<String?>(null) }
     val commitAutofill = autofillCommit()
@@ -517,7 +536,7 @@ fun RegisterScreen(
     }
     AccountScaffold(
         title = stringResource(R.string.action_create_account), onBack = onBack,
-        problem = account.problem?.let { accountProblemMessage(it, AccountAction.REGISTER) },
+        problem = account.problem?.let { accountProblemMessage(it, AccountAction.REGISTER, signup) },
         actions = {
             if (account.busy) AccountWaiting(account.retryingAfterBusy)
             PrimaryButton(stringResource(R.string.action_create_account), submit, enabled = ready)
@@ -552,10 +571,22 @@ fun RegisterScreen(
             password, { password = it }, stringResource(R.string.field_password), ContentType.NewPassword,
             supporting = stringResource(R.string.register_password_hint), imeAction = ImeAction.Next,
         )
-        AccountField(
-            code, { code = it.take(40) }, stringResource(R.string.field_signup_code), null,
-            supporting = stringResource(R.string.register_code_hint), capitalization = KeyboardCapitalization.Characters, keyboardType = KeyboardType.Ascii,
-        )
+        if (codeShown) {
+            AccountField(
+                code, { code = it.take(40) }, stringResource(R.string.field_signup_code), null,
+                supporting = stringResource(R.string.register_code_hint), capitalization = KeyboardCapitalization.Characters, keyboardType = KeyboardType.Ascii,
+            )
+            if (signup == SignupMode.OPEN) {
+                Text(stringResource(R.string.register_code_empty_ok), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        } else {
+            TextButton(onClick = { revealed = true }, modifier = Modifier.heightIn(min = Dimens.touchTarget)) {
+                Text(stringResource(R.string.action_have_signup_code), style = MaterialTheme.typography.labelLarge)
+            }
+        }
+        if (signup == SignupMode.OPEN) {
+            Text(stringResource(R.string.privacy_signup_open), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         if (serverConfigured) server()
     }
 }

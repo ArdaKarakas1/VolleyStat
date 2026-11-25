@@ -8,6 +8,7 @@ import com.voleybolveveleybol.volleystat.data.AttemptScope
 import com.voleybolveveleybol.volleystat.data.AuthProblem
 import com.voleybolveveleybol.volleystat.data.PasswordRule
 import com.voleybolveveleybol.volleystat.data.SignupClosedReason
+import com.voleybolveveleybol.volleystat.data.SignupMode
 import com.voleybolveveleybol.volleystat.ui.screens.AccountAction
 import com.voleybolveveleybol.volleystat.ui.screens.accountProblemText
 import com.voleybolveveleybol.volleystat.ui.screens.resolve
@@ -47,6 +48,14 @@ class AccountTextsTest {
         assertEquals(string(R.string.register_gate), text(AuthProblem.SignupClosed(SignupClosedReason.NO_LINK), action))
         assertEquals(string(R.string.register_gate), text(AuthProblem.SignupClosed(SignupClosedReason.OPEN_MATCH_LINK), action))
         assertEquals(string(R.string.register_code_invalid), text(AuthProblem.SignupCodeInvalid, action))
+        // Slice B4 (F3 of the v5.1 checker): only after health said OPEN does the text offer to leave the field empty.
+        assertEquals(string(R.string.register_code_invalid_open), accountProblemText(AuthProblem.SignupCodeInvalid, action, SignupMode.OPEN).resolve(context))
+        assertEquals(string(R.string.register_code_invalid), accountProblemText(AuthProblem.SignupCodeInvalid, action, SignupMode.LINK).resolve(context))
+        assertEquals(string(R.string.register_code_invalid), accountProblemText(AuthProblem.SignupCodeInvalid, action, null).resolve(context))
+        // A closed gate keeps B2's text under every mode: the form switches to LINK with it.
+        SignupMode.entries.forEach { mode ->
+            assertEquals(string(R.string.register_gate), accountProblemText(AuthProblem.SignupClosed(SignupClosedReason.NO_LINK), action, mode).resolve(context))
+        }
         assertEquals(string(R.string.username_taken), text(AuthProblem.UsernameTaken, action))
         assertEquals(string(R.string.username_invalid), text(AuthProblem.UsernameInvalid, action))
         assertEquals(string(R.string.display_name_invalid), text(AuthProblem.DisplayNameInvalid, action))
@@ -155,6 +164,26 @@ class AccountTextsTest {
                 listOf(" - ", " – ", " — ", "--", "olabilir.").forEach { assertFalse("$problem $action: $shown", shown.contains(it)) }
             }
         }
+    }
+
+    /** Slice B4: the texts of the sign-up mode and of the one unfinished upload pass the same checks as every account text. */
+    @Test fun theNewSignupTextsJoinNoClausesWithADashAndNameNoCode() {
+        val sentences = listOf(
+            string(R.string.start_body), string(R.string.start_body_link), string(R.string.start_body_any, string(R.string.action_create_account)),
+            string(R.string.register_code_empty_ok), string(R.string.register_code_invalid_open), string(R.string.privacy_signup_open),
+            string(R.string.upload_one_unfinished),
+        )
+        val label = string(R.string.action_have_signup_code)
+        sentences.forEach { shown -> assertTrue(shown, shown.isNotBlank() && shown.endsWith(".")) }
+        (sentences + label).forEach { shown ->
+            listOf(" - ", " – ", " — ", "--", "olabilir.").forEach { assertFalse(shown, shown.contains(it)) }
+            // No server code and no setting: the user sees what the server does, in words.
+            listOf("OPEN", "LINK", "NO_LINK", "SIGNUP", "QUOTA", "UNFINISHED", "VOLLEYSTAT").forEach { assertFalse(shown, shown.contains(it)) }
+            assertFalse(shown, Regex("%[0-9]").containsMatchIn(shown))
+        }
+        assertEquals("a button label", "Kayıt Kodum Var", label)
+        // The text of an unread health names the button the start screen shows.
+        assertTrue(string(R.string.start_body_any, string(R.string.action_create_account)).contains(string(R.string.action_create_account)))
     }
 
     /**

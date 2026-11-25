@@ -24,6 +24,8 @@ import com.voleybolveveleybol.volleystat.data.SessionCipher
 import com.voleybolveveleybol.volleystat.data.SessionCipherSource
 import com.voleybolveveleybol.volleystat.data.SessionStore
 import com.voleybolveveleybol.volleystat.data.SignedIn
+import com.voleybolveveleybol.volleystat.data.SignupClosedReason
+import com.voleybolveveleybol.volleystat.data.SignupMode
 import com.voleybolveveleybol.volleystat.data.StoredState
 import com.voleybolveveleybol.volleystat.data.UnansweredRegistrationStore
 import com.voleybolveveleybol.volleystat.data.sha256Hex
@@ -96,13 +98,18 @@ sealed interface UploadRefusal {
     data class StorageFull(val floorBytes: Long) : UploadRefusal
     /** 403 NOT_A_MEMBER: the server does not show this match to this account. */
     data object NoAccess : UploadRefusal
+    /**
+     * 409 QUOTA_EXCEEDED, scope PERSONAL, reason UNFINISHED_UPLOAD: the account already has its one unfinished personal
+     * upload (design 10.8; from slice B4 every account opened without an operator code meets it). It carries no number:
+     * the answer's numbers name the space the account holds, not what this video would need.
+     */
+    data object OneUnfinished : UploadRefusal
 
     companion object {
         /**
          * Reads the refusal out of a failed upload. A variant without its numbers, a number that is not a whole
-         * number above 0, a quota with a reason (UNFINISHED_UPLOAD: on a 0.9 server only an account opened without an
-         * operator code meets it, and its own text comes with a later version) and a scope this app has no text for
-         * (TEAM, OPEN_MATCH) give null.
+         * number above 0, a quota with a reason this app has no text for (any but UNFINISHED_UPLOAD of the scope
+         * PERSONAL) and a scope this app has no text for (TEAM, OPEN_MATCH) give null.
          */
         fun of(error: Throwable): UploadRefusal? {
             if (error !is UploadException || error.failure != UploadFailure.SERVER_REFUSED) return null
@@ -117,6 +124,7 @@ sealed interface UploadRefusal {
                 "NOT_A_MEMBER" -> NoAccess
                 "STORAGE_FULL" -> bytes("floorBytes")?.let(::StorageFull)
                 "QUOTA_EXCEEDED" -> when {
+                    details.optString("scope") == "PERSONAL" && details.optString("reason") == "UNFINISHED_UPLOAD" -> OneUnfinished
                     !details.isNull("reason") -> null
                     details.optString("scope") == "PERSONAL" ->
                         bytes("usedBytes")?.let { used -> bytes("limitBytes")?.let { limit -> PersonalQuota(used, limit) } }
@@ -236,6 +244,12 @@ data class AccountUi(
      * request was on its way (fourth review, D1). The profile says so. The next call and clearAccountProblem() clear it.
      */
     val afterLeave: OutcomeAfterLeave? = null,
+    /**
+     * How the server opens accounts, from health's `accounts.signup` (slice B4, design 10.1). Null while health has not
+     * named a mode this app knows: the start and register screens then show only what holds under both (F3 of the v5.1
+     * checker). It belongs to the server, not to a session: another server clears it, and a logout keeps it.
+     */
+    val signup: SignupMode? = null,
 )
 
 data class AppUiState(
@@ -435,8 +449,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         if (legacy != null && asked == null) saved?.let { changeDevice { settings -> settings.copy(legacyAskedUser = sha256Hex(it.userId)) } }
     }
 
-    /** Tests point the view model at a stand-in server with this. It is null everywhere else. */
-    internal var baseUrlOverride: String? = null
+    /**
+     * Tests point the view model at a stand-in server with this. It is null everywhere else. A new address is another
+     * server, so the sign-up mode of the old one goes, and is read again once a screen asked for it (C4 of the plan's
+     * critics: a flow test sets the address after the start screen's first read went to the build's address).
+     */
+    @Volatile internal var baseUrlOverride: String? = null
+        set(value) {
+            if (field == value) return
+            field = value
+            anotherServer()
+        }
 
     /** Tests shorten the wait of a correction with this, so that a server that stays silent costs them no minute. */
     internal var correctionTimeoutMs: Int? = null
@@ -709,8 +732,55 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun setServerTarget(target: ServerTarget) = synchronized(accountLock) {
         if (session != null || _state.value.account.busy) return@synchronized
+        val another = target != _state.value.settings.serverTarget
         changeDevice { it.copy(serverTarget = target) }
         _state.update { it.copy(serverTest = ServerTest.IDLE, serverConfigured = baseUrl(target).isNotBlank()) }
+        // The register screen's server choice switches the server while the screen stays open.
+        if (another) anotherServer()
+    }
+
+    // ----- The sign-up mode (slice B4; design 10.1, D4 and F3 of the v5.1 checker) -----
+
+    /**
+     * A screen that shows the sign-up mode asked for it. Only from then on does a change of the server read the mode again:
+     * before it, an address alone asks the server nothing, and the request lists the view model tests pin stay as they are.
+     */
+    @Volatile private var signupWanted = false
+
+    /**
+     * Reads health's sign-up mode for the start and register screens, which call this when they open. While a session is
+     * signed in neither screen shows, and nothing goes out. The answer counts only for the address it was asked of: one
+     * that arrives after the server changed is dropped (C4). A failed read, or a mode this app does not know, leaves the
+     * mode as it was, so the screens keep the texts of the last mode the server named, or the unread ones.
+     */
+    fun readSignupMode() {
+        signupWanted = true
+        if (session != null) return
+        val address = baseUrl(_state.value.settings.serverTarget)
+        if (address.isBlank()) return
+        viewModelScope.launch {
+            val mode = withContext(Dispatchers.IO) {
+                try {
+                    ApiClient(address).health().signup
+                } catch (error: IOException) {
+                    null
+                } catch (error: org.json.JSONException) {
+                    null
+                }
+            } ?: return@launch
+            noteSignupMode(address, mode)
+        }
+    }
+
+    /** Takes [mode] as the mode of the server at [address], unless the app talks to another server by now. */
+    private fun noteSignupMode(address: String, mode: SignupMode) = _state.update { state ->
+        if (baseUrl(state.settings.serverTarget) != address) state else state.copy(account = state.account.copy(signup = mode))
+    }
+
+    /** Another server: the mode the last one named no longer holds. A screen that wanted it gets it read again. */
+    private fun anotherServer() {
+        _state.update { it.copy(account = it.account.copy(signup = null)) }
+        if (signupWanted) readSignupMode()
     }
 
     fun markWelcomeSeen() = changeDevice { it.copy(welcomeSeen = true) }
@@ -1238,7 +1308,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Opens an account. [operatorCode] is the operator's sign-up code (kayıt kodu); a blank one is
-     * none. The server's gate needs one until invite links come (slice B5).
+     * none. Under open sign-up (the default from server 0.10) the code is optional and gives the larger
+     * quotas; a server started with VOLLEYSTAT_SIGNUP=link needs one until invite links come (slice B5).
      */
     fun register(displayName: String, username: String, password: String, operatorCode: String?) {
         val name = normalizeUsername(username)
@@ -1254,6 +1325,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     markRegistration(name)
                     throw error
                 }
+                // The server's gate needs a link or a code (design 10.1): the form takes the LINK layout and shows its code field.
+                // A server of slice B1 sends no reason, and its only closed gate is this one (AuthProblem reads it so).
+                if (AuthProblem.of(error) == AuthProblem.SignupClosed(SignupClosedReason.NO_LINK)) noteSignupMode(api.baseUrl, SignupMode.LINK)
                 findLostRegistration(api, name, password, error)
             } catch (error: RequestNotSent) {
                 // Nothing of the request left the phone, so no account can have opened: no mark sends a login later (D2).
@@ -1713,7 +1787,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         // The doubt is written before the session goes: a process that ends in between keeps one of the two (F1).
         doubt?.let(::keepDoubt)
         runCatching { sessions.clear() }
-        switchAccount(null, null) { AccountUi(busy = it.busy, retryingAfterBusy = it.retryingAfterBusy, sessionEnded = ended && doubt == null, unconfirmedDeletion = inDoubt.firstOrNull()) }
+        // The sign-up mode belongs to the server, which stays the same.
+        switchAccount(null, null) {
+            AccountUi(busy = it.busy, retryingAfterBusy = it.retryingAfterBusy, sessionEnded = ended && doubt == null, unconfirmedDeletion = inDoubt.firstOrNull(), signup = it.signup)
+        }
     }
 
     /**

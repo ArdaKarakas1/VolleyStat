@@ -36,6 +36,13 @@ class AccountStandIn : AutoCloseable {
     /** Routes as "METHOD /path" whose requests wait for their latch before the stand-in reads them. The request is recorded on arrival. */
     val hold = ConcurrentHashMap<String, CountDownLatch>()
 
+    /**
+     * The sign-up mode health names in `accounts.signup` (slice B4). OPEN is the default the CI backend runs; null leaves
+     * `accounts` out, as a server before 0.8 does. The stand-in's registration opens accounts whatever this says: a test
+     * that needs a closed gate answers POST /auth/register through [answers].
+     */
+    @Volatile var signup: String? = "OPEN"
+
     /** Routes as "METHOD /path" that answer this way instead of as the stand-in would, while they are in here. */
     val answers = ConcurrentHashMap<String, () -> MockResponse>()
 
@@ -84,7 +91,10 @@ class AccountStandIn : AutoCloseable {
         val body = request.body.readUtf8().ifEmpty { "{}" }.let(::JSONObject)
         val signedIn = authorization?.removePrefix("Bearer ")?.let { sessions[it] }?.let { accounts[it] }
         return when ("${request.method} $path") {
-            "GET /health" -> ok(JSONObject().put("status", "ok").put("mediaProbe", "available").put("maxVideoBytes", 1000))
+            "GET /health" -> ok(
+                JSONObject().put("status", "ok").put("mediaProbe", "available").put("maxVideoBytes", 1000)
+                    .apply { signup?.let { put("accounts", JSONObject().put("signup", it)) } },
+            )
             "POST /auth/register" -> {
                 val username = body.getString("username")
                 if (accounts.containsKey(username)) return refuse(409, "USERNAME_TAKEN")
@@ -153,7 +163,7 @@ class AccountStandIn : AutoCloseable {
     fun busy(retryAfterSeconds: Int) = refuse(503, "SERVER_BUSY").setHeader("Retry-After", retryAfterSeconds.toString())
 
     /** The API's error envelope. A 401 names the Bearer scheme, as the real server does. */
-    private fun refuse(status: Int, code: String, details: JSONObject = JSONObject()) = MockResponse().setResponseCode(status).setHeader("Content-Type", "application/json")
+    fun refuse(status: Int, code: String, details: JSONObject = JSONObject()) = MockResponse().setResponseCode(status).setHeader("Content-Type", "application/json")
         .setBody(JSONObject().put("error", JSONObject().put("code", code).put("message", code).put("details", details)).toString())
         .apply { if (status == 401) setHeader("WWW-Authenticate", "Bearer") }
 }

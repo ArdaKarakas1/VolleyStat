@@ -154,6 +154,34 @@ class AuthApiTest {
         assertFalse(client("session-token-1").videoContentUrl("video-1").contains("session-token-1"))
     }
 
+    /** Slice B4: health names the sign-up mode as `accounts.signup` (docs/API_V1.md section 10, "Kayıt kapısı"). */
+    @Test fun theHealthAnswerNamesTheSignupMode() {
+        fun health(signup: String) = JSONObject().put("status", "ok").put("maxVideoBytes", 10).put("mediaProbe", "available")
+            .put("accounts", JSONObject().put("signup", signup))
+        server.enqueue(json(200, health("OPEN")))
+        server.enqueue(json(200, health("LINK")))
+        assertEquals(SignupMode.OPEN, client().health().signup)
+        assertEquals(SignupMode.LINK, client().health().signup)
+    }
+
+    /** An older server sends no `accounts`, and a value this app does not know is no mode: the screens keep the unread texts. */
+    @Test fun aHealthAnswerWithoutTheSignupModeLeavesItUnread() {
+        val base = JSONObject().put("status", "ok").put("maxVideoBytes", 10).put("mediaProbe", "available")
+        listOf(
+            JSONObject(base.toString()),
+            JSONObject(base.toString()).put("accounts", JSONObject()),
+            JSONObject(base.toString()).put("accounts", JSONObject().put("signup", "MAYBE")),
+            JSONObject(base.toString()).put("accounts", JSONObject().put("signup", "open")),
+            JSONObject(base.toString()).put("accounts", JSONObject().put("signup", JSONObject.NULL)),
+            JSONObject(base.toString()).put("accounts", "OPEN"),
+        ).forEach { answer ->
+            server.enqueue(json(200, answer))
+            val health = client().health()
+            assertNull(answer.toString(), health.signup)
+            assertEquals(answer.toString(), 10L, health.maxVideoBytes)
+        }
+    }
+
     @Test fun anEndedSessionIsReportedOnceWithTheTokenThatCarriedTheCall() {
         server.enqueue(error(401, "AUTH_REQUIRED", headers = mapOf("WWW-Authenticate" to "Bearer")))
         try {

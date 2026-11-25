@@ -109,6 +109,8 @@ class AccountFlowTest {
         launch()
         compose.onNodeWithText(text(R.string.welcome_today)).assertIsDisplayed()
         tap(R.string.action_start)
+        // The mode arrives from a health read off the main thread, which the compose rule does not wait for (slice B4).
+        waitFor(text(R.string.start_body))
         compose.onNodeWithText(text(R.string.start_body)).assertIsDisplayed()
         assertFalse("the start screen has no tab bar", shown(text(R.string.nav_matches)))
 
@@ -133,6 +135,7 @@ class AccountFlowTest {
     @Test fun theStartScreenLeadsToTheLoginAndTheTwoFormsLeadToEachOther() {
         TestAccounts.device(context, Settings(welcomeSeen = true))
         launch()
+        waitFor(text(R.string.start_body))
         compose.onNodeWithText(text(R.string.start_body)).assertIsDisplayed()
         tap(R.string.action_login)
         compose.onNodeWithText(text(R.string.login_intro)).assertIsDisplayed()
@@ -325,6 +328,7 @@ class AccountFlowTest {
         logIn("ali")
         compose.waitUntil(10_000) { standIn.requests.count { it.first == "POST /auth/login" } == 1 }
         scenario!!.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+        waitFor(text(R.string.start_body))
         compose.onNodeWithText(text(R.string.start_body)).assertIsDisplayed()
         // The server asked for a wait of one second. The screen that sent the login is gone, so no repeat goes out.
         Thread.sleep(1_800)
@@ -535,6 +539,7 @@ class AccountFlowTest {
     @Test fun aBuildWithoutAServerSaysSoOnTheStartScreenAndOpensNoForm() {
         TestAccounts.device(context, Settings(welcomeSeen = true))
         val vm = launch()
+        waitFor(text(R.string.start_body))
         compose.onNodeWithText(text(R.string.start_body)).assertIsDisplayed()
         scenario!!.onActivity {
             vm.baseUrlOverride = ""
@@ -545,11 +550,114 @@ class AccountFlowTest {
         compose.onNodeWithText(text(R.string.server_none)).assertIsDisplayed()
         compose.onNodeWithText(text(R.string.start_no_server)).assertIsDisplayed()
         assertFalse("the start screen promises nothing the build can not do", shown(text(R.string.start_body)))
+        assertFalse(shown(text(R.string.start_body_link)))
+        assertFalse(shown(text(R.string.start_body_any, text(R.string.action_create_account))))
         button(R.string.action_create_account).assertIsNotEnabled().performClick()
         button(R.string.action_login).assertIsNotEnabled().performClick()
         compose.waitForIdle()
         assertFalse(shown(text(R.string.register_data)))
         assertFalse(shown(text(R.string.login_intro)))
         compose.onNodeWithText(text(R.string.start_no_server)).assertIsDisplayed()
+    }
+
+    // ----- slice B4: the start screen and the register form follow health's sign-up mode (design 10.1, D4, F3 of the v5.1 checker) -----
+
+    private fun codeFieldShown() = compose.onAllNodes(hasSetTextAction() and hasText(text(R.string.field_signup_code))).fetchSemanticsNodes().isNotEmpty()
+    private fun healthReads() = standIn.requests.count { it.first == "GET /health" }
+
+    /**
+     * F3 of the v5.1 checker, named in the B4 row: while health has not answered, a server started with `link` sits behind
+     * the screens, and nothing that holds only under OPEN may show. Once health answers LINK the screens say what LINK means.
+     */
+    @Test fun withHealthUnreadAndALinkServerBehindItTheStartAndRegisterScreensShowNoOpenOnlyText() {
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        standIn.signup = "LINK"
+        val held = java.util.concurrent.CountDownLatch(1)
+        standIn.hold["GET /health"] = held
+        standIn.answers["POST /auth/register"] = { standIn.refuse(403, "SIGNUP_CODE_INVALID") }
+        try {
+            launch()
+            val any = text(R.string.start_body_any, text(R.string.action_create_account))
+            waitFor(any)
+            compose.waitUntil(10_000) { healthReads() >= 1 }
+            assertFalse(shown(text(R.string.start_body)))
+            assertFalse(shown(text(R.string.start_body_link)))
+
+            button(R.string.action_create_account).performClick()
+            compose.onNodeWithText(text(R.string.register_data)).assertIsDisplayed()
+            assertFalse("the field hides while health is unread", codeFieldShown())
+            assertFalse(shown(text(R.string.privacy_signup_open)))
+            button(R.string.action_have_signup_code).performScrollTo().performClick()
+            field(R.string.field_signup_code).performScrollTo().assertIsDisplayed()
+            assertFalse(shown(text(R.string.register_code_empty_ok)))
+            // A wrong code gets the text that holds under both modes.
+            field(R.string.field_display_name).performTextInput("Çağrı Öztürk")
+            field(R.string.field_password).performTextInput(PASSWORD)
+            field(R.string.field_signup_code).performTextInput("ABCD-EFGH-JKMN-PQRS")
+            button(R.string.action_create_account).performClick()
+            waitFor(text(R.string.register_code_invalid))
+            assertFalse(shown(text(R.string.register_code_invalid_open)))
+            assertFalse(shown(text(R.string.privacy_signup_open)))
+            assertFalse(shown(text(R.string.start_body)))
+
+            held.countDown()
+            // Health answers LINK: the start screen names the code, and the form shows its field at once.
+            scenario!!.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+            waitFor(text(R.string.start_body_link))
+            assertFalse(shown(any))
+            button(R.string.action_create_account).performClick()
+            compose.onNodeWithText(text(R.string.register_data)).assertIsDisplayed()
+            field(R.string.field_signup_code).performScrollTo().assertIsDisplayed()
+            assertFalse(shown(text(R.string.action_have_signup_code)))
+            assertFalse(shown(text(R.string.register_code_empty_ok)))
+            assertFalse(shown(text(R.string.privacy_signup_open)))
+        } finally {
+            held.countDown()
+        }
+    }
+
+    @Test fun aNoLinkAnswerShowsTheCodeFieldAndRegisterGate() {
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        // The operator restarted the server with `link` after the screens read OPEN.
+        standIn.answers["POST /auth/register"] = { standIn.refuse(403, "SIGNUP_CLOSED", org.json.JSONObject().put("reason", "NO_LINK")) }
+        launch()
+        waitFor(text(R.string.start_body))
+        button(R.string.action_create_account).performClick()
+        compose.onNodeWithText(text(R.string.register_data)).assertIsDisplayed()
+        // The register screen reads health once more when it opens; its OPEN answer comes before the registration.
+        compose.waitUntil(10_000) { healthReads() >= 2 }
+        Thread.sleep(200)
+        compose.waitForIdle()
+        assertFalse(codeFieldShown())
+        compose.onNodeWithText(text(R.string.privacy_signup_open)).performScrollTo().assertIsDisplayed()
+        field(R.string.field_display_name).performTextInput("Çağrı Öztürk")
+        field(R.string.field_password).performTextInput(PASSWORD)
+        button(R.string.action_create_account).performClick()
+
+        waitFor(text(R.string.register_gate))
+        field(R.string.field_signup_code).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.register_code_hint)).performScrollTo().assertIsDisplayed()
+        assertFalse(shown(text(R.string.action_have_signup_code)))
+        assertFalse(shown(text(R.string.register_code_empty_ok)))
+        assertFalse(shown(text(R.string.privacy_signup_open)))
+        assertFalse(standIn.exists("cagri.ozturk"))
+    }
+
+    @Test fun anOpenServerHidesTheCodeFieldAndARegistrationWithoutACodeReachesHome() {
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        launch()
+        waitFor(text(R.string.start_body))
+        button(R.string.action_create_account).performClick()
+        compose.onNodeWithText(text(R.string.register_data)).assertIsDisplayed()
+        assertFalse(codeFieldShown())
+        compose.onNode(hasClickAction() and hasText(text(R.string.action_have_signup_code))).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.privacy_signup_open)).performScrollTo().assertIsDisplayed()
+        field(R.string.field_display_name).performTextInput("Çağrı Öztürk")
+        field(R.string.field_password).performTextInput(PASSWORD)
+        button(R.string.action_create_account).performClick()
+
+        waitFor(greeting("Çağrı Öztürk"))
+        assertTrue(standIn.exists("cagri.ozturk"))
+        assertEquals(1, standIn.requests.count { it.first == "POST /auth/register" })
     }
 }

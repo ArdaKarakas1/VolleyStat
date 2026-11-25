@@ -391,11 +391,14 @@ fun VolleyStatApp(
             // The entry moves on once the welcome was seen, and the navigation follows it.
             composable(Routes.WELCOME) { WelcomeScreen(onStart = viewModel::markWelcomeSeen) }
             composable(Routes.START) {
+                // The text follows the server's sign-up mode, which the screen reads when it opens (slice B4, design 10.1).
+                LaunchedEffect(Unit) { viewModel.readSignupMode() }
                 StartScreen(
                     onCreateAccount = { viewModel.clearAccountProblem(); go(Routes.REGISTER) },
                     onLogin = { viewModel.clearAccountProblem(); go(Routes.LOGIN) },
                     // A release build has no server address until the hosting slice: no form of this screen can work there.
                     serverConfigured = state.serverConfigured,
+                    signup = state.account.signup,
                 )
             }
             composable(Routes.LOGIN) {
@@ -416,6 +419,9 @@ fun VolleyStatApp(
             }
             composable(Routes.REGISTER) {
                 StopAccountCallOnLeave(viewModel)
+                // The form's code field follows the server's sign-up mode, read when the screen opens (slice B4, design 10.1).
+                // Its server choice switches the server, and the view model reads the mode of the new one.
+                LaunchedEffect(Unit) { viewModel.readSignupMode() }
                 RegisterScreen(
                     state.account, onRegister = { name, username, password, code -> viewModel.register(name, username, password, code) },
                     onHaveAccount = {
@@ -425,6 +431,7 @@ fun VolleyStatApp(
                     onBack = { viewModel.clearAccountProblem(); nav.popBackStack() },
                     serverConfigured = state.serverConfigured,
                     server = { ServerSection(state, viewModel::setServerTarget, viewModel::testServer) },
+                    signup = state.account.signup,
                 )
             }
             composable(Routes.LEGACY) {

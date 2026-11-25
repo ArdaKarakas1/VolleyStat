@@ -1096,6 +1096,169 @@ class AppViewModelAccountTest {
         assertEquals(listOf("POST /auth/register"), seen.map { it.key })
     }
 
+    // ----- the sign-up mode (slice B4, design 10.1 and D4): the start and register screens read it from health -----
+
+    private fun healthAnswer(signup: String) = ok(
+        JSONObject().put("status", "ok").put("mediaProbe", "available").put("maxVideoBytes", 100).put("accounts", JSONObject().put("signup", signup)),
+    )
+
+    private fun signupIs(signup: String) = on("GET /health") { healthAnswer(signup) }
+
+    /** A second stand-in server on another address, whose health names [signup]. */
+    private fun otherServer(signup: String) = MockWebServer().apply {
+        dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest) = healthAnswer(signup)
+        }
+        start()
+    }
+
+    private fun AppViewModel.awaitSignup(mode: com.voleybolveveleybol.volleystat.data.SignupMode) =
+        await("the sign-up mode $mode") { state.value.account.signup == mode }
+
+    @Test fun theStartAndRegisterScreensReadTheSignupModeFromHealth() {
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        signupIs("OPEN")
+        val vm = viewModel()
+        assertNull("nothing read yet", vm.state.value.account.signup)
+        assertTrue("an address alone asks the server nothing: no screen wanted the mode yet", seen.isEmpty())
+        vm.readSignupMode()
+        vm.awaitSignup(com.voleybolveveleybol.volleystat.data.SignupMode.OPEN)
+        assertNull("health carries no session", seen.single { it.key == "GET /health" }.authorization)
+        // The operator may restart the server with the other value: the next opening of a screen reads it.
+        signupIs("LINK")
+        vm.readSignupMode()
+        vm.awaitSignup(com.voleybolveveleybol.volleystat.data.SignupMode.LINK)
+        // While a session is signed in no screen that shows the mode is open, and nothing goes out.
+        vm.loginAndWait("ali")
+        val before = seen.count { it.key == "GET /health" }
+        vm.readSignupMode()
+        settle()
+        assertEquals(before, seen.count { it.key == "GET /health" })
+        // The mode belongs to the server, not to the session: a logout keeps what the server said.
+        vm.logoutAndWait()
+        assertEquals(com.voleybolveveleybol.volleystat.data.SignupMode.LINK, vm.state.value.account.signup)
+    }
+
+    @Test fun aNoLinkAnswerSwitchesTheFormToTheLinkLayout() {
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        signupIs("OPEN")
+        val vm = viewModel()
+        vm.readSignupMode()
+        vm.awaitSignup(com.voleybolveveleybol.volleystat.data.SignupMode.OPEN)
+        // Another refusal says nothing about the gate: the layout stays.
+        on("POST /auth/register") { refuse(403, "SIGNUP_CODE_INVALID") }
+        vm.registerAndWait(operatorCode = "ABCD-EFGH-JKMN-PQRS")
+        assertEquals(AuthProblem.SignupCodeInvalid, vm.state.value.account.problem)
+        assertEquals(com.voleybolveveleybol.volleystat.data.SignupMode.OPEN, vm.state.value.account.signup)
+        // The operator closed open sign-up after the screen read health (design 10.1).
+        on("POST /auth/register") { refuse(403, "SIGNUP_CLOSED", JSONObject().put("reason", "NO_LINK")) }
+        vm.registerAndWait(operatorCode = null)
+        assertEquals(AuthProblem.SignupClosed(com.voleybolveveleybol.volleystat.data.SignupClosedReason.NO_LINK), vm.state.value.account.problem)
+        assertEquals(com.voleybolveveleybol.volleystat.data.SignupMode.LINK, vm.state.value.account.signup)
+        assertNull(vm.state.value.account.user)
+        // A server of slice B1 sends no reason: its only closed gate is the one without a link.
+        signupIs("OPEN")
+        vm.readSignupMode()
+        vm.awaitSignup(com.voleybolveveleybol.volleystat.data.SignupMode.OPEN)
+        on("POST /auth/register") { refuse(403, "SIGNUP_CLOSED") }
+        vm.registerAndWait(operatorCode = null)
+        assertEquals(com.voleybolveveleybol.volleystat.data.SignupMode.LINK, vm.state.value.account.signup)
+    }
+
+    @Test fun aFailedHealthReadKeepsTheModeUnread() {
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        val vm = viewModel()
+        /** Reads the mode once more and waits until the read reached the server and its answer had time to land. */
+        fun readAndSettle(what: String) {
+            val before = seen.count { it.key == "GET /health" }
+            vm.readSignupMode()
+            await(what) { seen.count { it.key == "GET /health" } > before }
+            Thread.sleep(100)
+            settle()
+        }
+        on("GET /health") { refuse(500, "INTERNAL") }
+        readAndSettle("the failed read")
+        assertNull(vm.state.value.account.signup)
+        // The connection closes without an answer (the client may send the GET once more on a fresh connection).
+        on("GET /health") { MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST) }
+        readAndSettle("the read without an answer")
+        assertNull(vm.state.value.account.signup)
+        // An answer without a mode this app knows is no mode either.
+        on("GET /health") { healthAnswer("MAYBE") }
+        readAndSettle("the read of an unknown mode")
+        assertNull(vm.state.value.account.signup)
+        // A failed read leaves a mode the server named before as it was: the screens keep the texts of that state.
+        signupIs("OPEN")
+        vm.readSignupMode()
+        vm.awaitSignup(com.voleybolveveleybol.volleystat.data.SignupMode.OPEN)
+        on("GET /health") { refuse(500, "INTERNAL") }
+        readAndSettle("the failed read after the mode")
+        assertEquals(com.voleybolveveleybol.volleystat.data.SignupMode.OPEN, vm.state.value.account.signup)
+        on("GET /health") { healthAnswer("MAYBE") }
+        readAndSettle("the unknown mode after the mode")
+        assertEquals(com.voleybolveveleybol.volleystat.data.SignupMode.OPEN, vm.state.value.account.signup)
+    }
+
+    @Test fun anotherServerClearsTheSignupModeAndReadsItAgain() {
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        signupIs("OPEN")
+        val vm = viewModel()
+        vm.readSignupMode()
+        vm.awaitSignup(com.voleybolveveleybol.volleystat.data.SignupMode.OPEN)
+        val release = CountDownLatch(1)
+        on("GET /health") { release.await(8, TimeUnit.SECONDS); healthAnswer("LINK") }
+        // The register screen's server choice switches the server while the screen stays open.
+        vm.setServerTarget(com.voleybolveveleybol.volleystat.model.ServerTarget.USB_DEVICE)
+        assertNull("what the other server said no longer holds", vm.state.value.account.signup)
+        await("the new read") { seen.count { it.key == "GET /health" } == 2 }
+        release.countDown()
+        vm.awaitSignup(com.voleybolveveleybol.volleystat.data.SignupMode.LINK)
+    }
+
+    /** C4 of the plan's critics: a flow test sets the address after the start screen's first read went to the build's address. */
+    @Test fun aNewTestAddressReadsTheSignupModeAgain() {
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        signupIs("OPEN")
+        val other = otherServer("LINK")
+        try {
+            val vm = viewModel()
+            vm.readSignupMode()
+            vm.awaitSignup(com.voleybolveveleybol.volleystat.data.SignupMode.OPEN)
+            vm.baseUrlOverride = other.url("/v1").toString()
+            assertNull("the new address has not answered yet", vm.state.value.account.signup)
+            vm.awaitSignup(com.voleybolveveleybol.volleystat.data.SignupMode.LINK)
+            assertEquals(1, other.requestCount)
+        } finally {
+            other.shutdown()
+        }
+    }
+
+    @Test fun aSignupModeAnsweredForAnEarlierAddressIsDropped() {
+        TestAccounts.device(context, Settings(welcomeSeen = true))
+        val release = CountDownLatch(1)
+        val answered = CountDownLatch(1)
+        on("GET /health") {
+            release.await(8, TimeUnit.SECONDS)
+            healthAnswer("LINK").also { answered.countDown() }
+        }
+        val other = otherServer("OPEN")
+        try {
+            val vm = viewModel()
+            vm.readSignupMode()
+            await("the first read") { seen.any { it.key == "GET /health" } }
+            vm.baseUrlOverride = other.url("/v1").toString()
+            vm.awaitSignup(com.voleybolveveleybol.volleystat.data.SignupMode.OPEN)
+            // The earlier address answers LINK only now.
+            release.countDown()
+            assertTrue(answered.await(5, TimeUnit.SECONDS))
+            Thread.sleep(300)
+            settle()
+            assertEquals(com.voleybolveveleybol.volleystat.data.SignupMode.OPEN, vm.state.value.account.signup)
+        } finally {
+            other.shutdown()
+        }
+    }
+
     // ----- the data of app 0.7 -----
 
     private fun writeLegacy(): File {

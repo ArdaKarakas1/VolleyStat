@@ -28,6 +28,7 @@ import com.voleybolveveleybol.volleystat.data.AttemptScope
 import com.voleybolveveleybol.volleystat.data.AuthProblem
 import com.voleybolveveleybol.volleystat.data.PasswordRule
 import com.voleybolveveleybol.volleystat.data.SignupClosedReason
+import com.voleybolveveleybol.volleystat.data.SignupMode
 import com.voleybolveveleybol.volleystat.ui.screens.DeleteAccountScreen
 import com.voleybolveveleybol.volleystat.ui.screens.LegacyScreen
 import com.voleybolveveleybol.volleystat.ui.screens.PasswordChangeScreen
@@ -191,9 +192,9 @@ class ScreenshotTest {
         shotOn("kucuk_buyuk_yazi_maclar_erisim_yok", "+w320dp-h568dp-port", fontScale = 1.5f) { MatchesScreen(refused, {}, {}) }
         shot("takimlar") { TeamsScreen(teams, { true }, {}) }
         shot("takim_kadro") { TeamRosterScreen(teams[0], { _, _ -> true }, {}, {}, {}) }
-        shot("profil") { ProfileScreen(state, "0.9.0", {}, {}, {}, { true }) }
+        shot("profil") { ProfileScreen(state, "0.10.0", {}, {}, {}, { true }) }
         // The privacy lines sit below the first screen; a tall window keeps all of them in one picture.
-        shotOn("profil_gizlilik", "+w411dp-h2600dp-port") { ProfileScreen(state, "0.9.0", {}, {}, {}, { true }) }
+        shotOn("profil_gizlilik", "+w411dp-h2600dp-port") { ProfileScreen(state, "0.10.0", {}, {}, {}, { true }) }
     }
 
     @Test fun s03_s04_s05_newMatch() {
@@ -266,6 +267,9 @@ class ScreenshotTest {
         shot("07_yukleme_disk_dolu", content = screen(diskMatch, disk, AnalysisUi()))
         shot("07_yukleme_disk_dolu_koyu", dark = true, content = screen(diskMatch, disk, AnalysisUi()))
         shotOn("kucuk_buyuk_yazi_07_yukleme_disk_dolu", "+w320dp-h568dp-port", fontScale = 1.5f, content = screen(diskMatch, disk, AnalysisUi()))
+        // Slice B4: the one-unfinished-upload rule in its own words (design 10.8).
+        val (unfinishedMatch, unfinished) = refused(UploadRefusal.OneUnfinished, "QUOTA_EXCEEDED")
+        shot("07_yukleme_tek_yarim", content = screen(unfinishedMatch, unfinished, AnalysisUi()))
         shot("07_erisim_yok", content = screen(strangerMatch, stranger, AnalysisUi()))
         shot("07_erisim_yok_koyu", dark = true, content = screen(strangerMatch, stranger, AnalysisUi()))
         shotOn("kucuk_buyuk_yazi_07_erisim_yok", "+w320dp-h568dp-port", fontScale = 1.5f, content = screen(strangerMatch, stranger, AnalysisUi()))
@@ -421,11 +425,20 @@ class ScreenshotTest {
         fun login(account: AccountUi = AccountUi()): @Composable () -> Unit = {
             LoginScreen(account, { _, _ -> }, {}, server = { ServerSection(signedOut.copy(account = account), {}, {}) }, initialUsername = "deneme", initialPassword = "uzun bir şifre 42")
         }
-        fun register(account: AccountUi = AccountUi(), username: String? = null): @Composable () -> Unit = {
-            RegisterScreen(account, { _, _, _, _ -> }, {}, {}, server = server, initialDisplayName = "Çağrı Öztürk", initialUsername = username, initialPassword = "uzun bir şifre 42", initialCode = "ABCD-EFGH-JKMN-PQRS")
+        // Slice B4: the form follows health's sign-up mode. Under OPEN the code field hides behind Kayıt Kodum Var; a form
+        // that holds a code shows it, with the open-only sentence below the hint.
+        val code = "ABCD-EFGH-JKMN-PQRS"
+        fun register(account: AccountUi = AccountUi(), username: String? = null, signup: SignupMode? = SignupMode.OPEN, initialCode: String = ""): @Composable () -> Unit = {
+            RegisterScreen(
+                account, { _, _, _, _ -> }, {}, {}, server = server, initialDisplayName = "Çağrı Öztürk", initialUsername = username, initialPassword = "uzun bir şifre 42",
+                initialCode = initialCode, signup = signup,
+            )
         }
-        shot("14a_baslangic") { StartScreen({}, {}) }
-        shot("14a_baslangic_koyu", dark = true) { StartScreen({}, {}) }
+        // The start text by health's sign-up mode: OPEN, LINK and unread (F3 of the v5.1 checker).
+        shot("14a_baslangic") { StartScreen({}, {}, signup = SignupMode.OPEN) }
+        shot("14a_baslangic_koyu", dark = true) { StartScreen({}, {}, signup = SignupMode.OPEN) }
+        shot("14a_baslangic_link") { StartScreen({}, {}, signup = SignupMode.LINK) }
+        shot("14a_baslangic_okunmadi") { StartScreen({}, {}, signup = null) }
         // A build without a server address (a release build) can neither open an account nor log in (third review, B5).
         shot("14a_baslangic_sunucusuz") { StartScreen({}, {}, serverConfigured = false) }
         shot("14a_baslangic_sunucusuz_koyu", dark = true) { StartScreen({}, {}, serverConfigured = false) }
@@ -459,9 +472,16 @@ class ScreenshotTest {
         shotOn("kucuk_buyuk_yazi_14_giris", "+w320dp-h568dp-port", fontScale = 1.5f, content = login(AccountUi(problem = AuthProblem.TooManyAttempts(AttemptScope.DEVICE, 120))))
         shot("15_hesap_olustur", content = register())
         shot("15_hesap_olustur_koyu", dark = true, content = register())
-        // The whole form in one picture: the code field and the server choice sit below the first screen.
+        // The whole form in one picture: Kayıt Kodum Var, the open sign-up sentence and the server choice sit below the first screen.
         shotOn("15_hesap_olustur_tamami", "+w411dp-h1500dp-port", content = register())
-        shot("15_hesap_olustur_kapali", content = register(AccountUi(problem = AuthProblem.SignupClosed(SignupClosedReason.NO_LINK))))
+        // The field Kayıt Kodum Var opened, with B2's hint and the sentence that holds only under OPEN.
+        shotOn("15_hesap_olustur_kod_acik", "+w411dp-h1500dp-port", content = register(initialCode = code))
+        shotOn("kucuk_buyuk_yazi_15_hesap_olustur_kod_acik", "+w320dp-h1900dp-port", fontScale = 1.5f, content = register(initialCode = code))
+        // A server started with `link`: B2's layout, the field at once.
+        shotOn("15_hesap_olustur_link", "+w411dp-h1500dp-port", content = register(signup = SignupMode.LINK, initialCode = code))
+        // NO_LINK switched the form to the LINK layout (design 10.1).
+        val closed = AccountUi(problem = AuthProblem.SignupClosed(SignupClosedReason.NO_LINK), signup = SignupMode.LINK)
+        shot("15_hesap_olustur_kapali", content = register(closed, signup = SignupMode.LINK))
         shot("15_hesap_olustur_alinmis_ad", content = register(AccountUi(problem = AuthProblem.UsernameTaken), username = "cagri.ozturk42"))
         shotOn("kucuk_buyuk_yazi_15_hesap_olustur", "+w320dp-h568dp-port", fontScale = 1.5f, content = register())
         // The refusals whose texts name the server's whole rule (review findings T2 and T3).
@@ -486,34 +506,34 @@ class ScreenshotTest {
             DeleteAccountScreen(signedIn, holdsUploadedMatches = true, onDelete = {}, onBack = {})
         }
         // The account card at the top of the profile.
-        shotOn("profil_hesap", "+w411dp-h1100dp-port") { ProfileScreen(state, "0.9.0", {}, {}, {}, { true }) }
+        shotOn("profil_hesap", "+w411dp-h1100dp-port") { ProfileScreen(state, "0.10.0", {}, {}, {}, { true }) }
         // While someone is signed in, the server choice is read-only (review finding S5).
         shotOn("profil_sunucu_oturum_acik", "+w411dp-h500dp-port") {
             androidx.compose.foundation.layout.Column(Modifier.fillMaxSize().background(androidx.compose.material3.MaterialTheme.colorScheme.background)) { ServerSection(state, {}, {}) }
         }
-        shotOn("profil_hesap_koyu", "+w411dp-h1100dp-port", dark = true) { ProfileScreen(state, "0.9.0", {}, {}, {}, { true }) }
+        shotOn("profil_hesap_koyu", "+w411dp-h1100dp-port", dark = true) { ProfileScreen(state, "0.10.0", {}, {}, {}, { true }) }
         // A password change confirmed after Android rebuilt its screen: the password manager did not get it (second review, R2-D).
         val notHandedOver = state.copy(account = state.account.copy(confirmed = AccountChange.PASSWORD, newPasswordNotHandedOver = com.voleybolveveleybol.volleystat.PasswordNotHandedOver.SCREEN_REBUILT))
-        shotOn("profil_sifre_iletilemedi", "+w411dp-h1300dp-port") { ProfileScreen(notHandedOver, "0.9.0", {}, {}, {}, { true }) }
-        shotOn("profil_sifre_iletilemedi_koyu", "+w411dp-h1300dp-port", dark = true) { ProfileScreen(notHandedOver, "0.9.0", {}, {}, {}, { true }) }
-        shotOn("kucuk_buyuk_yazi_profil_sifre_iletilemedi", "+w320dp-h1900dp-port", fontScale = 1.5f) { ProfileScreen(notHandedOver, "0.9.0", {}, {}, {}, { true }) }
+        shotOn("profil_sifre_iletilemedi", "+w411dp-h1300dp-port") { ProfileScreen(notHandedOver, "0.10.0", {}, {}, {}, { true }) }
+        shotOn("profil_sifre_iletilemedi_koyu", "+w411dp-h1300dp-port", dark = true) { ProfileScreen(notHandedOver, "0.10.0", {}, {}, {}, { true }) }
+        shotOn("kucuk_buyuk_yazi_profil_sifre_iletilemedi", "+w320dp-h1900dp-port", fontScale = 1.5f) { ProfileScreen(notHandedOver, "0.10.0", {}, {}, {}, { true }) }
         // The user left the screen while the change was on its way, or edited the new password meanwhile (third review, B1 and B2).
         fun notHandedOver(reason: com.voleybolveveleybol.volleystat.PasswordNotHandedOver) =
             state.copy(account = state.account.copy(confirmed = AccountChange.PASSWORD, newPasswordNotHandedOver = reason))
         val left = notHandedOver(com.voleybolveveleybol.volleystat.PasswordNotHandedOver.SCREEN_LEFT)
         val edited = notHandedOver(com.voleybolveveleybol.volleystat.PasswordNotHandedOver.PASSWORD_EDITED)
-        shotOn("profil_sifre_iletilemedi_cikildi", "+w411dp-h1300dp-port") { ProfileScreen(left, "0.9.0", {}, {}, {}, { true }) }
-        shotOn("profil_sifre_iletilemedi_degistirildi", "+w411dp-h1300dp-port") { ProfileScreen(edited, "0.9.0", {}, {}, {}, { true }) }
-        shotOn("profil_sifre_iletilemedi_degistirildi_koyu", "+w411dp-h1300dp-port", dark = true) { ProfileScreen(edited, "0.9.0", {}, {}, {}, { true }) }
-        shotOn("kucuk_buyuk_yazi_profil_sifre_iletilemedi_degistirildi", "+w320dp-h2200dp-port", fontScale = 1.5f) { ProfileScreen(edited, "0.9.0", {}, {}, {}, { true }) }
+        shotOn("profil_sifre_iletilemedi_cikildi", "+w411dp-h1300dp-port") { ProfileScreen(left, "0.10.0", {}, {}, {}, { true }) }
+        shotOn("profil_sifre_iletilemedi_degistirildi", "+w411dp-h1300dp-port") { ProfileScreen(edited, "0.10.0", {}, {}, {}, { true }) }
+        shotOn("profil_sifre_iletilemedi_degistirildi_koyu", "+w411dp-h1300dp-port", dark = true) { ProfileScreen(edited, "0.10.0", {}, {}, {}, { true }) }
+        shotOn("kucuk_buyuk_yazi_profil_sifre_iletilemedi_degistirildi", "+w320dp-h2200dp-port", fontScale = 1.5f) { ProfileScreen(edited, "0.10.0", {}, {}, {}, { true }) }
         // The user left the screen while the change was on its way, and its answer was lost (fourth review, D1).
         val unknown = state.copy(
             account = state.account.copy(
                 afterLeave = com.voleybolveveleybol.volleystat.OutcomeAfterLeave(AccountChange.PASSWORD, com.voleybolveveleybol.volleystat.data.AuthProblem.Unreachable, outcomeUnknown = true),
             ),
         )
-        shotOn("profil_sifre_sonucu_bilinmiyor", "+w411dp-h1300dp-port") { ProfileScreen(unknown, "0.9.0", {}, {}, {}, { true }) }
-        shotOn("profil_sifre_sonucu_bilinmiyor_koyu", "+w411dp-h1300dp-port", dark = true) { ProfileScreen(unknown, "0.9.0", {}, {}, {}, { true }) }
-        shotOn("kucuk_buyuk_yazi_profil_sifre_sonucu_bilinmiyor", "+w320dp-h2200dp-port", fontScale = 1.5f) { ProfileScreen(unknown, "0.9.0", {}, {}, {}, { true }) }
+        shotOn("profil_sifre_sonucu_bilinmiyor", "+w411dp-h1300dp-port") { ProfileScreen(unknown, "0.10.0", {}, {}, {}, { true }) }
+        shotOn("profil_sifre_sonucu_bilinmiyor_koyu", "+w411dp-h1300dp-port", dark = true) { ProfileScreen(unknown, "0.10.0", {}, {}, {}, { true }) }
+        shotOn("kucuk_buyuk_yazi_profil_sifre_sonucu_bilinmiyor", "+w320dp-h2200dp-port", fontScale = 1.5f) { ProfileScreen(unknown, "0.10.0", {}, {}, {}, { true }) }
     }
 }

@@ -312,6 +312,8 @@ fun StatusScreen(
                     is UploadRefusal.PersonalQuota -> stringResource(R.string.upload_quota_personal, formatBytesInText(refusal.usedBytes), formatBytesInText(refusal.limitBytes))
                     is UploadRefusal.ServerQuota -> stringResource(R.string.upload_quota_server, formatBytesInText(refusal.limitBytes))
                     is UploadRefusal.StorageFull -> stringResource(R.string.upload_storage_full, formatBytesInText(refusal.floorBytes))
+                    // The rule's own text (design 10.8): the answer's numbers name the space the account holds, so the text names none.
+                    UploadRefusal.OneUnfinished -> stringResource(R.string.upload_one_unfinished)
                     UploadRefusal.NoAccess, null -> stringResource(R.string.upload_error_refused)
                 }
                 UploadFailure.CHECKSUM_KEEPS_FAILING -> stringResource(R.string.upload_error_checksum)

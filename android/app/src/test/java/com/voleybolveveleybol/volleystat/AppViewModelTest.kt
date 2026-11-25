@@ -1567,16 +1567,24 @@ class AppViewModelTest {
     }
 
     /**
-     * The one-unfinished-upload rule gets its own text with B4, when every account opened without an operator code meets it
-     * (in B3 only an account opened on a server started with VOLLEYSTAT_SIGNUP=open does). Its numbers name the space the
-     * account holds, not what the next video would need, so the size text would mislead. A later scope (TEAM, OPEN_MATCH)
-     * has no text yet either.
+     * Slice B4 (design 10.8, D2): every account opened without an operator code meets the one-unfinished-upload rule,
+     * and the refusal has its own text (upload_one_unfinished). Its numbers name the space the account holds, not what
+     * the next video would need, so the size text would mislead: the refusal carries none of them. Another reason of the
+     * same scope is one this app has no text for, and a later scope (TEAM, OPEN_MATCH) has no text yet either.
      */
-    @Test fun anUnfinishedUploadRefusalFallsBackToTheGeneralText() {
+    @Test fun anUnfinishedUploadRefusalHasItsOwnText() {
         val unfinished = uploadRefused {
             refuse(409, "QUOTA_EXCEEDED", JSONObject().put("scope", "PERSONAL").put("reason", "UNFINISHED_UPLOAD").put("usedBytes", gib).put("limitBytes", 4 * gib))
         }
-        assertNull(unfinished.refusal)
+        assertEquals(UploadRefusal.OneUnfinished, unfinished.refusal)
+        // The rule needs no numbers: an answer without them names the same refusal.
+        assertEquals(UploadRefusal.OneUnfinished, uploadRefused { refuse(409, "QUOTA_EXCEEDED", JSONObject().put("scope", "PERSONAL").put("reason", "UNFINISHED_UPLOAD")) }.refusal)
+        assertNull(uploadRefused {
+            refuse(409, "QUOTA_EXCEEDED", JSONObject().put("scope", "PERSONAL").put("reason", "SOMETHING_NEW").put("usedBytes", gib).put("limitBytes", 4 * gib))
+        }.refusal)
+        assertNull("the rule of another scope", uploadRefused {
+            refuse(409, "QUOTA_EXCEEDED", JSONObject().put("scope", "OPEN_MATCH").put("reason", "UNFINISHED_UPLOAD").put("usedBytes", gib).put("limitBytes", 4 * gib))
+        }.refusal)
         listOf("TEAM", "OPEN_MATCH").forEach { scope ->
             assertNull(scope, uploadRefused { refuse(409, "QUOTA_EXCEEDED", JSONObject().put("scope", scope).put("usedBytes", 6 * gib).put("limitBytes", 8 * gib)) }.refusal)
         }

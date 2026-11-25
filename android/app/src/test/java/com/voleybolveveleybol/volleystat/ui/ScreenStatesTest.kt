@@ -99,6 +99,8 @@ import com.voleybolveveleybol.volleystat.data.AttemptScope
 import com.voleybolveveleybol.volleystat.data.AuthProblem
 import com.voleybolveveleybol.volleystat.data.PasswordRule
 import com.voleybolveveleybol.volleystat.data.SignupClosedReason
+import com.voleybolveveleybol.volleystat.data.SignupMode
+import androidx.compose.ui.test.junit4.StateRestorationTester
 import com.voleybolveveleybol.volleystat.model.Settings
 import com.voleybolveveleybol.volleystat.ui.screens.DeleteAccountScreen
 import com.voleybolveveleybol.volleystat.ui.screens.LegacyScreen
@@ -714,7 +716,7 @@ class ScreenStatesTest {
     @Test fun theStartScreenOffersAnAccountOrALoginAndNoCodeEntryYet() {
         var created = 0
         var login = 0
-        show { StartScreen(onCreateAccount = { created++ }, onLogin = { login++ }) }
+        show { StartScreen(onCreateAccount = { created++ }, onLogin = { login++ }, signup = SignupMode.OPEN) }
         compose.onNodeWithText(text(R.string.start_body)).assertIsDisplayed()
         compose.onNodeWithText(text(R.string.action_create_account)).performClick()
         compose.onNodeWithText(text(R.string.action_login)).performClick()
@@ -727,22 +729,134 @@ class ScreenStatesTest {
     @Test fun aStartScreenWithoutAServerSaysSoAndItsButtonsOpenNoForm() {
         var created = 0
         var login = 0
-        show { StartScreen(onCreateAccount = { created++ }, onLogin = { login++ }, serverConfigured = false) }
+        show { StartScreen(onCreateAccount = { created++ }, onLogin = { login++ }, serverConfigured = false, signup = SignupMode.OPEN) }
         compose.onNodeWithText(text(R.string.server_none)).assertIsDisplayed()
         compose.onNodeWithText(text(R.string.start_no_server)).assertIsDisplayed()
         assertFalse("no promise of an account or a login", shown(text(R.string.start_body)))
+        assertFalse(shown(text(R.string.start_body_link)))
+        assertFalse(shown(text(R.string.start_body_any, text(R.string.action_create_account))))
         compose.onNode(hasClickAction() and hasText(text(R.string.action_create_account))).assertIsNotEnabled().performClick()
         compose.onNode(hasClickAction() and hasText(text(R.string.action_login))).assertIsNotEnabled().performClick()
         assertEquals(0 to 0, created to login)
     }
 
     @Test fun aStartScreenWithAServerSaysNothingAboutAMissingOne() {
-        show { StartScreen(onCreateAccount = {}, onLogin = {}, serverConfigured = true) }
+        show { StartScreen(onCreateAccount = {}, onLogin = {}, serverConfigured = true, signup = SignupMode.OPEN) }
         compose.onNodeWithText(text(R.string.start_body)).assertIsDisplayed()
         assertFalse(shown(text(R.string.server_none)))
         assertFalse(shown(text(R.string.start_no_server)))
         compose.onNode(hasClickAction() and hasText(text(R.string.action_create_account))).assertIsEnabled()
         compose.onNode(hasClickAction() and hasText(text(R.string.action_login))).assertIsEnabled()
+    }
+
+    // Slice B4 (design 10.1, D4 and F3 of the v5.1 checker): the start screen and the register form follow health's sign-up mode.
+    // A text that holds only under one mode shows only after health named that mode.
+
+    @Test fun theStartScreenNamesOpenSignupOnlyAfterTheServerSaidOpen() {
+        show { StartScreen(onCreateAccount = {}, onLogin = {}, signup = SignupMode.OPEN) }
+        compose.onNodeWithText(text(R.string.start_body)).assertIsDisplayed()
+        assertFalse(shown(text(R.string.start_body_link)))
+        assertFalse(shown(text(R.string.start_body_any, text(R.string.action_create_account))))
+        // Open sign-up sends nobody to the owner for a code.
+        assertFalse(shown("kayıt kodu"))
+    }
+
+    @Test fun theStartScreenUnderLinkNamesTheSignupCode() {
+        show { StartScreen(onCreateAccount = {}, onLogin = {}, signup = SignupMode.LINK) }
+        compose.onNodeWithText(text(R.string.start_body_link)).assertIsDisplayed()
+        assertFalse(shown(text(R.string.start_body)))
+        assertFalse(shown(text(R.string.start_body_any, text(R.string.action_create_account))))
+    }
+
+    @Test fun theStartScreenWhileHealthIsUnreadShowsOnlyWhatHoldsUnderBothModes() {
+        var created = 0
+        show { StartScreen(onCreateAccount = { created++ }, onLogin = {}, signup = null) }
+        val any = text(R.string.start_body_any, text(R.string.action_create_account))
+        compose.onNodeWithText(any).assertIsDisplayed()
+        assertTrue("the text names the button the screen shows", any.contains(text(R.string.action_create_account)))
+        assertFalse(shown(text(R.string.start_body)))
+        assertFalse(shown(text(R.string.start_body_link)))
+        // The buttons work while health is unread: the register form has the layout that holds under both modes.
+        compose.onNode(hasClickAction() and hasText(text(R.string.action_create_account))).assertIsEnabled().performClick()
+        assertEquals(1, created)
+    }
+
+    @Test fun underOpenTheCodeFieldHidesBehindKayitKodumVarAndAnEmptyFieldSendsNoCode() {
+        val sent = mutableListOf<List<String>>()
+        show {
+            RegisterScreen(
+                AccountUi(signup = SignupMode.OPEN), onRegister = { d, u, p, c -> sent += listOf(d, u, p, c) }, onHaveAccount = {}, onBack = {},
+                signup = SignupMode.OPEN, initialDisplayName = "Ali Yılmaz", initialPassword = "uzun bir şifre 42",
+            )
+        }
+        assertFalse("the field hides", compose.onAllNodes(hasSetTextAction() and hasText(text(R.string.field_signup_code))).fetchSemanticsNodes().isNotEmpty())
+        assertFalse(shown(text(R.string.register_code_hint)))
+        assertFalse(shown(text(R.string.register_code_empty_ok)))
+        compose.onNodeWithText(text(R.string.privacy_signup_open)).performScrollTo().assertIsDisplayed()
+        // An empty, hidden field sends no code: the view model reads a blank code as none.
+        compose.onNode(hasClickAction() and hasText(text(R.string.action_create_account))).assertIsEnabled().performClick()
+        assertEquals(listOf(listOf("Ali Yılmaz", "ali.yilmaz", "uzun bir şifre 42", "")), sent)
+        // Kayıt Kodum Var reveals the field with B2's hint and the open-only sentence below it.
+        compose.onNode(hasClickAction() and hasText(text(R.string.action_have_signup_code))).performScrollTo().performClick()
+        field(R.string.field_signup_code).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.register_code_hint)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.register_code_empty_ok)).performScrollTo().assertIsDisplayed()
+        assertFalse("the button leaves once the field is there", shown(text(R.string.action_have_signup_code)))
+        // A revealed field left empty still sends no code.
+        compose.onNode(hasClickAction() and hasText(text(R.string.action_create_account))).performClick()
+        assertEquals("", sent.last()[3])
+        field(R.string.field_signup_code).performTextInput("abcd-efgh")
+        compose.onNode(hasClickAction() and hasText(text(R.string.action_create_account))).performClick()
+        assertEquals("abcd-efgh", sent.last()[3])
+    }
+
+    @Test fun underLinkTheCodeFieldShowsAtOnceWithoutTheOpenTexts() {
+        show { RegisterScreen(AccountUi(signup = SignupMode.LINK), onRegister = { _, _, _, _ -> }, onHaveAccount = {}, onBack = {}, signup = SignupMode.LINK) }
+        field(R.string.field_signup_code).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.register_code_hint)).performScrollTo().assertIsDisplayed()
+        assertFalse(shown(text(R.string.action_have_signup_code)))
+        assertFalse(shown(text(R.string.register_code_empty_ok)))
+        assertFalse(shown(text(R.string.privacy_signup_open)))
+    }
+
+    @Test fun whileHealthIsUnreadTheFormHasTheOpenLayoutWithoutAnyOpenOnlyText() {
+        var account by mutableStateOf(AccountUi())
+        show { RegisterScreen(account, onRegister = { _, _, _, _ -> }, onHaveAccount = {}, onBack = {}, signup = null) }
+        assertFalse("the field hides", compose.onAllNodes(hasSetTextAction() and hasText(text(R.string.field_signup_code))).fetchSemanticsNodes().isNotEmpty())
+        assertFalse(shown(text(R.string.privacy_signup_open)))
+        compose.onNode(hasClickAction() and hasText(text(R.string.action_have_signup_code))).performScrollTo().performClick()
+        field(R.string.field_signup_code).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.register_code_hint)).performScrollTo().assertIsDisplayed()
+        assertFalse("true only under OPEN", shown(text(R.string.register_code_empty_ok)))
+        assertFalse(shown(text(R.string.privacy_signup_open)))
+        // A wrong code gets the text that holds under both modes, never the one that offers to leave the field empty.
+        account = AccountUi(problem = AuthProblem.SignupCodeInvalid)
+        compose.onNodeWithText(text(R.string.register_code_invalid)).assertIsDisplayed()
+        assertFalse(shown(text(R.string.register_code_invalid_open)))
+    }
+
+    @Test fun aWrongCodeUnderOpenOffersToEmptyTheField() {
+        show {
+            RegisterScreen(
+                AccountUi(problem = AuthProblem.SignupCodeInvalid, signup = SignupMode.OPEN), onRegister = { _, _, _, _ -> }, onHaveAccount = {}, onBack = {},
+                signup = SignupMode.OPEN, initialCode = "ABCD-EFGH-JKMN-PQRS",
+            )
+        }
+        compose.onNodeWithText(text(R.string.register_code_invalid_open)).assertIsDisplayed()
+        assertFalse(shown(text(R.string.register_code_invalid)))
+        // A form that holds a code shows its field: the user sees what the server refused.
+        field(R.string.field_signup_code).performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun aRevealedFieldStaysOpenWhenTheScreenIsRebuilt() {
+        val restoration = StateRestorationTester(compose)
+        restoration.setContent { VolleyStatTheme(dark = false) { RegisterScreen(AccountUi(), onRegister = { _, _, _, _ -> }, onHaveAccount = {}, onBack = {}, signup = SignupMode.OPEN) } }
+        compose.onNode(hasClickAction() and hasText(text(R.string.action_have_signup_code))).performScrollTo().performClick()
+        field(R.string.field_signup_code).performScrollTo().assertIsDisplayed()
+        restoration.emulateSavedInstanceStateRestore()
+        // B2 keeps the typed code out of the instance state on purpose (Account.kt): only the open field comes back.
+        field(R.string.field_signup_code).performScrollTo().assertIsDisplayed()
+        assertFalse(shown(text(R.string.action_have_signup_code)))
     }
 
     @Test fun theLoginSendsWhatWasTypedOnlyWithBothFieldsAndCommitsTheAutofill() {
@@ -882,6 +996,8 @@ class ScreenStatesTest {
         compose.onNode(hasClickAction() and hasText(text(R.string.action_create_account))).assertIsNotEnabled()
         field(R.string.field_display_name).performTextInput("İlker Işık")
         field(R.string.field_password).performTextInput("uzun bir şifre 42")
+        // The OPEN layout (and the one while health is unread) keeps the field behind Kayıt Kodum Var (slice B4).
+        compose.onNode(hasClickAction() and hasText(text(R.string.action_have_signup_code))).performScrollTo().performClick()
         field(R.string.field_signup_code).performScrollTo().performTextInput("abcd-efgh")
         compose.onNodeWithText(text(R.string.register_code_hint)).performScrollTo().assertIsDisplayed()
         compose.onNode(hasClickAction() and hasText(text(R.string.action_create_account))).assertIsEnabled().performClick()
@@ -1245,6 +1361,20 @@ class ScreenStatesTest {
         val notice = text(R.string.upload_storage_full, "10,7${nb}GB") + " " + text(R.string.upload_kept, "400${nb}MB")
         compose.onNodeWithText(notice).performScrollTo().assertIsDisplayed()
         compose.onNodeWithText(text(R.string.action_retry)).assertIsDisplayed()
+    }
+
+    /**
+     * Slice B4 (design 10.8): the one-unfinished-upload rule has its own text. The answer's numbers name the space the
+     * account holds, not what this video needs, so the text names no size; Yeniden Dene sends the video once the other
+     * upload ended.
+     */
+    @Test fun anUnfinishedUploadRefusalHasItsOwnTextOnTheStatusScreen() {
+        val fresh = unfinished.copy(session = UploadSession("sha", "srv", null, 0))
+        show { StatusScreen(fresh, refused(UploadRefusal.OneUnfinished, "QUOTA_EXCEEDED"), AnalysisUi(), null, {}, {}, {}, {}, {}, {}, {}) }
+        compose.onNodeWithText(text(R.string.upload_one_unfinished)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.action_retry)).assertIsDisplayed()
+        assertFalse(shown(text(R.string.upload_error_refused)))
+        assertFalse(shown("GB"))
     }
 
     /**

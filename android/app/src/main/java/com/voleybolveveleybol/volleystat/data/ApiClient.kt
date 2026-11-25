@@ -68,7 +68,16 @@ class SignedIn(val user: AccountUser, val token: String, val expiresAt: String, 
     override fun toString() = "SignedIn(user=$user, expiresAt=$expiresAt, token=<hidden>, deviceToken=${if (deviceToken == null) "none" else "<hidden>"})"
 }
 
-data class Health(val maxVideoBytes: Long, val probeAvailable: Boolean)
+/** How the server opens accounts, from health's `accounts.signup` (docs/API_V1.md section 10, "Kayıt kapısı"). */
+enum class SignupMode {
+    /** A registration needs neither a link nor an operator code (the default from server 0.10). */
+    OPEN,
+    /** A registration needs an operator code until invite links come (slice B5): `VOLLEYSTAT_SIGNUP=link`. */
+    LINK,
+}
+
+/** [signup] is null when health named no mode this app knows: an older server, or a value of a later version. */
+data class Health(val maxVideoBytes: Long, val probeAvailable: Boolean, val signup: SignupMode? = null)
 
 /** What the server is told about a match. Player names are never part of it. */
 data class MatchInfo(
@@ -175,6 +184,8 @@ class ApiClient(
         return Health(
             maxVideoBytes = json.optLong("maxVideoBytes", 4L * 1024 * 1024 * 1024),
             probeAvailable = json.optString("mediaProbe") == "available",
+            // Server 0.10 names the mode in accounts.signup. Anything else (no accounts, no signup, another value) is unread.
+            signup = json.optJSONObject("accounts")?.opt("signup")?.let { value -> SignupMode.entries.firstOrNull { it.name == value } },
         )
     }
 

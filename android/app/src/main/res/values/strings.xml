@@ -233,6 +233,8 @@
     <!-- Slice B3: the server's limits, worded with the numbers the server sent (docs/API_V1.md, Depolama sınırları). -->
     <string name="upload_quota_personal">Sunucu bu hesabın kişisel maç videolarına %1$s yer ayırdı. Sunucu bu hesaba en çok %2$s yer ayırır. Yeni video için önce eski bir maçı silebilirsin.</string>
     <string name="upload_quota_server">Sunucu bütün hesapların kişisel maç videolarına en çok %1$s yer ayırır. Bu video kalan yere sığmadı. Video telefonunda kalır. Yüklemeyi sonra yeniden deneyebilirsin.</string>
+    <!-- Slice B4 (design 10.8): 409 QUOTA_EXCEEDED, scope PERSONAL, reason UNFINISHED_UPLOAD. Every account opened without an operator code meets it. -->
+    <string name="upload_one_unfinished">Bu hesabın bitmemiş bir kişisel video yüklemesi var. Sunucu bu hesaptan aynı anda tek bir bitmemiş kişisel yükleme kabul eder. O yükleme bitince ya da sunucu onu silince bu videoyu yeniden gönderebilirsin. Sunucu bir gün boyunca parça almayan yüklemeyi siler.</string>
     <string name="upload_storage_full">Bu videonun yüklemesi ve varsa süren öteki yüklemeler bitince sunucunun diskindeki boş yer %1$s sınırının altına inerdi. Sunucu bu yüzden yüklemeyi durdurdu. Video telefonunda kalır. Yüklemeyi sonra yeniden deneyebilirsin.</string>
     <string name="upload_error_checksum">Sunucuya ulaşan dosya telefondaki dosyayla iki kez uyuşmadı.</string>
     <string name="upload_busy">Uygulama aynı anda tek video yükler. Öteki yükleme bitince bu yüklemeyi başlat.</string>
@@ -584,7 +586,12 @@
     <!-- Accounts (slice B2; design 3, 10.1, 10.7 and 10.8; docs/API_V1.md section 10). A text says that someone
          is signed in, registered, renamed or logged out only after the server confirmed it. Texts of design 10.8
          and 2.12 that speak of teams, invites or open matches are adapted: this app version has none of them. -->
-    <string name="start_body">Uygulamayı kullanmak için bir hesabın olmalı. Hesabın yoksa Voleybol Ve Veleybol\'dan bir kayıt kodu alıp hesap oluşturabilirsin. Hesabın varsa giriş yapabilirsin.</string>
+    <!-- Slice B4 (design v5.1, D4 and F3): the start screen follows health's accounts.signup. start_body after health said
+         OPEN, start_body_link after LINK, start_body_any while health is unread: a text that holds under only one mode
+         shows only after health named it. %1$s of start_body_any is the label of Hesap Oluştur. -->
+    <string name="start_body">Uygulamayı kullanmak için bir hesabın olmalı. Hesabın yoksa yeni bir hesap oluşturabilirsin. Hesabın varsa giriş yapabilirsin.</string>
+    <string name="start_body_link">Uygulamayı kullanmak için bir hesabın olmalı. Hesabın yoksa Voleybol Ve Veleybol\'dan bir kayıt kodu alıp hesap oluşturabilirsin. Hesabın varsa giriş yapabilirsin.</string>
+    <string name="start_body_any">Uygulamayı kullanmak için bir hesabın olmalı. Hesabın yoksa %1$s düğmesine dokunabilirsin. Hesabın varsa giriş yapabilirsin.</string>
     <string name="start_no_server">Bu yüzden uygulama hesap açamaz ve giriş yapamaz.</string>
     <string name="action_login">Giriş Yap</string>
     <string name="action_create_account">Hesap Oluştur</string>
@@ -633,12 +640,19 @@
     <string name="register_username_suggested">Uygulama kullanıcı adını görünen adından önerdi. İstersen kullanıcı adını değiştirebilirsin.</string>
     <string name="register_password_hint">Şifre en az 10 karakter olmalı ve kullanıcı adını içermemeli. Sunucu çok yaygın şifreleri kabul etmez.</string>
     <string name="register_code_hint">Kayıt kodunu Voleybol Ve Veleybol verir. Kodu büyük ya da küçük harfle, tireli ya da tiresiz yazabilirsin.</string>
+    <!-- Slice B4: under OPEN and while health is unread the code field hides behind this text button. register_code_empty_ok
+         and privacy_signup_open show only after health said OPEN (F3 of the v5.1 checker). -->
+    <string name="action_have_signup_code">Kayıt Kodum Var</string>
+    <string name="register_code_empty_ok">Kodun yoksa bu alanı boş bırakabilirsin.</string>
+    <string name="privacy_signup_open">Sunucu kayıt kodu olmayan kişinin de hesap açmasına izin verir ve hesap açan kişinin kim olduğunu denetlemez.</string>
     <string name="username_invalid">Kullanıcı adı 3 ile 30 karakter arasında olmalı, bir harfle başlamalı ve yalnız a-z harfleri, rakam, nokta ve alt çizgi taşımalı.</string>
     <!-- The server's whole rule (API_V1 section 10): ".." meets length and characters and is refused for want of a letter or digit (T3). -->
     <string name="display_name_invalid">Görünen ad 2 ile 40 karakter arasında olmalı ve en az bir harf ya da rakam içermeli. Görünen ad harf ve rakamın yanında yalnız boşluk, nokta, kesme işareti ve kısa çizgi taşıyabilir.</string>
     <!-- 403 SIGNUP_CLOSED. Invite links come with a later slice, so this app can open an account with a code only. -->
     <string name="register_gate">Sunucu şimdilik yalnızca kayıt koduyla hesap açar. Kayıt kodunu Voleybol Ve Veleybol verir. Kodu kayıt kodu alanına yazıp yeniden deneyebilirsin.</string>
     <string name="register_code_invalid">Sunucu bu kayıt kodunu kabul etmedi. Kodu kontrol edebilir ya da Voleybol Ve Veleybol\'dan yeni bir kod isteyebilirsin.</string>
+    <!-- 403 SIGNUP_CODE_INVALID after health said OPEN (slice B4): a registration without a code opens an account there. -->
+    <string name="register_code_invalid_open">Sunucu bu kayıt kodunu kabul etmedi. Kodu kontrol edebilir ya da kod alanını boşaltıp hesabını kodsuz oluşturabilirsin.</string>
     <!-- 409 USERNAME_TAKEN. The register screen has put digits after the refused name. -->
     <string name="username_taken">Sunucuda bu kullanıcı adını taşıyan bir hesap var. Uygulama yeni bir ad önerdi. İstersen başka bir ad seçebilirsin.</string>
     <string name="login_failed">Sunucu bu kullanıcı adını ve şifreyi eşleştiremedi. Kullanıcı adını ve şifreni kontrol edip yeniden deneyebilirsin.</string>

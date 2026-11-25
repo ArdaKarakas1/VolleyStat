@@ -63,6 +63,7 @@ class JourneyTest {
 
     private fun text(id: Int, vararg arguments: Any) = app.activity.getString(id, *arguments)
     private fun tap(id: Int) = app.onAllNodesWithText(text(id)).onFirst().performClick()
+    private fun waitFor(value: String) = app.waitUntil(10_000) { app.onAllNodesWithText(value, substring = true).fetchSemanticsNodes().isNotEmpty() }
 
     /** The account routes. From version 0.8 the app opens Home only for a signed-in account. */
     private val standIn = AccountStandIn()
@@ -73,6 +74,8 @@ class JourneyTest {
     private fun passWelcome() {
         ViewModelProvider(app.activity)[AppViewModel::class.java].baseUrlOverride = standIn.baseUrl
         app.onNodeWithText(text(R.string.action_start)).performClick()
+        // The sign-up mode arrives from a health read off the main thread, which the compose rule does not wait for (slice B4).
+        waitFor(text(R.string.start_body))
         app.onNodeWithText(text(R.string.start_body)).assertIsDisplayed()
         app.onNodeWithText(text(R.string.action_create_account)).performClick()
         app.onNode(hasSetTextAction() and hasText(text(R.string.field_display_name))).performTextInput("Deneme Oyuncu")
