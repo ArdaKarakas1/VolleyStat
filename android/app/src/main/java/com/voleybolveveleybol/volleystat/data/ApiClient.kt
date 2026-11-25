@@ -71,8 +71,9 @@ class SignedIn(val user: AccountUser, val token: String, val expiresAt: String, 
 /**
  * The answer to `GET /health`. A 2xx carries no error envelope, so the answer's own shape is the sign that the API sent it
  * (ADR-0119): every version of the API answers with a JSON object whose `status` is "ok" and whose `mediaProbe` is
- * "available" or "unavailable". [fromApi] is false for any other 2xx: a blank body, a page, or the JSON of another
- * service at the address. Such an answer says nothing about the server, so [probeAvailable] says nothing then either.
+ * "available" or "unavailable". [fromApi] is false for any other 2xx with a blank body or a JSON object, such as the
+ * JSON of another service at the address. Such an answer says nothing about the server, so [probeAvailable] says nothing
+ * then either. A 2xx that is not JSON, a page for example, throws UNEXPECTED_ANSWER as it does on every call.
  */
 data class Health(val maxVideoBytes: Long, val probeAvailable: Boolean, val fromApi: Boolean)
 
@@ -203,11 +204,17 @@ class ApiClient(
      * the app last read ([seen]): while the match has another rule, a request the app gave up on
      * that arrives late is refused as stale and does not undo a later change to another rule. The
      * server moves the rally list of the match on, and a confirmation given under the old rule
-     * lapses. The answer is not read.
+     * lapses. Only the API's own answer says that the server counts with the rule: the match, naming the rule
+     * it now has. A blank 2xx, the JSON of something else or another rule throws UNEXPECTED_ANSWER, and the
+     * caller looks for the rule on the list (ADR-0119).
      */
     fun putMatchRules(matchId: String, rules: MatchRules, seen: MatchRules) {
         val body = rulesJson(rules).put("expectedRules", rulesJson(seen))
-        request("PUT", "/matches/$matchId/rules", body.toString().toByteArray(), timeoutMs = correctionTimeoutMs)
+        val received = Received()
+        val counted = readable(received) {
+            parseRules(request("PUT", "/matches/$matchId/rules", body.toString().toByteArray(), timeoutMs = correctionTimeoutMs, received = received).getJSONObject("rules"))
+        }
+        if (counted != rules) throw ApiException(received.status, "UNEXPECTED_ANSWER", "The answer names another rule than the one sent", JSONObject(), contentType = received.contentType)
     }
 
     private fun rulesJson(rules: MatchRules) = JSONObject()

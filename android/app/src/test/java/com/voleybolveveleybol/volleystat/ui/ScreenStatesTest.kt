@@ -53,6 +53,7 @@ import com.voleybolveveleybol.volleystat.model.VideoCheck
 import com.voleybolveveleybol.volleystat.model.VideoSource
 import com.voleybolveveleybol.volleystat.ui.screens.ClipPlaceholder
 import com.voleybolveveleybol.volleystat.ui.screens.HomeScreen
+import com.voleybolveveleybol.volleystat.ui.screens.ServerSection
 import com.voleybolveveleybol.volleystat.ui.screens.MatchCreateScreen
 import com.voleybolveveleybol.volleystat.ui.screens.PlayersScreen
 import com.voleybolveveleybol.volleystat.FEEDBACK_ADDRESS
@@ -497,10 +498,11 @@ class ScreenStatesTest {
             RemovalFailure.UNCONFIRMED to R.string.removal_unconfirmed,
             RemovalFailure.VERIFYING to R.string.removal_verifying,
             RemovalFailure.REFUSED to R.string.removal_refused,
-            // An answer that leaves open whether the server deleted the match: the account changes' own texts (ADR-0119).
-            RemovalFailure.SERVER_ERROR to R.string.account_outcome_unknown,
-            RemovalFailure.ERROR_ON_THE_WAY to R.string.account_outcome_unknown_on_the_way,
-            RemovalFailure.UNREADABLE to R.string.account_unexpected_change_signed_in,
+            // An answer that leaves open whether the server deleted the match. The notice stays on the match's
+            // screen next to the upload's, so each text names the match (ADR-0119).
+            RemovalFailure.SERVER_ERROR to R.string.removal_outcome_unknown,
+            RemovalFailure.ERROR_ON_THE_WAY to R.string.removal_outcome_unknown_on_the_way,
+            RemovalFailure.UNREADABLE to R.string.removal_unreadable,
         )
         var shownFailure by mutableStateOf<RemovalFailure?>(null)
         show { StatusScreen(match, null, AnalysisUi("m1", JobLoad.NO_JOB), shownFailure, {}, {}, {}, {}, {}, {}, {}) }
@@ -978,6 +980,37 @@ class ScreenStatesTest {
         test = ServerTest.UNREADABLE
         compose.onNodeWithText(text(R.string.server_unreadable)).performScrollTo().assertIsDisplayed()
         listOf(R.string.server_ok, R.string.server_ok_no_probe, R.string.server_unreachable).forEach { assertFalse(shown(text(it))) }
+    }
+
+    @Test fun anUnreadableServerTestAdvisesTheServerChoiceOnlyWhereTheChoiceIsOpen() {
+        // The login and registration screens show the same section. Nobody is signed in there, and the user can choose another server.
+        var state by mutableStateOf(AppUiState(serverTest = ServerTest.UNREADABLE))
+        show { ServerSection(state, {}, {}) }
+        compose.onNodeWithText(text(R.string.account_unexpected)).assertIsDisplayed()
+        // On the profile a session is open and the app locks the server choice, so the text gives no advice about it.
+        state = signedIn.copy(serverTest = ServerTest.UNREADABLE)
+        compose.waitForIdle()
+        compose.onNodeWithText(text(R.string.server_unreadable)).assertIsDisplayed()
+        assertFalse(shown(text(R.string.account_unexpected)))
+    }
+
+    @Test fun theServerTestSaysWhatKindOfAnswerCameOnEveryScreen() {
+        val sentences = listOf(
+            ServerTest.UNREACHABLE to R.string.server_unreachable,
+            ServerTest.NO_ANSWER to R.string.net_no_answer,
+            ServerTest.SERVER_ERROR to R.string.server_error,
+            ServerTest.ERROR_ON_THE_WAY to R.string.server_error_on_the_way,
+        )
+        var state by mutableStateOf(AppUiState())
+        show { ServerSection(state, {}, {}) }
+        listOf(AppUiState(), signedIn).forEach { screen ->
+            sentences.forEach { (test, sentence) ->
+                state = screen.copy(serverTest = test)
+                compose.waitForIdle()
+                compose.onNodeWithText(text(sentence)).assertIsDisplayed()
+                (sentences.map { it.second } - sentence).forEach { assertFalse(shown(text(it))) }
+            }
+        }
     }
 
     @Test fun theProfileShowsTheAccountAndHasNoLocalNameField() {

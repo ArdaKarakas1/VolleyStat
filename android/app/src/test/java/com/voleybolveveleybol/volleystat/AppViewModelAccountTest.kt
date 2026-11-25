@@ -13,6 +13,7 @@ import com.voleybolveveleybol.volleystat.data.UnansweredRegistrationStore
 import com.voleybolveveleybol.volleystat.model.Draft
 import com.voleybolveveleybol.volleystat.model.LocalVideo
 import com.voleybolveveleybol.volleystat.model.MatchRecord
+import com.voleybolveveleybol.volleystat.model.ServerTarget
 import com.voleybolveveleybol.volleystat.model.Settings
 import com.voleybolveveleybol.volleystat.model.Team
 import com.voleybolveveleybol.volleystat.model.VideoSource
@@ -1184,6 +1185,26 @@ class AppViewModelAccountTest {
         assertEquals(Entry.START, vm.state.value.entry)
         assertEquals(com.voleybolveveleybol.volleystat.model.ServerTarget.USB_DEVICE, vm.state.value.settings.serverTarget)
         assertTrue("the app reads no account's data before a login", vm.state.value.matches.isEmpty())
+    }
+
+    @Test fun theAnswerOfAServerThatIsNoLongerChosenLeavesNoTestResult() {
+        TestAccounts.device(context, Settings(welcomeSeen = true, accountSeen = true, legacyHandled = true))
+        val release = CountDownLatch(1)
+        on("GET /health") { release.await(8, TimeUnit.SECONDS); ok(JSONObject().put("status", "ok").put("mediaProbe", "available").put("maxVideoBytes", 100)) }
+        val vm = viewModel()
+        vm.testServer()
+        await("the test on its way") { seen.any { it.key == "GET /health" } }
+        // Signed out, the server choice stays open while the test runs. The user picks the other server.
+        val other = if (vm.state.value.settings.serverTarget == ServerTarget.EMULATOR) ServerTarget.USB_DEVICE else ServerTarget.EMULATOR
+        vm.setServerTarget(other)
+        assertEquals(ServerTest.IDLE, vm.state.value.serverTest)
+        release.countDown()
+        repeat(3) { settle() }
+        assertEquals("the first server's answer says nothing about the one now chosen", ServerTest.IDLE, vm.state.value.serverTest)
+        // A test of the server now chosen still reports its own answer.
+        vm.testServer()
+        await("the second test") { vm.state.value.serverTest != ServerTest.TESTING }
+        assertEquals(ServerTest.OK, vm.state.value.serverTest)
     }
 
     // ----- the account itself -----

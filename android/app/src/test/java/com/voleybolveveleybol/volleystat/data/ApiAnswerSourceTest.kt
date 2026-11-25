@@ -54,6 +54,23 @@ class ApiAnswerSourceTest {
         }
     }
 
+    @Test fun anAnswerLeavesTheOutcomeOpenUnlessTheApiItselfRefused() {
+        fun outcome(status: Int, code: String) = UnknownOutcome.of(ApiException(status, code, code, JSONObject()))
+        // The API's own refusal: its envelope on a 4xx, and SERVER_BUSY, which the server sends before it does anything.
+        assertNull(outcome(422, "VALIDATION_ERROR"))
+        assertNull(outcome(409, "RALLY_LIST_STALE"))
+        assertNull(outcome(503, "SERVER_BUSY"))
+        // The server reported an error and may have made the change before it failed.
+        assertEquals(UnknownOutcome.SERVER_ERROR, outcome(500, "INTERNAL_ERROR"))
+        // A gateway on the way may have sent these: a 5xx without the envelope, and a 511, which the API never sends.
+        assertEquals(UnknownOutcome.ERROR_ON_THE_WAY, outcome(502, "HTTP_502"))
+        assertEquals(UnknownOutcome.ERROR_ON_THE_WAY, outcome(511, "NETWORK_AUTHENTICATION_REQUIRED"))
+        // Answers the app can not read: a 4xx or a 3xx without the envelope, a 2xx this call does not expect, an envelope
+        // that names UNEXPECTED_ANSWER, and a status HTTP does not have.
+        listOf(404 to "HTTP_404", 302 to "HTTP_302", 200 to "UNEXPECTED_ANSWER", 409 to "UNEXPECTED_ANSWER", 500 to "UNEXPECTED_ANSWER", 600 to "INTERNAL_ERROR")
+            .forEach { (status, code) -> assertEquals("$status $code", UnknownOutcome.UNREADABLE, outcome(status, code)) }
+    }
+
     @Test fun onlyTheShapeOfTheApisHealthAnswerCountsAsTheServersAnswer() {
         val health = JSONObject().put("status", "ok").put("mode", "local-dev").put("mediaProbe", "available").put("maxVideoBytes", 1_000)
         server.enqueue(json(200, health))

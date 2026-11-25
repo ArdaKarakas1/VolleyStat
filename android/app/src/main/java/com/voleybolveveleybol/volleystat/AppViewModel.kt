@@ -82,11 +82,13 @@ data class UploadProgress(
 )
 
 /**
- * The outcome of the server test on the profile. OK and OK_NO_PROBE come only with the API's own health answer
- * ([com.voleybolveveleybol.volleystat.data.Health.fromApi]). UNREACHABLE: no answer came. UNREADABLE: an answer came and
- * it is not the API's health answer, so a gateway, a captive portal or another service at the address may have sent it.
+ * The outcome of the server test on the login, registration and profile screens. OK and OK_NO_PROBE come only with the
+ * API's own answer to GET /health ([com.voleybolveveleybol.volleystat.data.Health.fromApi]). UNREACHABLE: the request
+ * never left the phone. NO_ANSWER: it went out and no answer came. SERVER_ERROR: the API's own 5xx or SERVER_BUSY.
+ * ERROR_ON_THE_WAY: a 5xx without the API's envelope, or a 511. UNREADABLE: any other answer, which is not the API's
+ * answer to GET /health, so a gateway, a captive portal or another service at the address may have sent it.
  */
-enum class ServerTest { IDLE, TESTING, OK, OK_NO_PROBE, UNREACHABLE, UNREADABLE }
+enum class ServerTest { IDLE, TESTING, OK, OK_NO_PROBE, UNREACHABLE, NO_ANSWER, SERVER_ERROR, ERROR_ON_THE_WAY, UNREADABLE }
 
 enum class SourceProblem { CAMERA_MISSING, CAMERA_EMPTY, UNREADABLE }
 
@@ -251,7 +253,8 @@ enum class RalliesLoad { LOADING, READY, UNREACHABLE, OUTDATED }
  * The server may hold the correction all the same; the next attempt finds out. REFUSED: the
  * server answered with the API's own envelope on a 4xx, or with SERVER_BUSY, and changed nothing.
  * SERVER_ERROR, ERROR_ON_THE_WAY and UNREADABLE: an answer came after which the app does not know
- * whether the server made the change, by [UnknownOutcome], and the list read afterwards does not show it.
+ * whether the server made the change, by [UnknownOutcome], and the list read afterwards does not show it or could
+ * not be read.
  */
 enum class CorrectionProblem { STALE, OVERLAP, OUTSIDE, NOT_READY, DEMO, UNREACHABLE, REFUSED, SERVER_ERROR, ERROR_ON_THE_WAY, UNREADABLE }
 
@@ -645,6 +648,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun setServerTarget(target: ServerTarget) = synchronized(accountLock) {
         if (session != null || _state.value.account.busy) return@synchronized
         changeDevice { it.copy(serverTarget = target) }
+        // A test still on its way asked the server chosen before: its answer says nothing about this one.
+        serverTestRun.incrementAndGet()
         _state.update { it.copy(serverTest = ServerTest.IDLE, serverConfigured = baseUrl(target).isNotBlank()) }
     }
 
@@ -1092,7 +1097,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         state.copy(teams = state.teams.map { team -> if (team.id == teamId) team.copy(players = team.players.filterNot { it.id == playerId }) else team })
     }
 
+    /** Counts the server tests and the server choices. Only the newest test, sent to the server still chosen, writes its result. */
+    private val serverTestRun = java.util.concurrent.atomic.AtomicInteger()
+
     fun testServer() {
+        val run = serverTestRun.incrementAndGet()
         _state.update { it.copy(serverTest = ServerTest.TESTING) }
         viewModelScope.launch {
             val result = withContext(Dispatchers.IO) {
@@ -1105,13 +1114,23 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         else -> ServerTest.OK_NO_PROBE
                     }
                 } catch (error: ApiException) {
-                    // An answer came, and the API answers this route with nothing but its health answer.
-                    ServerTest.UNREADABLE
-                } catch (error: IOException) {
+                    // An answer came, and the API answers this route with nothing but its health answer. An error answer is
+                    // worded as the account forms word it (ADR-0119); any other answer is one the app can not read.
+                    when (UnknownOutcome.of(error)) {
+                        UnknownOutcome.SERVER_ERROR -> ServerTest.SERVER_ERROR
+                        UnknownOutcome.ERROR_ON_THE_WAY -> ServerTest.ERROR_ON_THE_WAY
+                        UnknownOutcome.UNREADABLE -> ServerTest.UNREADABLE
+                        // The API's envelope on a 4xx, which it never sends on this route, or SERVER_BUSY, an error the server reported.
+                        null -> if (error.code == "SERVER_BUSY") ServerTest.SERVER_ERROR else ServerTest.UNREADABLE
+                    }
+                } catch (error: RequestNotSent) {
                     ServerTest.UNREACHABLE
+                } catch (error: IOException) {
+                    // The request went out and no answer came: the app does not know whether it reached the server.
+                    ServerTest.NO_ANSWER
                 }
             }
-            _state.update { it.copy(serverTest = result) }
+            if (serverTestRun.get() == run) _state.update { it.copy(serverTest = result) }
         }
     }
 

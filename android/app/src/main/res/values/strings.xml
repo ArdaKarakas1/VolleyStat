@@ -235,6 +235,12 @@
     <string name="removal_unconfirmed">Uygulama bu maçın silindiğini sunucudan doğrulayamadı. Sunucunun açık olduğunu denetle ve yeniden dene.</string>
     <string name="removal_verifying">Sunucu bu maçın videosunu hâlâ denetliyor ve maçı şimdi silmiyor. Denetim bitince yeniden dene.</string>
     <string name="removal_refused">Sunucu bu maçı silmedi ve sunucudaki kayıtlar duruyor. Sunucunun güncel sürümle çalıştığını denetle ve yeniden dene.</string>
+    <!-- An answer that leaves open whether the server deleted the match (ADR-0119): the API's own 5xx, a 5xx without its envelope
+         or a 511, and an answer the app can not read (a 3xx, a 4xx without the envelope, a 2xx other than 204). The notice stays on
+         the match's screen next to the upload's notices, so each text names the match. -->
+    <string name="removal_outcome_unknown">Sunucu bir hata bildirdi. Uygulama sunucunun bu maçı silip silmediğini bilmiyor. Biraz sonra yeniden deneyebilirsin.</string>
+    <string name="removal_outcome_unknown_on_the_way">Uygulama sunucudan ya da sunucuya giden yoldan bir hata yanıtı aldı ve sunucunun bu maçı silip silmediğini bilmiyor. Biraz sonra yeniden deneyebilirsin.</string>
+    <string name="removal_unreadable">Uygulama silme isteğine gelen yanıtı okuyamadı ve sunucunun bu maçı silip silmediğini bilmiyor. Biraz sonra yeniden deneyebilirsin.</string>
     <string name="cancel_title">Yüklemeyi iptal edeyim mi?</string>
     <string name="cancel_body">Sunucu aldığı kısmı ve maç bilgilerini siler. Uygulama bu maçı listeden kaldırır. Video telefonunda kalır.</string>
     <string name="cancel_confirm">İptal Et</string>
@@ -504,13 +510,19 @@
     <string name="server_usb">USB ile bağlı telefon</string>
     <string name="server_usb_body">Önce bilgisayarda şu komutu çalıştır: adb reverse tcp:8000 tcp:8000</string>
     <string name="action_test_server">Bağlantıyı Dene</string>
-    <!-- server_ok and server_ok_no_probe come only with the API's own health answer (ADR-0119). -->
+    <!-- The server test of the login, registration and profile screens. server_ok and server_ok_no_probe come only with the API's
+         own answer to GET /health (ADR-0119). -->
     <string name="server_ok">Sunucu yanıt verdi.</string>
     <string name="server_ok_no_probe">Sunucu yanıt verdi. Sunucuda video inceleme aracı kurulu değil.</string>
     <string name="server_unreachable">Uygulama sunucuya ulaşamadı.</string>
-    <!-- Any other answer to the server test: a blank 2xx, another service's JSON, a gateway's page or a captive portal's redirect.
-         Something on the way may have sent it, so the text does not name the server as its sender. The profile is open only while
-         a session is, and the app locks the server choice then, so the text gives no advice about it (ADR-0119). -->
+    <!-- An error answer to the server test, worded as the account forms word it (ADR-0119): the API's own 5xx, and a 5xx without
+         the API's envelope or a 511, which a gateway on the way may have sent. -->
+    <string name="server_error">Sunucu bir hata bildirdi.</string>
+    <string name="server_error_on_the_way">Uygulama sunucudan ya da sunucuya giden yoldan bir hata yanıtı aldı.</string>
+    <!-- Any other answer to the server test on the profile: a blank 2xx, another service's JSON, a gateway's page or a captive
+         portal's redirect. Something on the way may have sent it, so the text does not name the server as its sender. A session is
+         open on the profile and the app locks the server choice, so the text gives no advice about it. The login and registration
+         screens, where the choice is open, show account_unexpected instead (ADR-0119). -->
     <string name="server_unreadable">Uygulama isteğe gelen yanıtı okuyamadı.</string>
     <string name="server_testing">Uygulama sunucuyu deniyor</string>
     <string name="server_none">Bu sürümde sunucu adresi tanımlı değil.</string>
@@ -661,8 +673,10 @@
     <string name="account_server_changed">Uygulama bu isteği şu an seçili olmayan bir sunucuya gönderdi ve gelen yanıtla oturum açmadı. Yeniden deneyebilirsin.</string>
     <string name="account_server_older">Sunucunun sürümü bu uygulamadan eski. Uygulama bu sunucuda hesap açamaz ve giriş yapamaz.</string>
     <string name="account_refused">Sunucu bu isteği kabul etmedi ve hiçbir şeyi değiştirmedi.</string>
-    <!-- account_outcome_unknown, account_outcome_unknown_on_the_way and account_unexpected_change_signed_in also end a match's
-         removal, a rule change, a correction and a confirmation of the rally list when the answer leaves the outcome open. -->
+    <!-- account_outcome_unknown, account_outcome_unknown_on_the_way and account_unexpected_change_signed_in also end a rule change,
+         a correction and a confirmation of the rally list when the answer leaves the outcome open. The notice stands right above the
+         button the user tapped, so "bu isteği" names that step. account_unexpected also ends a server test on the login and
+         registration screens. -->
     <string name="account_outcome_unknown">Sunucu bir hata bildirdi. Uygulama sunucunun bu isteği yerine getirip getirmediğini bilmiyor. Biraz sonra yeniden deneyebilirsin.</string>
     <string name="account_unexpected_change">Uygulama isteğe gelen yanıtı okuyamadı ve sunucunun bu isteği yerine getirip getirmediğini bilmiyor. Sunucu seçimini kontrol edip yeniden deneyebilirsin.</string>
     <!-- A 5xx without the API's envelope (HTTP_5xx): a gateway on the way may have sent it, so the text does not name the server as the sender. -->
