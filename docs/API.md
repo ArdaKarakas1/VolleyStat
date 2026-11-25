@@ -56,7 +56,7 @@ Sürüm 0.9.0 erişimi ve depolama sınırlarını ekler ([API_V1.md](API_V1.md)
 - `complete` çağrısı dosyanın tamamı gelmeden `409 UPLOAD_INCOMPLETE` döner.
 - `clientSha256` verildiyse sunucu sakladığı baytların özetini onunla karşılaştırır. Uyuşmazlıkta `422 UPLOAD_CHECKSUM_MISMATCH` döner, oturumu offset 0'a alır ve istemci dosyayı yeniden gönderir.
 - Aynı oturum için tekrarlanan `complete` aynı videoyu döner.
-- Doğrulama sürerken gelen ikinci `complete` çağrısı `409 UPLOAD_FINALIZING` döner. 15 dakikadan eski bir doğrulama terk edilmiş sayılır ve sonraki çağrı işi devralır.
+- Doğrulama sürerken gelen ikinci `complete` çağrısı `409 UPLOAD_FINALIZING` döner. 15 dakikadan eski bir doğrulama terk edilmiş sayılır ve sonraki çağrı işi devralır. Sunucu bir doğrulamayı devralınca eski isteğe `409 UPLOAD_FINALIZING` döner. Sunucu eski istek için video yazmaz, yükleme kaydını değiştirmez ve özet uyuşmazlığında dosyayı boşaltmaz.
 - Sunucu bir parçayı yazarken kesilirse kayıtlı offset geçerlidir. Sonraki parça fazla baytların üzerine yazar. Diskteki dosya kayıtlı offset'ten kısaysa sunucu offset'i diskteki boyuta çeker ve `409 OFFSET_MISMATCH` ile bildirir.
 - `DELETE /uploads/{id}` yarım kalan yüklemeyi kapatır (`ABORTED`). Videoya dönüşmüş yükleme için `409 UPLOAD_COMPLETED` döner; o durumda video silinir.
 - İstemci aynı hesapla aynı maç için aynı dosyanın yüklemesini yeniden isterse (aynı `clientSha256`, `sizeBytes`, `fileName` ve `mimeType`) ve o yükleme hâlâ `UPLOADING` durumundaysa sunucu yeni bir yükleme açmaz. Sunucu var olan yüklemeyi `200` ile ve `nextOffset` değeriyle döner ve sınırları yeniden denetlemez. Yükleme başlatan isteğin yanıtı kaybolsa da sunucu dosyayı böylece bir kez sayar.

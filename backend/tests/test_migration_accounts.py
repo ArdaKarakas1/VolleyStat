@@ -18,7 +18,8 @@ from tests.helpers import (
 from tests.test_api import create_match, create_upload, set_upload
 
 NEW_INDEXES = ("matches_owner", "matches_status", "uploads_touched", "uploads_started_by")
-NEW_COLUMNS = (("matches", "status"), ("matches", "owner_user_id"), ("uploads", "touched_at"), ("uploads", "started_by"))
+NEW_COLUMNS = (("matches", "status"), ("matches", "owner_user_id"), ("uploads", "touched_at"), ("uploads", "started_by"),
+               ("uploads", "finalize_token"), ("uploads", "kept_touched_at"), ("uploads", "kept_finalize_started_at"))
 ACCOUNT_TABLES = ("sessions", "login_devices", "operator_codes", "users")
 
 
@@ -92,7 +93,9 @@ def test_storage_from_before_accounts_gets_legacy_matches_and_the_new_columns(st
 
     with serve(storage, None) as client:
         assert rows(storage, "SELECT status, owner_user_id FROM matches") == [{"status": "LEGACY", "owner_user_id": None}]
-        assert {(row["touched_at"], row["started_by"]) for row in rows(storage, "SELECT * FROM uploads")} == {(None, None)}
+        assert {(row["touched_at"], row["started_by"], row["finalize_token"], row["kept_touched_at"],
+                 row["kept_finalize_started_at"]) for row in rows(storage, "SELECT * FROM uploads")} == {
+            (None, None, None, None, None)}
         assert rows(storage, "SELECT status FROM uploads WHERE id=?", unfinished) == [{"status": "UPLOADING"}]
         assert indexes(storage, "matches") >= {"matches_owner", "matches_status"}
         assert indexes(storage, "uploads") >= {"uploads_touched", "uploads_started_by"}
@@ -132,6 +135,20 @@ def test_the_new_indexes_are_created_after_the_columns_on_older_storage(storage)
         assert indexes(storage, "matches") >= {"matches_owner", "matches_status"}
         assert indexes(storage, "uploads") >= {"uploads_touched", "uploads_started_by"}
         assert rows(storage, "SELECT status, owner_user_id FROM matches") == [{"status": "LEGACY", "owner_user_id": None}]
+
+
+def test_a_clock_written_by_an_earlier_build_of_b3_gets_the_columns_of_the_kept_moment(storage):
+    """Server 0.9 builds before the kept moment wrote server_clock with last_alive alone. The start adds the
+    columns, and a pass that finds the clock behind keeps the moment there."""
+    with serve(storage, None) as client:
+        client.app.state.sweeper.run_once(now=2000.0)
+    with database(storage) as db, db:
+        for column in ("kept_alive", "went_back_to", "behind_from"):
+            db.execute(f"ALTER TABLE server_clock DROP COLUMN {column}")
+    with serve(storage, None) as client:
+        client.app.state.sweeper.run_once(now=1000.0)
+        assert rows(storage, "SELECT last_alive, kept_alive, went_back_to FROM server_clock") == [
+            {"last_alive": 1000.0, "kept_alive": 2000.0, "went_back_to": 1000.0}]
 
 
 # --- legacy --list ------------------------------------------------------------------------------------

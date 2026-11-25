@@ -41,9 +41,15 @@ CREATE TABLE IF NOT EXISTS uploads (
   next_offset INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'UPLOADING',
   video_id TEXT UNIQUE, created_at TEXT NOT NULL DEFAULT (datetime('now')),
   client_sha256 TEXT, finalize_started_at REAL,
+  -- A random token that complete writes with its FINALIZING mark. The request owns the verification while
+  -- the row holds its token: a takeover after 15 minutes writes a new one
+  finalize_token TEXT,
   -- Seconds since 1970 of the last initiate or stored chunk. The sweep aborts an upload idle for 24 h
   -- of server uptime (server_downtimes)
   touched_at REAL,
+  -- touched_at and finalize_started_at as they were before a clock write that found the clock behind
+  -- server_clock.last_alive moved them back to its own moment. NULL when that write left them as they were
+  kept_touched_at REAL, kept_finalize_started_at REAL,
   -- The account that started the upload or NULL once that account is deleted
   started_by TEXT
 );
@@ -178,13 +184,25 @@ BEGIN SELECT RAISE(ABORT, 'rally_corrections is append-only'); END;
 CREATE TABLE IF NOT EXISTS server_clock (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   -- The last moment this server was seen running: written at every pass of the sweep and at a stop
-  last_alive REAL NOT NULL
+  last_alive REAL NOT NULL,
+  -- last_alive as it was when a clock write read an earlier moment. A later clock write that records a time
+  -- off or reaches this moment clears it. NULL when the clock did not go back
+  kept_alive REAL,
+  -- The moment the clock write that found the clock behind read: it moved later touch times to it
+  went_back_to REAL,
+  -- The earliest moment a touch written while the clock read behind can carry
+  behind_from REAL
 );
 CREATE TABLE IF NOT EXISTS server_downtimes (
   -- last_alive before the start or before a gap of more than three minutes between two clock writes.
   -- 0 when the server had no clock yet: all time before the start is time off
   stopped_at REAL NOT NULL,
   -- The start or the clock write that ended the time off. A clock write that reads an earlier time cuts it there
+  started_at REAL NOT NULL
+);
+-- The time off as it was before the clock write that found the clock behind cut it (server_clock.kept_alive)
+CREATE TABLE IF NOT EXISTS server_downtimes_kept (
+  stopped_at REAL NOT NULL,
   started_at REAL NOT NULL
 );
 
@@ -249,13 +267,16 @@ ADDED_COLUMNS = (
                  ("deciding_set_target", "INTEGER NOT NULL DEFAULT 15"),
                  # Every row stored before accounts becomes LEGACY: it belongs to no account (ADR-0119, B3).
                  ("status", "TEXT NOT NULL DEFAULT 'LEGACY'"), ("owner_user_id", "TEXT"))),
-    ("uploads", (("client_sha256", "TEXT"), ("finalize_started_at", "REAL"), ("touched_at", "REAL"),
-                 ("started_by", "TEXT"))),
+    ("uploads", (("client_sha256", "TEXT"), ("finalize_started_at", "REAL"), ("finalize_token", "TEXT"),
+                 ("touched_at", "REAL"), ("started_by", "TEXT"), ("kept_touched_at", "REAL"),
+                 ("kept_finalize_started_at", "REAL"))),
     ("videos", (("reject_code", "TEXT"), ("media_json", "TEXT"), ("warnings_json", "TEXT"),
                 ("probe_version", "TEXT"), ("storage_key", "TEXT"))),
     ("analysis_jobs", (("rally_list_version", "INTEGER NOT NULL DEFAULT 0"), ("list_confirmed_version", "INTEGER"),
                        ("list_confirmed_at", "TEXT"))),
     ("rallies", (("proposal_id", "TEXT"),)),
+    # Storage written by an earlier build of B3 has the clock without the moment kept before a step back.
+    ("server_clock", (("kept_alive", "REAL"), ("went_back_to", "REAL"), ("behind_from", "REAL"))),
     ("review_decisions", (("correction_id", "TEXT"),)),
 )
 

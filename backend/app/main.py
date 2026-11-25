@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import time
 from contextlib import asynccontextmanager
 from datetime import date
@@ -429,6 +430,8 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
     def complete_upload(upload_id: str, caller: accounts.Caller = Depends(current_user)):
         part = upload_path(upload_id)
         started = time.time()
+        # This request owns the verification while the row holds this token (still_ours below).
+        token = secrets.token_hex(16)
         resume_from = None
         with connect(write=True) as db:
             access.session_user(db, caller)
@@ -444,8 +447,8 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
             stored = part.stat().st_size if part.exists() else 0
             if stored < record["next_offset"]:
                 part.touch()
-                db.execute("UPDATE uploads SET next_offset=?, status='UPLOADING', finalize_started_at=NULL, touched_at=? WHERE id=?",
-                           (stored, time.time(), upload_id))
+                db.execute("UPDATE uploads SET next_offset=?, status='UPLOADING', finalize_started_at=NULL, finalize_token=NULL,"
+                           " touched_at=? WHERE id=?", (stored, time.time(), upload_id))
                 resume_from = stored
             elif record["next_offset"] != record["expected_size"]:
                 fail("UPLOAD_INCOMPLETE", "Upload is incomplete", 409, expectedSize=record["expected_size"], nextOffset=record["next_offset"])
@@ -453,16 +456,19 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
                 if stored > record["expected_size"]:
                     with part.open("r+b") as fh:
                         fh.truncate(record["expected_size"])
-                db.execute("UPDATE uploads SET status='FINALIZING', finalize_started_at=? WHERE id=?", (started, upload_id))
+                db.execute("UPDATE uploads SET status='FINALIZING', finalize_started_at=?, finalize_token=? WHERE id=?",
+                           (started, token, upload_id))
         if resume_from is not None:
             fail("UPLOAD_INCOMPLETE", "Stored bytes were shorter than recorded; resume the upload", 409, expectedSize=record["expected_size"], nextOffset=resume_from)
 
         def still_ours(db) -> bool:
-            # A sweep pass that moved finalize_started_at back to its own moment (the clock went back while
-            # this verification ran, see sweep._CLAMP) ends the ownership as a takeover does: the request
-            # answers 409 and the next complete verifies the upload again 15 minutes after that pass.
-            row = db.execute("SELECT status, finalize_started_at FROM uploads WHERE id=?", (upload_id,)).fetchone()
-            return bool(row) and row["status"] == "FINALIZING" and row["finalize_started_at"] == started
+            # Only a takeover ends the ownership: a later complete that found this verification 15 minutes
+            # old wrote its own token. The start time does not decide it, because a sweep pass moves
+            # finalize_started_at back to its own moment when the clock goes back while this verification
+            # runs (sweep._CLAMP): that move only lets a dead verification be taken over 15 minutes after the
+            # pass. Every write below checks the token inside its own write transaction.
+            row = db.execute("SELECT status, finalize_token FROM uploads WHERE id=?", (upload_id,)).fetchone()
+            return bool(row) and row["status"] == "FINALIZING" and row["finalize_token"] == token
 
         # Hashing and probing can take long; keep them outside the write transaction. The two
         # transactions that only undo this route's own FINALIZING mark (the checksum reset and the
@@ -476,13 +482,17 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
             digest = sha.hexdigest()
             if record["client_sha256"] and record["client_sha256"] != digest:
                 with connect(write=True) as db:
-                    if still_ours(db):
-                        # Reset the row first: if the truncate below is interrupted, the next
-                        # chunk at offset 0 truncates the leftover bytes anyway.
-                        db.execute("UPDATE uploads SET status='UPLOADING', next_offset=0, finalize_started_at=NULL, touched_at=? WHERE id=?",
-                                   (time.time(), upload_id))
-                with part.open("r+b") as fh:
-                    fh.truncate(0)
+                    if not still_ours(db):
+                        # The request that took over checks the same file now: its bytes and the row are its own.
+                        fail("UPLOAD_FINALIZING", "Another request took over verification of this upload", 409)
+                    # Reset the row and empty the file while this transaction holds the write lock, so no
+                    # takeover comes between. A stop between the truncate and the commit leaves the row
+                    # FINALIZING over fewer bytes than recorded: the complete that takes it over 15 minutes
+                    # later reopens the upload at the bytes the disk holds.
+                    db.execute("UPDATE uploads SET status='UPLOADING', next_offset=0, finalize_started_at=NULL,"
+                               " finalize_token=NULL, touched_at=? WHERE id=?", (time.time(), upload_id))
+                    with part.open("r+b") as fh:
+                        fh.truncate(0)
                 fail("UPLOAD_CHECKSUM_MISMATCH", "Stored bytes differ from the declared SHA-256; send the file again", 422, expectedOffset=0)
             probe = media.probe_video(part, record["mime_type"])
             video_id = new_id()
@@ -499,7 +509,8 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
                      probe.status, probe.reject_code, json.dumps(probe.media) if probe.media else None,
                      json.dumps(probe.warnings), media.PROBE_VERSION, f"media/{upload_id}.bin"),
                 )
-                db.execute("UPDATE uploads SET status='COMPLETED', video_id=?, finalize_started_at=NULL WHERE id=?", (video_id, upload_id))
+                db.execute("UPDATE uploads SET status='COMPLETED', video_id=?, finalize_started_at=NULL, finalize_token=NULL"
+                           " WHERE id=?", (video_id, upload_id))
                 return video_payload(find_video(db, video_id))
         except Exception:
             # Any failure, a refusal of the final transaction included, gives the upload back as it
@@ -507,8 +518,8 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
             # the checksum reset already reopened.
             with connect(write=True) as db:
                 if still_ours(db):
-                    db.execute("UPDATE uploads SET status='UPLOADING', finalize_started_at=NULL, touched_at=? WHERE id=?",
-                               (time.time(), upload_id))
+                    db.execute("UPDATE uploads SET status='UPLOADING', finalize_started_at=NULL, finalize_token=NULL,"
+                               " touched_at=? WHERE id=?", (time.time(), upload_id))
             raise
 
     @app.delete("/v1/uploads/{upload_id}", status_code=204)
@@ -525,7 +536,8 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
             if record["status"] == "FINALIZING" and time.time() - (record["finalize_started_at"] or 0) < FINALIZE_STALE_SECONDS:
                 fail("UPLOAD_FINALIZING", "Upload is being verified", 409)
             upload_path(upload_id).unlink(missing_ok=True)
-            db.execute("UPDATE uploads SET status='ABORTED', finalize_started_at=NULL WHERE id=?", (upload_id,))
+            db.execute("UPDATE uploads SET status='ABORTED', finalize_started_at=NULL, finalize_token=NULL WHERE id=?",
+                       (upload_id,))
 
     @app.get("/v1/videos/{video_id}")
     def video_status(video_id: str, caller: accounts.Caller = Depends(current_user)):

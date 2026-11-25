@@ -128,11 +128,16 @@ def served_operations(app) -> set[tuple[str, str]]:
     return set(walk(app.routes))
 
 
+# A request may record the use of its session. The sweep thread writes its clock on its own schedule: a thread
+# that starts 20 ms late writes it for the first time between two snapshots of a test.
+NOT_SNAPSHOT = {"sessions", "server_clock", "server_downtimes", "server_downtimes_kept"}
+
+
 def snapshot(storage) -> tuple[dict[str, list[tuple]], list[tuple[str, int]]]:
-    """Every table but the sessions (a request may record its use), and every stored file with its size."""
+    """Every table but those in NOT_SNAPSHOT, and every stored file with its size."""
     with closing(sqlite3.connect(storage / "volleystat.sqlite3")) as db:
         tables = [name for (name,) in db.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-                  if name != "sessions"]
+                  if name not in NOT_SNAPSHOT]
         dump = {table: db.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall() for table in tables}
     files = sorted((str(path.relative_to(storage)), path.stat().st_size) for path in storage.rglob("*")
                    if path.is_file() and not path.name.startswith("volleystat.sqlite3"))
@@ -407,8 +412,9 @@ def test_a_failed_verification_after_the_session_ended_still_reopens_the_upload(
         failed = client.post(f"/v1/uploads/{upload_id}/complete")
         # The original error, not a 401: the route only undoes its own mark there.
         assert failed.status_code == 500
-        row = rows(storage, "SELECT status, finalize_started_at, touched_at FROM uploads WHERE id=?", upload_id)[0]
-        assert (row["status"], row["finalize_started_at"]) == ("UPLOADING", None)
+        row = rows(storage, "SELECT status, finalize_started_at, finalize_token, touched_at FROM uploads WHERE id=?",
+                   upload_id)[0]
+        assert (row["status"], row["finalize_started_at"], row["finalize_token"]) == ("UPLOADING", None, None)
         assert row["touched_at"] > touched
 
 
@@ -428,8 +434,8 @@ def test_a_verification_whose_session_ended_answers_401_and_reopens_the_upload(s
         refused_as(client.post(f"/v1/uploads/{upload_id}/complete"), 401, "AUTH_REQUIRED")
         # No video, and the upload is open again for the account's next session.
         assert rows(storage, "SELECT 1 FROM videos") == []
-        row = rows(storage, "SELECT status, finalize_started_at FROM uploads WHERE id=?", upload_id)[0]
-        assert (row["status"], row["finalize_started_at"]) == ("UPLOADING", None)
+        row = rows(storage, "SELECT status, finalize_started_at, finalize_token FROM uploads WHERE id=?", upload_id)[0]
+        assert (row["status"], row["finalize_started_at"], row["finalize_token"]) == ("UPLOADING", None, None)
 
 
 def test_a_verification_whose_match_changed_hands_stores_no_video(storage, monkeypatch):

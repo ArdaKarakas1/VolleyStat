@@ -13,6 +13,7 @@ import time
 import uuid
 from collections import namedtuple
 from contextlib import closing, contextmanager
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -530,6 +531,12 @@ def clock(storage):
              for row in rows(storage, "SELECT stopped_at, started_at FROM server_downtimes ORDER BY started_at")])
 
 
+def kept(storage):
+    """The last moment the server wrote before its clock went back, while the server keeps it (sweep.py)."""
+    found = rows(storage, "SELECT kept_alive FROM server_clock")
+    return found[0]["kept_alive"] if found else None
+
+
 def run_passes(swept, start, end):
     """Play a server that runs from `start` to `end`: a pass at `start`, then one every MAX_PASS_GAP_SECONDS
     (the longest gap between two passes that still counts as uptime), and the last one at `end`. Returns how
@@ -591,12 +598,12 @@ def test_the_sweep_aborts_an_upload_idle_for_24_hours_and_deletes_its_bytes(clie
 def test_the_sweep_aborts_a_verification_that_started_a_day_ago_and_leaves_a_younger_one(client, storage):
     match_id = create_match(client)
     old, young = (create_upload(client, match_id, size=5).json()["uploadId"] for _ in range(2))
-    set_upload(storage, old, status="FINALIZING", finalize_started_at=T, touched_at=T + 86000)
-    set_upload(storage, young, status="FINALIZING", finalize_started_at=T + 1, touched_at=T)
+    set_upload(storage, old, status="FINALIZING", finalize_started_at=T, touched_at=T + 86000, finalize_token="old")
+    set_upload(storage, young, status="FINALIZING", finalize_started_at=T + 1, touched_at=T, finalize_token="young")
     assert sweeper(client).run_once(now=T + 86400) == {"uploads": 1}
-    found = {row["id"]: (row["status"], row["finalize_started_at"])
-             for row in rows(storage, "SELECT id, status, finalize_started_at FROM uploads")}
-    assert found == {old: ("ABORTED", None), young: ("FINALIZING", T + 1)}
+    found = {row["id"]: (row["status"], row["finalize_started_at"], row["finalize_token"])
+             for row in rows(storage, "SELECT id, status, finalize_started_at, finalize_token FROM uploads")}
+    assert found == {old: ("ABORTED", None, None), young: ("FINALIZING", T + 1, "young")}
     assert media_files(storage) == [f"{young}.bin"]
 
 
@@ -891,10 +898,11 @@ def test_a_clock_ahead_at_the_start_gives_no_extra_time_off_once_it_is_corrected
 
 def test_a_clock_behind_at_the_start_records_nothing_and_its_correction_counts_the_night(client, storage):
     """The computer starts after an 8-hour night with its clock 9 hours behind, so the clock reads an hour
-    before the last pass. The start records no time off: a time off can not end before it began. The
-    correction a minute later moves the clock 9 hours forward, and that gap counts as time off. The upload
-    had 2 hours of uptime before the night and never goes early: it goes an hour and a minute after its day
-    of real uptime, because the hour the clock went back counts as time off too."""
+    before the last pass. The start records no time off: a time off can not end before it began. It keeps the
+    moment of the last pass. The correction a minute later moves the clock 9 hours forward, past that moment,
+    so the server counts the time off from the last pass and not from the moment the wrong clock read. The
+    upload had 2 hours of uptime before the night and goes a minute after its day of real uptime: only the
+    minute the clock read behind counts as time off."""
     touched_upload(client, storage)
     swept = sweeper(client)
     swept.resume(now=T)
@@ -902,12 +910,26 @@ def test_a_clock_behind_at_the_start_records_nothing_and_its_correction_counts_t
     behind = T + HOUR  # the computer starts at T + 10 h
     swept.resume(now=behind)
     assert clock(storage) == (behind, [])
+    assert kept(storage) == T + 2 * HOUR
     assert swept.run_once(now=behind) == {"uploads": 0}
     corrected = T + 10 * HOUR + 60
     assert swept.run_once(now=corrected) == {"uploads": 0}
-    assert clock(storage) == (corrected, [(behind, corrected)])
-    assert run_passes(swept, corrected, T + 33 * HOUR + 60 - 1) == 0
-    assert swept.run_once(now=T + 33 * HOUR + 60) == {"uploads": 1}
+    assert clock(storage) == (corrected, [(T + 2 * HOUR, corrected)])
+    assert kept(storage) is None
+    assert run_passes(swept, corrected, T + 32 * HOUR + 60 - 1) == 0
+    assert swept.run_once(now=T + 32 * HOUR + 60) == {"uploads": 1}
+
+
+def test_a_start_at_the_moment_of_the_stop_records_no_time_off(client, storage):
+    """A time off needs a moment between the stop and the start: a start that reads the stop's own moment
+    records nothing and keeps nothing."""
+    touched_upload(client, storage)
+    swept = sweeper(client)
+    swept.resume(now=T)
+    assert run_passes(swept, T, T + HOUR) == 0
+    swept.resume(now=T + HOUR)
+    assert clock(storage) == (T + HOUR, [])
+    assert kept(storage) is None
 
 
 def test_a_start_with_a_clock_behind_the_last_pass_keeps_the_time_off_and_the_timing(client, storage):
@@ -924,7 +946,13 @@ def test_a_start_with_a_clock_behind_the_last_pass_keeps_the_time_off_and_the_ti
     assert clock(storage) == (T + 4 * HOUR, [(T + HOUR, T + 2 * HOUR)])
     swept.resume(now=T + 3.5 * HOUR)
     assert clock(storage) == (T + 3.5 * HOUR, [(T + HOUR, T + 2 * HOUR)])
-    assert run_passes(swept, T + 3.5 * HOUR, T + 25 * HOUR - 1) == 0
+    assert kept(storage) == T + 4 * HOUR
+    assert run_passes(swept, T + 3.5 * HOUR, T + 4 * HOUR - 1) == 0
+    assert kept(storage) == T + 4 * HOUR
+    # The clock reaches the kept moment without a time off: the server forgets it.
+    assert run_passes(swept, T + 4 * HOUR - 1, T + 4 * HOUR) == 0
+    assert kept(storage) is None
+    assert run_passes(swept, T + 4 * HOUR, T + 25 * HOUR - 1) == 0
     assert swept.run_once(now=T + 25 * HOUR) == {"uploads": 1}
 
 
@@ -967,6 +995,244 @@ def test_a_clock_that_goes_back_while_the_server_runs_never_closes_an_upload_ear
     # 26 h 3 min of real uptime.
     assert run_passes(swept, back, T + 24.5 * HOUR - 1) == 0
     assert swept.run_once(now=T + 24.5 * HOUR) == {"uploads": 1}
+
+
+# What a computer with a dead clock battery reads at every power on: 2009-01-01, five seconds after it.
+RESET = 1_230_768_005.0
+YEAR = 365 * 86400
+
+
+@pytest.mark.parametrize("hours", [20, 2])
+def test_a_clock_reset_at_every_boot_still_lets_an_abandoned_upload_go(client, storage, hours):
+    """The checker's probe: the computer runs `hours` hours a day, and a dead clock battery makes its clock read
+    2009-01-01 at every power on. The sweep's start and its first pass read that moment, and NTP corrects the
+    clock a minute later. Each start keeps the moment of the stop before it. The first pass moves the touch time
+    back to 2009 and cuts the time off of earlier nights. The pass after the correction finds the clock past the
+    kept moment: it puts the touch time and the time off back and counts the night from the kept moment. The
+    upload, last touched half an hour after the first start, goes once the server has counted a day of uptime
+    after its touch. The minute after each reset counts as time off, so the upload goes that many minutes after
+    its day of real uptime and never before it. With 2 hours a day the earlier nights must come back each day."""
+    upload_id = touched_upload(client, storage)
+    swept = sweeper(client)
+    every = sweep.MAX_PASS_GAP_SECONDS
+    first = T + 4 * HOUR
+    swept.resume(now=first)
+    touched = first + HOUR / 2
+    assert run_passes(swept, first, touched) == 0
+    set_upload(storage, upload_id, touched_at=touched)
+    assert run_passes(swept, touched, first + hours * HOUR) == 0
+    swept.mark_alive(now=first + hours * HOUR)
+    counted, real, closed = hours * HOUR - HOUR / 2, hours * HOUR - HOUR / 2, None
+    for day in range(1, 15):
+        boot = T + day * 86400 + 4 * HOUR
+        swept.resume(now=RESET)
+        assert swept.run_once(now=RESET) == {"uploads": 0}
+        assert rows(storage, "SELECT touched_at FROM uploads") == [{"touched_at": RESET}]
+        assert kept(storage) == T + (day - 1) * 86400 + 4 * HOUR + hours * HOUR
+        corrected = boot + 60
+        due = corrected + 86400 - counted
+        moment = corrected
+        while moment <= boot + hours * HOUR and closed is None:
+            if swept.run_once(now=moment)["uploads"]:
+                closed = moment
+            if moment == corrected:
+                assert rows(storage, "SELECT touched_at FROM uploads") == [{"touched_at": touched}]
+                assert kept(storage) is None
+            moment += every
+        if closed is not None:
+            real += closed - boot
+            break
+        swept.mark_alive(now=boot + hours * HOUR)
+        counted += hours * HOUR - 60
+        real += hours * HOUR
+    assert closed is not None and due <= closed < due + every
+    assert upload_status(storage, upload_id) == "ABORTED"
+    # Never early: a day of real uptime passed, and the delay is the minute after each reset.
+    assert 86400 + day * 60 <= real < 86400 + day * 60 + every
+
+
+def test_a_start_with_a_right_clock_after_a_start_with_a_reset_clock_puts_back_what_the_reset_changed(client, storage):
+    """The computer starts with its clock reset to 2009 and is shut down 30 seconds later, before NTP corrects
+    the clock. The reset start keeps the moment of the stop before it and moves the touch time to its own moment,
+    before its first pass reads the clock a second later. The next start has a right clock and finds it past the
+    kept moment: it puts the touch time back and counts the time off from the kept moment. The upload had 20
+    hours of uptime before the reset and goes 4 hours after the next start, 31 seconds after its day of real
+    uptime."""
+    upload_id = touched_upload(client, storage)
+    swept = sweeper(client)
+    swept.resume(now=T)
+    assert run_passes(swept, T, T + 20 * HOUR) == 0
+    swept.resume(now=RESET)
+    assert rows(storage, "SELECT touched_at FROM uploads") == [{"touched_at": RESET}]
+    assert swept.run_once(now=RESET + 1) == {"uploads": 0}
+    swept.mark_alive(now=RESET + 30)
+    assert rows(storage, "SELECT touched_at FROM uploads") == [{"touched_at": RESET}]
+    started = T + 2 * 86400
+    swept.resume(now=started)
+    assert rows(storage, "SELECT touched_at FROM uploads") == [{"touched_at": T}]
+    assert clock(storage) == (started, [(T + 20 * HOUR, started)])
+    assert kept(storage) is None
+    assert run_passes(swept, started, started + 4 * HOUR - 1) == 0
+    assert swept.run_once(now=started + 4 * HOUR) == {"uploads": 1}
+    assert upload_status(storage, upload_id) == "ABORTED"
+
+
+def test_a_second_reset_before_the_correction_replaces_what_the_first_one_kept(client, storage):
+    """The computer starts with its clock reset to 2009, is shut down 30 seconds later and starts again with the
+    clock reset once more, before NTP corrects it. The second start finds the clock behind the moment the first
+    one wrote: it forgets what the first start kept and keeps its own step back instead. The correction then puts
+    back only what the second start changed, which holds no touch time before the resets. The server can not
+    place the 2009 touch, so it moves it to the correction: the upload loses its uptime before the resets and
+    goes a day of uptime after the correction, late and never early."""
+    upload_id = touched_upload(client, storage)
+    swept = sweeper(client)
+    swept.resume(now=T)
+    assert run_passes(swept, T, T + 20 * HOUR) == 0
+    swept.resume(now=RESET)
+    assert swept.run_once(now=RESET + 1) == {"uploads": 0}
+    swept.mark_alive(now=RESET + 30)
+    swept.resume(now=RESET)
+    assert kept(storage) == RESET + 30
+    assert rows(storage, "SELECT kept_touched_at FROM uploads") == [{"kept_touched_at": None}]
+    assert swept.run_once(now=RESET + 1) == {"uploads": 0}
+    corrected = T + 86400 + 4 * HOUR + 60
+    assert swept.run_once(now=corrected) == {"uploads": 0}
+    assert rows(storage, "SELECT touched_at FROM uploads") == [{"touched_at": corrected}]
+    assert clock(storage) == (corrected, [])
+    assert run_passes(swept, corrected, corrected + 86400 - 1) == 0
+    assert swept.run_once(now=corrected + 86400) == {"uploads": 1}
+    assert upload_status(storage, upload_id) == "ABORTED"
+
+
+def test_a_start_that_reads_the_end_of_a_sleep_and_its_correction_keep_the_sleep(client, storage):
+    """An hour of uptime, a 2-hour sleep, an hour of uptime, then a stop at T + 4 h and an 8-hour night. The
+    server starts again with its clock 9 hours behind, at the very moment the sleep ended, and NTP corrects the
+    clock a minute later. The correction finds the clock past the kept moment: it keeps the sleep as it was and
+    counts the night from the stop. The upload had 2 hours of uptime before the night and goes 22 hours after
+    the correction, a minute after its day of real uptime."""
+    touched_upload(client, storage)
+    swept = sweeper(client)
+    swept.resume(now=T)
+    assert run_passes(swept, T, T + HOUR) == 0
+    assert run_passes(swept, T + 3 * HOUR, T + 4 * HOUR) == 0
+    swept.resume(now=T + 3 * HOUR)
+    assert swept.run_once(now=T + 3 * HOUR) == {"uploads": 0}
+    assert clock(storage) == (T + 3 * HOUR, [(T + HOUR, T + 3 * HOUR)])
+    corrected = T + 12 * HOUR + 60
+    assert swept.run_once(now=corrected) == {"uploads": 0}
+    assert clock(storage) == (corrected, [(T + HOUR, T + 3 * HOUR), (T + 4 * HOUR, corrected)])
+    assert run_passes(swept, corrected, corrected + 22 * HOUR - 1) == 0
+    assert swept.run_once(now=corrected + 22 * HOUR) == {"uploads": 1}
+
+
+def test_a_clock_a_year_ahead_and_corrected_still_counts_a_later_sleep_from_the_last_pass(client, storage):
+    """The computer starts after an 8-hour night with its clock a year ahead, and the clock is corrected a minute
+    later. The correction keeps the moment a year ahead. An hour later the computer sleeps for 8 hours. The pass
+    after the sleep reads a moment before the kept one, so the server counts the sleep from its last pass, as for
+    any sleep, and forgets the kept moment. The upload had an hour of uptime before the night and an hour before
+    the sleep, and goes 22 hours of uptime after the sleep."""
+    touched_upload(client, storage)
+    swept = sweeper(client)
+    swept.resume(now=T)
+    assert run_passes(swept, T, T + HOUR) == 0
+    ahead = T + 9 * HOUR + YEAR
+    swept.resume(now=ahead)
+    assert swept.run_once(now=ahead) == {"uploads": 0}
+    corrected = T + 9 * HOUR + 60
+    assert swept.run_once(now=corrected) == {"uploads": 0}
+    assert kept(storage) == ahead
+    assert run_passes(swept, corrected, corrected + HOUR) == 0
+    woke = corrected + 9 * HOUR
+    assert swept.run_once(now=woke) == {"uploads": 0}
+    assert clock(storage) == (woke, [(T + HOUR, corrected), (corrected + HOUR, woke)])
+    assert kept(storage) is None
+    assert run_passes(swept, woke, woke + 22 * HOUR - 1) == 0
+    assert swept.run_once(now=woke + 22 * HOUR) == {"uploads": 1}
+
+
+def test_a_sleep_that_crosses_the_kept_moment_after_a_clock_that_ran_ahead_never_closes_an_upload_early(
+        client, storage):
+    """The computer starts after an 8-hour night with its clock two hours ahead, and the clock is corrected a
+    minute later. The correction keeps the last moment the server wrote, two hours ahead, and cuts the night at
+    the correction. An hour later the computer sleeps for 8 hours, and the pass after the sleep finds the clock
+    past the kept moment. The server can not tell which reading was wrong and takes the earlier one for right: it
+    puts the night back as the start wrote it and counts the sleep from the kept moment. Both records then run
+    two hours ahead of the real time together, so the upload never goes early: it had an hour of uptime before
+    the night and goes an hour and a minute after its day of real uptime, because the hour between the correction
+    and the sleep and the minute before the correction count as time off. A pass that kept the cut night would
+    close it almost an hour before its day of real uptime."""
+    touched_upload(client, storage)
+    swept = sweeper(client)
+    swept.resume(now=T)
+    assert run_passes(swept, T, T + HOUR) == 0
+    swept.resume(now=T + 11 * HOUR)  # the computer starts at T + 9 h
+    assert swept.run_once(now=T + 11 * HOUR) == {"uploads": 0}
+    corrected = T + 9 * HOUR + 60
+    assert swept.run_once(now=corrected) == {"uploads": 0}
+    assert clock(storage) == (corrected, [(T + HOUR, corrected)])
+    assert kept(storage) == T + 11 * HOUR
+    assert run_passes(swept, corrected, corrected + HOUR) == 0
+    woke = corrected + 9 * HOUR
+    assert swept.run_once(now=woke) == {"uploads": 0}
+    assert clock(storage) == (woke, [(T + HOUR, T + 11 * HOUR), (T + 11 * HOUR, woke)])
+    # A day of real uptime ends at T + 40 h: an hour before the night, the minute before the correction, the hour
+    # before the sleep and 22 hours after it.
+    assert run_passes(swept, woke, T + 40 * HOUR) == 0
+    assert run_passes(swept, T + 40 * HOUR, T + 41 * HOUR + 60 - 1) == 0
+    assert swept.run_once(now=T + 41 * HOUR + 60) == {"uploads": 1}
+
+
+def test_chunks_written_while_the_clock_read_2009_count_from_the_correction(client, storage, route_clock, monkeypatch):
+    """The computer starts with its clock reset to 2009, and NTP corrects it a few minutes later. The sweep could
+    not read the clock for six minutes after the process started (the database was busy). One phone sends its
+    last chunk right after the process started, another one after the sweep read the clock. Both chunks carry
+    2009 moments, and the server can not tell when they came. The correction finds the clock past the kept moment
+    and moves both touch times to its own moment. The uploads then go a day of uptime after the correction and
+    never early."""
+    route_clock.now = T
+    match_id = create_match(client)
+    early, late = (create_upload(client, match_id, size=10).json()["uploadId"] for _ in range(2))
+    swept = sweeper(client)
+    swept.resume(now=T)
+    assert run_passes(swept, T, T + HOUR) == 0
+    # The next process: it is born while the clock reads 2009.
+    monkeypatch.setattr(sweep, "time", SimpleNamespace(time=lambda: RESET))
+    reborn = sweep.Sweeper(swept._connect, swept._files)
+    route_clock.now = RESET + 1
+    assert client.put(f"/v1/uploads/{early}/chunks?offset=0", content=b"abc").status_code == 200
+    reborn.resume(now=RESET + 360)
+    assert reborn.run_once(now=RESET + 360) == {"uploads": 0}
+    route_clock.now = RESET + 400
+    assert client.put(f"/v1/uploads/{late}/chunks?offset=0", content=b"abc").status_code == 200
+    corrected = T + 9 * HOUR
+    assert reborn.run_once(now=corrected) == {"uploads": 0}
+    assert {row["id"]: row["touched_at"] for row in rows(storage, "SELECT id, touched_at FROM uploads")} == {
+        early: corrected, late: corrected}
+    assert run_passes(reborn, corrected, corrected + 86400 - 1) == 0
+    assert reborn.run_once(now=corrected + 86400) == {"uploads": 2}
+
+
+def test_a_chunk_before_the_pass_that_notices_a_step_back_counts_from_the_correction(client, storage, route_clock):
+    """The clock steps back a year while the server runs, and a phone sends its last chunk before the next pass
+    notices the step. The chunk carries a moment a year back that lies before the moment of that pass, and the
+    server can not tell when it came. An hour later the clock jumps forward again, past the moment the server
+    kept, and the pass after the jump moves the touch time to its own moment: the upload goes a day of uptime
+    after that pass and never early."""
+    route_clock.now = T
+    upload_id = create_upload(client, create_match(client), size=10).json()["uploadId"]
+    swept = sweeper(client)
+    swept.resume(now=T)
+    assert run_passes(swept, T, T + HOUR) == 0
+    route_clock.now = T + HOUR + 30 - YEAR
+    assert client.put(f"/v1/uploads/{upload_id}/chunks?offset=0", content=b"abc").status_code == 200
+    noticed = T + HOUR + 60 - YEAR
+    assert run_passes(swept, noticed, noticed + HOUR) == 0
+    assert kept(storage) == T + HOUR
+    jumped = T + 2 * HOUR + 60
+    assert swept.run_once(now=jumped) == {"uploads": 0}
+    assert rows(storage, "SELECT touched_at FROM uploads") == [{"touched_at": jumped}]
+    assert run_passes(swept, jumped, jumped + 86400 - 1) == 0
+    assert swept.run_once(now=jumped + 86400) == {"uploads": 1}
 
 
 def test_a_chunk_written_while_the_clock_read_ahead_holds_the_upload_a_day_after_the_first_pass(
@@ -1023,7 +1289,7 @@ def test_a_verification_started_while_the_clock_read_ahead_can_be_taken_over_15_
     for upload_id in uploads:
         assert client.put(f"/v1/uploads/{upload_id}/chunks?offset=0", content=b"abc").status_code == 200
         # The complete marked the upload, and the stop ended the verification before it wrote a video.
-        set_upload(storage, upload_id, status="FINALIZING", finalize_started_at=ahead + 20)
+        set_upload(storage, upload_id, status="FINALIZING", finalize_started_at=ahead + 20, finalize_token="stopped")
     swept.mark_alive(now=ahead + 30)
     started = T + 10 * HOUR
     swept.resume(now=started)
@@ -1039,19 +1305,48 @@ def test_a_verification_started_while_the_clock_read_ahead_can_be_taken_over_15_
     assert client.post(f"/v1/uploads/{taken}/complete").status_code == 200
     assert client.delete(f"/v1/uploads/{aborted}").status_code == 204
     assert client.delete(f"/v1/matches/{matches[2]}").status_code == 204
-    assert {row["id"]: row["status"] for row in rows(storage, "SELECT id, status FROM uploads")} == {
-        taken: "COMPLETED", aborted: "ABORTED", left: "FINALIZING"}
+    assert {row["id"]: (row["status"], row["finalize_token"])
+            for row in rows(storage, "SELECT id, status, finalize_token FROM uploads")} == {
+        taken: ("COMPLETED", None), aborted: ("ABORTED", None), left: ("FINALIZING", "stopped")}
     assert run_passes(swept, started + 15 * 60, started + 86400 - 1) == 0
     assert swept.run_once(now=started + 86400) == {"uploads": 1}
     assert upload_status(storage, left) == "ABORTED"
 
 
-def test_a_verification_that_runs_while_the_clock_goes_back_is_verified_again_15_minutes_after_the_pass(
+def test_a_verification_that_runs_while_the_clock_goes_back_still_writes_its_video(
         client, storage, route_clock, monkeypatch):
     """A complete starts while the clock reads an hour ahead, and the clock is set back while the file is
-    checked. The pass in between moves the start of the verification back to its own moment, and the request
-    no longer owns the verification: it answers 409 UPLOAD_FINALIZING and writes no video. For 15 minutes
-    after that pass the next complete answers the same, then it verifies the upload again."""
+    checked. The pass in between moves the start of the verification back to its own moment. The request owns
+    the verification by the token it wrote with its mark, not by that start, so it still writes the video and
+    answers 200. The moved start only changes when a dead verification could be taken over."""
+    route_clock.now = T
+    upload_id = create_upload(client, create_match(client), size=3).json()["uploadId"]
+    assert client.put(f"/v1/uploads/{upload_id}/chunks?offset=0", content=b"abc").status_code == 200
+    swept = sweeper(client)
+    swept.resume(now=T)
+    probe = main_module.media.probe_video
+    during = []
+
+    def clock_set_back_meanwhile(*arguments):
+        assert swept.run_once(now=T + 60) == {"uploads": 0}
+        during.extend(rows(storage, "SELECT status, finalize_started_at FROM uploads"))
+        return probe(*arguments)
+
+    monkeypatch.setattr(main_module.media, "probe_video", clock_set_back_meanwhile)
+    route_clock.now = T + HOUR
+    done = client.post(f"/v1/uploads/{upload_id}/complete")
+    assert done.status_code == 200, done.text
+    assert during == [{"status": "FINALIZING", "finalize_started_at": T + 60}]
+    assert rows(storage, "SELECT status, video_id, finalize_started_at, finalize_token FROM uploads") == [
+        {"status": "COMPLETED", "video_id": done.json()["videoId"], "finalize_started_at": None, "finalize_token": None}]
+    assert rows(storage, "SELECT id FROM videos") == [{"id": done.json()["videoId"]}]
+
+
+def test_half_a_second_back_while_a_verification_runs_does_not_drop_it(client, storage, route_clock, monkeypatch):
+    """The checker's probe: an NTP step moves the clock half a second back while a complete checks the file, and
+    a pass lands in that half second. The pass moves the start of the verification half a second back. The
+    request still writes its video at once: the phone neither retries complete for two minutes nor waits 15
+    minutes for the server to check the whole file again."""
     route_clock.now = T
     upload_id = create_upload(client, create_match(client), size=3).json()["uploadId"]
     assert client.put(f"/v1/uploads/{upload_id}/chunks?offset=0", content=b"abc").status_code == 200
@@ -1059,23 +1354,104 @@ def test_a_verification_that_runs_while_the_clock_goes_back_is_verified_again_15
     swept.resume(now=T)
     probe = main_module.media.probe_video
 
-    def clock_set_back_meanwhile(*arguments):
-        assert swept.run_once(now=T + 60) == {"uploads": 0}
+    def pass_in_the_half_second(*arguments):
+        assert swept.run_once(now=T + 59.5) == {"uploads": 0}
         return probe(*arguments)
 
-    monkeypatch.setattr(main_module.media, "probe_video", clock_set_back_meanwhile)
-    route_clock.now = T + HOUR
+    monkeypatch.setattr(main_module.media, "probe_video", pass_in_the_half_second)
+    route_clock.now = T + 60
+    done = client.post(f"/v1/uploads/{upload_id}/complete")
+    assert done.status_code == 200, done.text
+    assert done.json()["videoId"] == rows(storage, "SELECT video_id FROM uploads")[0]["video_id"]
+    assert upload_status(storage, upload_id) == "COMPLETED"
+
+
+def test_a_takeover_after_15_minutes_wins_and_the_request_it_replaced_writes_nothing(
+        client, storage, route_clock, monkeypatch):
+    """A complete hangs for 15 minutes while it checks the file. The next complete takes the verification over
+    with a new token and writes the video. The first request then answers 409 UPLOAD_FINALIZING and writes
+    nothing: the upload keeps the video of the request that took it over, and no second video appears."""
+    route_clock.now = T
+    upload_id = create_upload(client, create_match(client), size=3).json()["uploadId"]
+    assert client.put(f"/v1/uploads/{upload_id}/chunks?offset=0", content=b"abc").status_code == 200
+    probe = main_module.media.probe_video
+    tokens, later = [], []
+
+    def taken_over_meanwhile(*arguments):
+        # Each request reads the token in the row while it checks the file: the first one, then the next.
+        tokens.extend(rows(storage, "SELECT finalize_token FROM uploads"))
+        if len(tokens) == 1:
+            route_clock.now = T + 15 * 60
+            later.append(client.post(f"/v1/uploads/{upload_id}/complete"))
+        return probe(*arguments)
+
+    monkeypatch.setattr(main_module.media, "probe_video", taken_over_meanwhile)
     first = client.post(f"/v1/uploads/{upload_id}/complete")
     assert (first.status_code, first.json()["error"]["code"]) == (409, "UPLOAD_FINALIZING")
-    assert rows(storage, "SELECT status, finalize_started_at, video_id FROM uploads") == [
-        {"status": "FINALIZING", "finalize_started_at": T + 60, "video_id": None}]
-    monkeypatch.setattr(main_module.media, "probe_video", probe)
-    route_clock.now = T + 60 + 15 * 60 - 1
-    refused = client.post(f"/v1/uploads/{upload_id}/complete")
-    assert (refused.status_code, refused.json()["error"]["code"]) == (409, "UPLOAD_FINALIZING")
-    route_clock.now = T + 60 + 15 * 60
-    assert client.post(f"/v1/uploads/{upload_id}/complete").status_code == 200
-    assert upload_status(storage, upload_id) == "COMPLETED"
+    assert later[0].status_code == 200, later[0].text
+    video_id = later[0].json()["videoId"]
+    # Each complete wrote its own token with its mark.
+    assert len(tokens) == 2 and len({row["finalize_token"] for row in tokens} - {None}) == 2
+    assert rows(storage, "SELECT id FROM videos") == [{"id": video_id}]
+    assert rows(storage, "SELECT status, video_id, finalize_token FROM uploads") == [
+        {"status": "COMPLETED", "video_id": video_id, "finalize_token": None}]
+
+
+def test_a_checksum_mismatch_after_a_takeover_leaves_the_file_and_the_row_to_the_request_that_took_over(
+        client, storage, route_clock, monkeypatch):
+    """A complete hangs for 15 minutes while it hashes a file whose bytes differ from the declared SHA-256, and
+    the next complete takes the verification over. The first request finds the mismatch while the second still
+    checks the file. It no longer owns the verification, so it answers 409 UPLOAD_FINALIZING and leaves the file
+    and the row as they are: it does not empty the file under the request that owns it. The request that took
+    over then finds the same mismatch, reopens the upload at offset 0 and empties the file."""
+    route_clock.now = T
+    upload_id = start_of(client, create_match(client), sha=hashlib.sha256(b"abc").hexdigest(), size=3).json()[
+        "uploadId"]
+    assert client.put(f"/v1/uploads/{upload_id}/chunks?offset=0", content=b"abX").status_code == 200
+    part = storage / "media" / f"{upload_id}.bin"
+    real_sha256 = hashlib.sha256
+    second_marked, release_second, hashers, takeovers, answers = (
+        threading.Event(), threading.Event(), [], [], [])
+
+    class Hasher:
+        """The first hasher belongs to the first request, the second to the request that takes over."""
+
+        def __init__(self):
+            self.inner, self.order = real_sha256(), len(hashers)
+            hashers.append(self)
+            if self.order == 1:
+                # The second request has written its mark and checks the file until the test lets it go on.
+                second_marked.set()
+                assert release_second.wait(10)
+
+        def update(self, block):
+            self.inner.update(block)
+
+        def hexdigest(self):
+            if self.order == 0:
+                route_clock.now = T + 15 * 60
+                takeovers.append(threading.Thread(
+                    target=lambda: answers.append(client.post(f"/v1/uploads/{upload_id}/complete"))))
+                takeovers[0].start()
+                assert second_marked.wait(10)
+            return self.inner.hexdigest()
+
+    monkeypatch.setattr(main_module, "hashlib", SimpleNamespace(sha256=Hasher))
+    try:
+        first = client.post(f"/v1/uploads/{upload_id}/complete")
+        assert (first.status_code, first.json()["error"]["code"]) == (409, "UPLOAD_FINALIZING")
+        assert part.read_bytes() == b"abX"
+        assert rows(storage, "SELECT status, next_offset, finalize_started_at FROM uploads") == [
+            {"status": "FINALIZING", "next_offset": 3, "finalize_started_at": T + 15 * 60}]
+    finally:
+        release_second.set()
+        for takeover in takeovers:
+            takeover.join(10)
+    second, = answers
+    assert (second.status_code, second.json()["error"]["code"]) == (422, "UPLOAD_CHECKSUM_MISMATCH")
+    assert part.read_bytes() == b""
+    assert rows(storage, "SELECT status, next_offset, finalize_started_at, finalize_token FROM uploads") == [
+        {"status": "UPLOADING", "next_offset": 0, "finalize_started_at": None, "finalize_token": None}]
 
 
 def test_a_pass_reads_the_clock_after_it_waited_for_the_database(client, storage, monkeypatch):
