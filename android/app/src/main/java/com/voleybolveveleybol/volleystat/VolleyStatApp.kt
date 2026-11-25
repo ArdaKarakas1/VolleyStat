@@ -76,6 +76,11 @@ import com.voleybolveveleybol.volleystat.ui.screens.TeamsScreen
 import com.voleybolveveleybol.volleystat.ui.screens.TeamCreateScreen
 import com.voleybolveveleybol.volleystat.ui.screens.TeamScreen
 import com.voleybolveveleybol.volleystat.ui.screens.TeamSeatsScreen
+import com.voleybolveveleybol.volleystat.ui.screens.TeamActions
+import com.voleybolveveleybol.volleystat.ui.screens.TeamBlockedScreen
+import com.voleybolveveleybol.volleystat.ui.screens.TeamJerseyScreen
+import com.voleybolveveleybol.volleystat.ui.screens.TeamSettingsScreen
+import androidx.compose.ui.graphics.asImageBitmap
 import com.voleybolveveleybol.volleystat.ui.screens.NewJoinsBadge
 import com.voleybolveveleybol.volleystat.ui.screens.VideoCheckScreen
 import com.voleybolveveleybol.volleystat.ui.screens.VideoSourceScreen
@@ -105,6 +110,12 @@ private object Routes {
     const val NEW_TEAM = "teams/new"
     /** As ve Yedek Yerleri of a team (captain). */
     const val TEAM_SEATS = "team/{id}/seats"
+    /** Takım Ayarları: the name, the usual match day and time, and the logo (captain). */
+    const val TEAM_SETTINGS = "team/{id}/settings"
+    /** Çıkarılanlar (captain). */
+    const val TEAM_BLOCKED = "team/{id}/blocked"
+    /** Forma Numaran: the account's own jersey in the team. */
+    const val TEAM_JERSEY = "team/{id}/jersey"
     /** A local roster of the personal flow, opened from New Match's team step (design 10.1). */
     const val ROSTER = "roster/{id}"
     const val NEW_MATCH = "new/match"
@@ -130,6 +141,9 @@ private object Routes {
     const val GAP = "gap/{id}/{at}"
     fun team(id: String) = "team/$id"
     fun teamSeats(id: String) = "team/$id/seats"
+    fun teamSettings(id: String) = "team/$id/settings"
+    fun teamBlocked(id: String) = "team/$id/blocked"
+    fun teamJersey(id: String) = "team/$id/jersey"
     fun roster(id: String) = "roster/$id"
     fun status(id: String) = "status/$id"
     fun review(id: String) = "review/$id"
@@ -481,6 +495,9 @@ fun VolleyStatApp(
                 )
             }
             composable(Routes.NEW_TEAM) {
+                // The photo picker needs no permission (design 4.2); a dismissed picker returns null and changes nothing.
+                val logoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> uri?.let(viewModel::pickDraftLogo) }
+                val draftLogo = state.serverTeams.draftLogo?.image
                 TeamCreateScreen(
                     state.serverTeams.busy, state.serverTeams.problem,
                     onCreate = { draft ->
@@ -489,7 +506,10 @@ fun VolleyStatApp(
                             if (nav.currentDestination?.route == Routes.NEW_TEAM) nav.navigate(Routes.team(id)) { popUpTo(Routes.NEW_TEAM) { inclusive = true } }
                         }
                     },
-                    onEdit = viewModel::clearTeamProblem, onBack = { viewModel.clearTeamProblem(); nav.popBackStack() },
+                    onEdit = viewModel::clearTeamProblem, onBack = { viewModel.clearTeamProblem(); viewModel.clearDraftLogo(); nav.popBackStack() },
+                    logo = remember(draftLogo) { draftLogo?.asImageBitmap() },
+                    onPickLogo = { viewModel.clearTeamProblem(); logoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                    onRemoveLogo = viewModel::clearDraftLogo,
                 )
             }
             composable(Routes.TEAM) { entry ->
@@ -501,12 +521,66 @@ fun VolleyStatApp(
                 val team = state.serverTeams.teamOf(id)
                 val read = state.serverTeams.opened?.takeIf { it.screen == screen && it.id == id }
                 LaunchedEffect(id) { viewModel.openTeam(id, screen) }
+                val logo = state.serverTeams.logos[id]?.image
+                // Leaving and deleting end on the Teams tab, unless the user left the screen meanwhile.
+                val toTeams = { if (nav.currentDestination?.route == Routes.TEAM) nav.popBackStack() }
                 TeamScreen(
                     team, loading = team == null && read?.problem == null, problem = read?.problem,
                     onSeats = { viewModel.clearTeamProblem(); go(Routes.teamSeats(id)) }, onRetry = { viewModel.openTeam(id, screen) },
-                    onBack = { nav.popBackStack() },
+                    onBack = { viewModel.clearTeamProblem(); nav.popBackStack() },
                     // The new members of the screen's first answer, which the app marks seen; the mark keeps the line (P6-C3).
                     recentJoins = read?.recentJoins,
+                    myUserId = state.account.user?.id, logo = remember(logo) { logo?.asImageBitmap() }, busy = state.serverTeams.busy,
+                    actionProblem = state.serverTeams.problem,
+                    actions = TeamActions(
+                        onSettings = { viewModel.clearTeamProblem(); go(Routes.teamSettings(id)) },
+                        onBlocked = { viewModel.clearTeamProblem(); go(Routes.teamBlocked(id)) },
+                        onJersey = { viewModel.clearTeamProblem(); go(Routes.teamJersey(id)) },
+                        onRemove = { userId, done -> viewModel.removeMember(id, userId, done) },
+                        onTransfer = { userId, done -> viewModel.transferCaptain(id, userId, done) },
+                        onLeave = { viewModel.leaveTeam(id) { toTeams() } },
+                        onDelete = { viewModel.deleteServerTeam(id) { toTeams() } },
+                        onDismiss = viewModel::clearTeamProblem,
+                    ),
+                )
+            }
+            composable(Routes.TEAM_SETTINGS) { entry ->
+                val id = entry.arguments?.getString("id").orEmpty()
+                val team = state.serverTeams.teamOf(id)
+                val logoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> uri?.let { viewModel.setLogo(id, it) } }
+                if (team == null || !team.captain) {
+                    LaunchedEffect(Unit) { leave(Routes.TEAM_SETTINGS) }
+                } else {
+                    val logo = state.serverTeams.logos[id]?.image
+                    TeamSettingsScreen(
+                        team, logo = remember(logo) { logo?.asImageBitmap() }, busy = state.serverTeams.busy, problem = state.serverTeams.problem,
+                        onSave = { name, schedule -> viewModel.saveTeamSettings(id, name, schedule) { leave(Routes.TEAM_SETTINGS) } },
+                        onPickLogo = { viewModel.clearTeamProblem(); logoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                        onRemoveLogo = { viewModel.removeLogo(id) },
+                        onEdit = viewModel::clearTeamProblem, onBack = { viewModel.clearTeamProblem(); nav.popBackStack() },
+                    )
+                }
+            }
+            composable(Routes.TEAM_JERSEY) { entry ->
+                val id = entry.arguments?.getString("id").orEmpty()
+                val team = state.serverTeams.teamOf(id)
+                if (team == null) {
+                    LaunchedEffect(Unit) { leave(Routes.TEAM_JERSEY) }
+                } else {
+                    TeamJerseyScreen(
+                        team.myJersey, busy = state.serverTeams.busy, problem = state.serverTeams.problem,
+                        onSave = { viewModel.setJersey(id, it) { leave(Routes.TEAM_JERSEY) } },
+                        onEdit = viewModel::clearTeamProblem, onBack = { viewModel.clearTeamProblem(); nav.popBackStack() },
+                    )
+                }
+            }
+            composable(Routes.TEAM_BLOCKED) { entry ->
+                val id = entry.arguments?.getString("id").orEmpty()
+                LaunchedEffect(id) { viewModel.loadBlocked(id) }
+                TeamBlockedScreen(
+                    state.serverTeams.blocked?.takeIf { it.teamId == id }, busy = state.serverTeams.busy, problem = state.serverTeams.problem,
+                    onUnblock = { viewModel.unblock(id, it) }, onRetry = { viewModel.loadBlocked(id) },
+                    onBack = { viewModel.clearTeamProblem(); nav.popBackStack() },
                 )
             }
             composable(Routes.TEAM_SEATS) { entry ->

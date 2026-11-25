@@ -17,6 +17,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 import java.util.UUID
 
 /**
@@ -26,6 +27,7 @@ import java.util.UUID
  * deletes the teams it is the only member of (design 3.7, 14.2).
  */
 @RunWith(RobolectricTestRunner::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35])
 class TeamE2eTest {
     private val url = System.getenv("VOLLEYSTAT_E2E_URL")
@@ -113,5 +115,52 @@ class TeamE2eTest {
         assertEquals(TeamProblem.NameInvalid, refusal { api.putTeam(newId(), "K".repeat(TeamRules.NAME_MAX + 1), 2, Seat.STARTER, null, null) })
         assertEquals(TeamProblem.NameInvalid, refusal { api.putTeam(newId(), "K".repeat(TeamRules.NAME_MIN - 1), 2, Seat.STARTER, null, null) })
         assertEquals(setOf("K".repeat(TeamRules.NAME_MAX), "Kuzey Spor & Co."), api.teams().map { it.name }.toSet())
+    }
+
+    /**
+     * Plan P7 on the real server: the logo that the platform's encoder (Skia, which the test runtime runs) writes and the
+     * app rewrites as a simple lossy WebP is taken with 200 and read back byte for byte; Logoyu Kaldır; the own jersey;
+     * the captain's empty Çıkarılanlar and the transfer to oneself (plan U29); a sole captain's leave deletes the team
+     * (plan U8). Removal and a transfer to another member need a second member, who can join only from slice B5 on.
+     */
+    @Test fun theLogoAndTheMemberCallsOfTheAppWorkOnTheRealServer() {
+        val api = account()
+        val id = newId()
+        api.putTeam(id, "E2E Logo Spor", 2, Seat.STARTER, null, null)
+        val pattern = android.graphics.Bitmap.createBitmap(640, 480, android.graphics.Bitmap.Config.ARGB_8888).apply {
+            val canvas = android.graphics.Canvas(this)
+            val paint = android.graphics.Paint()
+            listOf(android.graphics.Color.RED, android.graphics.Color.GREEN, android.graphics.Color.BLUE).forEachIndexed { index, color ->
+                paint.color = color
+                canvas.drawRect(index * 213f, 0f, (index + 1) * 213f, 480f, paint)
+            }
+        }
+        val (large, small) = LogoCodec.encode(pattern)
+        val version = api.putLogo(id, large, small)
+        assertTrue(version >= 1)
+        assertEquals(version, api.team(id).logoVersion)
+        assertTrue(large.contentEquals(api.logo(id, "large")))
+        assertTrue(small.contentEquals(api.logo(id, "small")))
+        // The encoder's own file, with its VP8X header and colour profile, is what the server refuses: the rewrite is needed.
+        val raw = java.io.ByteArrayOutputStream().also { LogoCodec.square(pattern, LogoCodec.LARGE).compress(LogoCodec.format(), 80, it) }.toByteArray()
+        assertEquals("VP8X", String(raw, 12, 4, Charsets.US_ASCII))
+        assertEquals(TeamProblem.LogoInvalid("large"), refusal { api.putLogo(id, raw, small) })
+        assertEquals(version, api.team(id).logoVersion)
+        api.deleteLogo(id)
+        assertNull(api.team(id).logoVersion)
+        assertNull(api.logo(id, "large"))
+
+        val me = api.me().id
+        assertEquals(9, api.setJersey(id, me, 9).jersey)
+        assertEquals(9, api.team(id).myJersey)
+        assertNull(api.setJersey(id, me, null).jersey)
+        assertTrue(api.blocks(id).isEmpty())
+        assertEquals(TeamRole.CAPTAIN, api.transferCaptain(id, me).myRole)
+        // Another account reads no Çıkarılanlar of a team it is not a member of.
+        assertEquals(TeamProblem.NoAccess, refusal { account().blocks(id) })
+
+        // The sole captain's own leave deletes the team, as Takımı Sil does.
+        api.removeMember(id, me)
+        assertEquals(TeamProblem.Gone, refusal { api.team(id) })
     }
 }

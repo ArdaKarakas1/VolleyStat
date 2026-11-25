@@ -11,6 +11,7 @@ import com.voleybolveveleybol.volleystat.model.Rally
 import com.voleybolveveleybol.volleystat.model.RallyList
 import com.voleybolveveleybol.volleystat.model.ReviewCard
 import com.voleybolveveleybol.volleystat.model.ReviewDeck
+import com.voleybolveveleybol.volleystat.model.BlockedMember
 import com.voleybolveveleybol.volleystat.model.Schedule
 import com.voleybolveveleybol.volleystat.model.Seat
 import com.voleybolveveleybol.volleystat.model.SeatCount
@@ -28,6 +29,7 @@ import org.json.JSONObject
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.Base64
 
 /**
  * A reply the server sent with an error status. [code] is the server's error code. [retryAfterSeconds]
@@ -121,6 +123,8 @@ class ApiClient(
 ) {
     companion object {
         const val CORRECTION_TIMEOUT_MS = 15_000
+        /** The most bytes the app reads of a logo: the server's limit for the large file is 36 KiB (design 4.2). */
+        const val LOGO_READ_LIMIT = 64 * 1024
     }
 
     // ----- Accounts (docs/API_V1.md, section 10) -----
@@ -233,6 +237,70 @@ class ApiClient(
         request("DELETE", "/teams/$teamId", expectedStatus = 204)
     }
 
+    /** Sets a member's jersey; null clears it. A member sets their own, the captain anyone's. The answer is the member's row. */
+    fun setJersey(teamId: String, userId: String, jersey: Int?): TeamMember {
+        val body = JSONObject().put("jersey", jersey ?: JSONObject.NULL)
+        return readable { parseMember(request("PUT", "/teams/$teamId/members/$userId/jersey", body.toString().toByteArray())) }
+    }
+
+    /**
+     * Ends a membership: the account's own id leaves the team, another member's id removes that member (captain), and the
+     * server blocks the removed account in the team's seat pool. Only the route's own 204 counts.
+     */
+    fun removeMember(teamId: String, userId: String) {
+        request("DELETE", "/teams/$teamId/members/$userId", expectedStatus = 204)
+    }
+
+    /** The accounts the captain removed, in the order of their removal (captain). */
+    fun blocks(teamId: String): List<BlockedMember> = readable {
+        request("GET", "/teams/$teamId/blocks").getJSONArray("blocked").objects().map {
+            BlockedMember(it.getString("userId"), it.getString("displayName"), it.getString("blockedAt"))
+        }
+    }
+
+    /** Lifts the block of [userId] (captain). The server answers 204 also when no block was there. */
+    fun unblock(teamId: String, userId: String) {
+        request("DELETE", "/teams/$teamId/blocks/$userId", expectedStatus = 204)
+    }
+
+    /** Hands the captaincy to the member [userId]. The answer shows the team as the old captain now sees it, as a member. */
+    fun transferCaptain(teamId: String, userId: String): TeamInfo =
+        readable { parseTeamInfo(request("POST", "/teams/$teamId/captain", JSONObject().put("userId", userId).toString().toByteArray())) }
+
+    /** Sends the logo's two lossy WebP files (captain, design 4.2) and reads the logo's new version. */
+    fun putLogo(teamId: String, large: ByteArray, small: ByteArray): Int {
+        val encoder = Base64.getEncoder()
+        val body = JSONObject().put("large", encoder.encodeToString(large)).put("small", encoder.encodeToString(small))
+        return readable { request("PUT", "/teams/$teamId/logo", body.toString().toByteArray()).getJSONObject("logo").getInt("version") }
+    }
+
+    /** Removes the logo (captain). Only the route's own 204 counts. */
+    fun deleteLogo(teamId: String) {
+        request("DELETE", "/teams/$teamId/logo", expectedStatus = 204)
+    }
+
+    /**
+     * The bytes of the team's logo in [size] (`large` or `small`), or null when the team has none (404 LOGO_NOT_FOUND).
+     * The server sends at most 36 KiB; an answer above [LOGO_READ_LIMIT] is no logo of this API, and the app reads no
+     * more of it.
+     */
+    fun logo(teamId: String, size: String): ByteArray? = try {
+        exchange("GET", "/teams/$teamId/logo?size=$size") { connection, status ->
+            connection.inputStream.use { stream ->
+                val bytes = stream.readNBytesCompat(LOGO_READ_LIMIT + 1)
+                if (bytes.size > LOGO_READ_LIMIT) throw ApiException(status, "UNEXPECTED_ANSWER", "The logo is larger than any logo of this API", JSONObject())
+                bytes
+            }
+        }
+    } catch (error: ApiException) {
+        if (error.code != "LOGO_NOT_FOUND") throw error
+        null
+    }
+
+    private fun parseMember(json: JSONObject) = TeamMember(
+        json.getString("userId"), json.getString("displayName"), json.intOrNull("jersey"), json.enumOf("role"), json.enumOf("seat"), json.getString("joinedAt"),
+    )
+
     private fun scheduleJson(schedule: Schedule) = JSONObject().put("weekday", schedule.weekday).put("time", schedule.time)
 
     /** A value of an enum this app knows. Any other value is an answer the app can not read, as a missing field is. */
@@ -249,9 +317,7 @@ class ApiClient(
             schedule = json.optJSONObject("schedule")?.let { Schedule(it.getInt("weekday"), it.getString("time")) },
             logoVersion = json.optJSONObject("logo")?.getInt("version"),
             myRole = json.enumOf("myRole"), mySeat = json.enumOf("mySeat"), myJersey = json.intOrNull("myJersey"), newJoins = json.intOrNull("newJoins"),
-            members = json.getJSONArray("members").objects().map {
-                TeamMember(it.getString("userId"), it.getString("displayName"), it.intOrNull("jersey"), it.enumOf<TeamRole>("role"), it.enumOf<Seat>("seat"), it.getString("joinedAt"))
-            },
+            members = json.getJSONArray("members").objects().map(::parseMember),
             seats = SeatCounts(parseSeatCount(seats.getJSONObject("starter")), parseSeatCount(seats.getJSONObject("substitute"))),
             waiting = seats.intOrNull("waiting"),
         )
@@ -519,7 +585,34 @@ class ApiClient(
         headers: Map<String, String> = emptyMap(),
         expectedStatus: Int? = null,
         received: Received? = null,
-    ): JSONObject {
+    ): JSONObject = exchange(method, path, body, length, contentType, timeoutMs, headers, expectedStatus, received) { connection, status ->
+        val text = connection.inputStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+        // An answer that is not JSON comes from something that is not this API. It is a failed
+        // call like any other, not a crash.
+        if (text.isBlank()) JSONObject() else try {
+            JSONObject(text)
+        } catch (error: org.json.JSONException) {
+            throw ApiException(status, "UNEXPECTED_ANSWER", "The answer is not JSON", JSONObject(), contentType = connection.contentType)
+        }
+    }
+
+    /**
+     * Sends one request and hands a 2xx answer to [read], which reads the body as the call needs it: JSON for every call
+     * but the logo's bytes. Any other answer becomes an [ApiException], and a 401 AUTH_REQUIRED to a request that carried
+     * the session ends that session first.
+     */
+    private fun <T> exchange(
+        method: String,
+        path: String,
+        body: ByteArray? = null,
+        length: Int = body?.size ?: 0,
+        contentType: String = "application/json",
+        timeoutMs: Int = 60_000,
+        headers: Map<String, String> = emptyMap(),
+        expectedStatus: Int? = null,
+        received: Received? = null,
+        read: (HttpURLConnection, Int) -> T,
+    ): T {
         // An address the phone can not even read (a build without a server address) sends nothing either.
         val connection = try {
             URL(baseUrl.trimEnd('/') + path).openConnection() as HttpURLConnection
@@ -549,9 +642,8 @@ class ApiClient(
             }
             if (body != null) connection.outputStream.use { it.write(body, 0, length) }
             val status = connection.responseCode
-            val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-            val text = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
             if (status !in 200..299) {
+                val text = connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
                 val error = runCatching { JSONObject(text).getJSONObject("error") }.getOrNull()
                 val failure = ApiException(
                     status = status,
@@ -569,13 +661,7 @@ class ApiClient(
             }
             received?.status = status
             received?.contentType = connection.contentType
-            // An answer that is not JSON comes from something that is not this API. It is a failed
-            // call like any other, not a crash.
-            return if (text.isBlank()) JSONObject() else try {
-                JSONObject(text)
-            } catch (error: org.json.JSONException) {
-                throw ApiException(status, "UNEXPECTED_ANSWER", "The answer is not JSON", JSONObject(), contentType = connection.contentType)
-            }
+            return read(connection, status)
         } finally {
             connection.disconnect()
         }
@@ -606,3 +692,15 @@ private fun unreadable401(status: Int, path: String, carriedSession: Boolean, co
 private fun JSONObject.optStringOrNull(name: String): String? = if (isNull(name)) null else getString(name)
 
 private fun JSONArray.objects(): List<JSONObject> = List(length()) { getJSONObject(it) }
+
+/** Reads at most [limit] bytes (InputStream.readNBytes needs API 33). */
+private fun java.io.InputStream.readNBytesCompat(limit: Int): ByteArray {
+    val out = java.io.ByteArrayOutputStream()
+    val buffer = ByteArray(8192)
+    while (out.size() < limit) {
+        val count = read(buffer, 0, minOf(buffer.size, limit - out.size()))
+        if (count < 0) break
+        out.write(buffer, 0, count)
+    }
+    return out.toByteArray()
+}

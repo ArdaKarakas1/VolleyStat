@@ -15,6 +15,7 @@ import com.voleybolveveleybol.volleystat.ui.screens.resolve
 import com.voleybolveveleybol.volleystat.ui.screens.waitText
 import com.voleybolveveleybol.volleystat.ui.screens.teamProblemText
 import com.voleybolveveleybol.volleystat.data.TeamProblem
+import com.voleybolveveleybol.volleystat.data.TeamLimitScope
 import com.voleybolveveleybol.volleystat.model.TeamRules
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -214,6 +215,11 @@ class AccountTextsTest {
             string(R.string.seats_raise_or_swap_hint), string(R.string.seats_swap_hint), string(R.string.team_starter_free_hint, 1, 2),
             string(R.string.team_no_access), string(R.string.team_gone), string(R.string.team_captain_only), string(R.string.teams_server_older),
             string(R.string.team_time_invalid),
+            // P7: member management, Çıkarılanlar, the settings and the logo.
+            string(R.string.transfer_captain_limit, "Ece", 3), string(R.string.jersey_taken, 12), string(R.string.member_remove_body_no_invite),
+            string(R.string.team_jersey_body), string(R.string.jersey_empty_hint), string(R.string.logo_invalid), string(R.string.logo_unreadable),
+            string(R.string.logo_too_large), string(R.string.team_leave_body), string(R.string.team_delete_body), string(R.string.transfer_body, "Ece"),
+            string(R.string.team_must_transfer), string(R.string.blocked_empty_body), string(R.string.privacy_teams),
         )
         val labels = listOf(
             string(R.string.team_new_my_seat), string(R.string.seat_starter), string(R.string.seat_substitute), string(R.string.seats_title),
@@ -223,11 +229,16 @@ class AccountTextsTest {
             string(R.string.field_schedule_day), string(R.string.field_schedule_time), string(R.string.team_schedule_none),
             string(R.string.field_my_jersey), string(R.string.action_save), string(R.string.teams_loading), string(R.string.team_loading),
             string(R.string.teams_empty_title), string(R.string.team_schedule, "Salı", "20:00"),
+            string(R.string.blocked_title), string(R.string.action_unblock), string(R.string.jersey_title), string(R.string.action_not_now),
+            string(R.string.action_leave_team), string(R.string.action_transfer_captain), string(R.string.action_team_settings), string(R.string.field_logo),
+            string(R.string.action_pick_logo), string(R.string.action_remove_logo), string(R.string.team_leave_title), string(R.string.action_delete_team),
+            string(R.string.team_delete_title), string(R.string.transfer_title), string(R.string.action_remove_member), string(R.string.member_remove_title, "Ece"),
+            string(R.string.blocked_empty), string(R.string.blocked_loading), string(R.string.blocked_on, "25 Kasım 2026"), string(R.string.member_options_a11y, "Ece"),
         )
         sentences.forEach { shown -> assertTrue(shown, shown.isNotBlank() && shown.endsWith(".")) }
         (sentences + labels).forEach { shown ->
             listOf(" - ", " – ", " — ", "--", "olabilir.").forEach { assertFalse(shown, shown.contains(it)) }
-            listOf("TEAM", "SEATS", "CAPTAIN", "NOT_FOUND", "STARTER", "SUBSTITUTE", "TOO_MANY").forEach { assertFalse(shown, shown.contains(it)) }
+            listOf("TEAM", "SEATS", "CAPTAIN", "NOT_FOUND", "STARTER", "SUBSTITUTE", "TOO_MANY", "JERSEY", "LOGO", "WEBP", "TRANSFER").forEach { assertFalse(shown, shown.contains(it)) }
             assertFalse(shown, Regex("%[0-9]").containsMatchIn(shown))
         }
         // The fixed numbers of the texts are the server's (design 2.3; backend/app/teams.py).
@@ -246,6 +257,18 @@ class AccountTextsTest {
         assertEquals(string(R.string.account_outcome_unknown), teamProblemText(TeamProblem.Failed(500, "INTERNAL")).resolve(context))
         assertEquals(string(R.string.account_outcome_unknown_on_the_way), teamProblemText(TeamProblem.Failed(502, "HTTP_502")).resolve(context))
         assertEquals(string(R.string.account_unexpected_change_signed_in), teamProblemText(TeamProblem.Failed(200, "UNEXPECTED_ANSWER")).resolve(context))
+        // P7's refusals read the server's numbers, and a refusal without its number names none.
+        assertEquals(string(R.string.jersey_taken, 12), teamProblemText(TeamProblem.JerseyTaken(12)).resolve(context))
+        assertEquals(string(R.string.account_refused), teamProblemText(TeamProblem.JerseyTaken(null)).resolve(context))
+        assertEquals(string(R.string.transfer_captain_limit, "Ece", 3), teamProblemText(TeamProblem.Limit(TeamLimitScope.CAPTAIN, 3, "u-2", "Ece")).resolve(context))
+        assertEquals(string(R.string.team_must_transfer), teamProblemText(TeamProblem.MustTransfer).resolve(context))
+        assertEquals(string(R.string.logo_invalid), teamProblemText(TeamProblem.LogoInvalid("small")).resolve(context))
+        assertEquals(string(R.string.logo_unreadable), teamProblemText(TeamProblem.LogoUnreadable).resolve(context))
+        assertEquals(string(R.string.logo_too_large), teamProblemText(TeamProblem.LogoTooLarge).resolve(context))
+        // The verbatim texts of the design (plan §11.1, §11.2).
+        assertEquals("%1\$s şu an en az %2\$d takımın kaptanı. Sunucu bir kişiye en çok %2\$d takımın kaptanlığını verir.", context.resources.getString(R.string.transfer_captain_limit))
+        assertEquals("Bir üyeyi çıkarınca sunucu bu hesabın takıma yeniden katılmasını engeller. Engeli Çıkarılanlar listesinden kaldırabilirsin.", string(R.string.member_remove_body_no_invite))
+        assertEquals("Takım arkadaşların forma numaranı görür.", string(R.string.team_jersey_body))
     }
 
     /**

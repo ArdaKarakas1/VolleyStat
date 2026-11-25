@@ -10,6 +10,8 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.onLast
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.core.app.ActivityScenario
@@ -170,5 +172,78 @@ class TeamFlowTest {
         assertEquals(0, viewModel.state.value.serverTeams.badge)
         assertTrue("the captain sees the member the app marked seen", shown(text(R.string.team_recent_joins, 1)))
         assertTrue(shown("Ece Yeni"))
+    }
+
+    /**
+     * Plan P7 through the real navigation: Takım Ayarları, Forma Numaran and Çıkarılanlar open from the team screen, each
+     * sends its call and goes back, and Takımı Sil ends on the Teams tab without the team.
+     */
+    @Test fun theCaptainsScreensOpenFromTheTeamScreenAndTakimiSilEndsOnTheList() {
+        standIn.teams = JSONArray().put(team("t1", "Kuzey Spor", 0, captain))
+        val viewModel = teamsTab("Kuzey Spor")
+        val me = standIn.userId("ali")
+        val mine = { name: String, jersey: Int? ->
+            team("t1", name, 0, member(me, "Ali Yılmaz", "CAPTAIN", "2026-11-20T10:00:00Z").put("jersey", jersey ?: JSONObject.NULL))
+                .put("myJersey", jersey ?: JSONObject.NULL)
+        }
+        standIn.teams = JSONArray().put(mine("Kuzey Spor", null))
+        // The team's own read answers with the team as the stand-in holds it now.
+        standIn.answers["GET /teams/t1"] = { standIn.teams.optJSONObject(0)?.let(::ok) ?: standIn.refuse(404, "TEAM_NOT_FOUND") }
+        tapText("Kuzey Spor")
+        waitFor(text(R.string.action_team_settings))
+
+        // Takım Ayarları: the form starts from the team, Kaydet sends the name and goes back.
+        standIn.answers["PUT /teams/t1/settings"] = {
+            standIn.teams = JSONArray().put(mine("Güney Spor", null))
+            ok(mine("Güney Spor", null))
+        }
+        tapText(text(R.string.action_team_settings))
+        waitFor(text(R.string.action_pick_logo))
+        compose.onNode(hasSetTextAction() and hasText(text(R.string.field_team_name))).performTextReplacement("Güney Spor")
+        compose.onNode(hasClickAction() and hasText(text(R.string.action_save))).performClick()
+        waitFor(text(R.string.blocked_title))
+        until { count("PUT /teams/t1/settings") == 1 }
+        assertTrue(shown("Güney Spor"))
+
+        // Forma Numaran: the own number goes to the member's own route.
+        standIn.answers["PUT /teams/t1/members/$me/jersey"] = {
+            standIn.teams = JSONArray().put(mine("Güney Spor", 4))
+            ok(member(me, "Ali Yılmaz", "CAPTAIN", "2026-11-20T10:00:00Z").put("jersey", 4))
+        }
+        tapText(text(R.string.jersey_title))
+        waitFor(text(R.string.team_jersey_body))
+        compose.onNode(hasSetTextAction() and hasText(text(R.string.field_my_jersey))).performTextReplacement("4")
+        compose.onNode(hasClickAction() and hasText(text(R.string.action_save))).performClick()
+        waitFor(text(R.string.blocked_title))
+        assertEquals(1, count("PUT /teams/t1/members/$me/jersey"))
+        until { viewModel.state.value.serverTeams.teamOf("t1")?.myJersey == 4 }
+
+        // Çıkarılanlar: the list, and Engeli Kaldır.
+        standIn.answers["GET /teams/t1/blocks"] = {
+            ok(JSONObject().put("blocked", JSONArray().put(JSONObject().put("userId", "u-9").put("displayName", "Engelli Kişi").put("blockedAt", "2026-11-22T10:00:00Z"))))
+        }
+        standIn.answers["DELETE /teams/t1/blocks/u-9"] = {
+            standIn.answers["GET /teams/t1/blocks"] = { ok(JSONObject().put("blocked", JSONArray())) }
+            MockResponse().setResponseCode(204)
+        }
+        tapText(text(R.string.blocked_title))
+        waitFor("Engelli Kişi")
+        compose.onNode(hasClickAction() and hasText(text(R.string.action_unblock))).performClick()
+        waitFor(text(R.string.blocked_empty))
+        assertEquals(1, count("DELETE /teams/t1/blocks/u-9"))
+        compose.onAllNodesWithContentDescription(text(R.string.action_back)).onFirst().performClick()
+
+        // Takımı Sil: the question, then the Teams tab without the team.
+        standIn.answers["DELETE /teams/t1"] = {
+            standIn.teams = JSONArray()
+            MockResponse().setResponseCode(204)
+        }
+        waitFor(text(R.string.action_delete_team))
+        compose.onNode(hasClickAction() and hasText(text(R.string.action_delete_team))).performScrollTo().performClick()
+        waitFor(text(R.string.team_delete_body))
+        compose.onAllNodes(hasClickAction() and hasText(text(R.string.action_delete_team))).onLast().performClick()
+        waitFor(text(R.string.teams_empty_title))
+        assertEquals(1, count("DELETE /teams/t1"))
+        assertFalse(shown("Güney Spor"))
     }
 }

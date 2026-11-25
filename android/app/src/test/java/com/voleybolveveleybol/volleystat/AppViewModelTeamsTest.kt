@@ -32,6 +32,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
@@ -43,6 +44,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  * change, the captain's joins-seen, the refusals, and the team state that belongs to one session (D1).
  */
 @RunWith(RobolectricTestRunner::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35])
 class AppViewModelTeamsTest {
     private val context get() = ApplicationProvider.getApplicationContext<Application>()
@@ -95,13 +97,14 @@ class AppViewModelTeamsTest {
     /** A team as server 0.10 sends it. The seat counts follow [members] and [substitutes]. */
     private fun team(
         id: String, name: String = "Kuzey Spor", role: String = "CAPTAIN", newJoins: Int? = 0,
-        members: List<JSONObject> = listOf(captainRow), substitutes: Int = 2,
+        members: List<JSONObject> = listOf(captainRow), substitutes: Int = 2, logo: Int? = null,
     ): JSONObject {
         fun count(seats: Int, seat: Seat): JSONObject {
             val taken = members.count { it.getString("seat") == seat.name }
             return JSONObject().put("seats", seats).put("taken", taken).put("left", seats - taken).put("deciding", 0)
         }
-        return JSONObject().put("id", id).put("poolId", "pool-$id").put("name", name).put("tag", "K7Q2").put("schedule", JSONObject.NULL).put("logo", JSONObject.NULL)
+        return JSONObject().put("id", id).put("poolId", "pool-$id").put("name", name).put("tag", "K7Q2").put("schedule", JSONObject.NULL)
+            .put("logo", if (logo == null) JSONObject.NULL else JSONObject().put("version", logo))
             .put("myRole", role).put("mySeat", "STARTER").put("myJersey", JSONObject.NULL).put("newJoins", if (role == "CAPTAIN") newJoins ?: 0 else JSONObject.NULL)
             .put("members", JSONArray(members))
             .put("seats", JSONObject().put("starter", count(6, Seat.STARTER)).put("substitute", count(substitutes, Seat.SUBSTITUTE)).put("waiting", if (role == "CAPTAIN") 0 else JSONObject.NULL))
@@ -727,6 +730,305 @@ class AppViewModelTeamsTest {
         assertEquals(1, vm.state.value.serverTeams.opened?.recentJoins)
     }
 
+    // ----- P7: the jersey, the members, Çıkarılanlar, the transfer, leaving, deletion and the logo -----
+
+    private val ece = member("u-2", "Ece Yeni", Seat.SUBSTITUTE, "2026-11-21T12:00:00Z", jersey = 12)
+    private val gul = member("u-3", "Gül Ak", Seat.STARTER, "2026-11-21T13:00:00Z")
+
+    private fun blocked(vararg rows: Pair<String, String>) =
+        ok(JSONObject().put("blocked", JSONArray(rows.map { (id, name) -> JSONObject().put("userId", id).put("displayName", name).put("blockedAt", "2026-11-23T10:00:00Z") })))
+
+    private fun AppViewModel.idle() = await("the team action") { !state.value.serverTeams.busy }
+
+    /** A picture file the picker could hand the app: a PNG of [width] × [height]. */
+    private fun picture(name: String, width: Int = 600, height: Int = 400): android.net.Uri {
+        val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.rgb(20, 120, 200)) }
+        val file = java.io.File(context.cacheDir, name)
+        file.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+        return android.net.Uri.fromFile(file)
+    }
+
+    /** PNG bytes the mock server sends as a logo; the app decodes any picture the platform reads. */
+    private fun logoBytes(): ByteArray = java.io.ByteArrayOutputStream().also {
+        android.graphics.Bitmap.createBitmap(256, 256, android.graphics.Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.RED) }
+            .compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
+    }.toByteArray()
+
+    private fun logoAnswer() = MockResponse().setResponseCode(200).setHeader("Content-Type", "image/webp").setBody(okio.Buffer().write(logoBytes()))
+
+    /** The encoder of the JVM tests: fixed bytes, so the tests read what the app sends. The platform encoder runs in LogoDeviceTest. */
+    private fun AppViewModel.withFakeEncoder(size: Int = 100): AppViewModel {
+        logoCompressor = com.voleybolveveleybol.volleystat.data.LogoCodec.Compressor { bitmap, _, quality -> ByteArray(size) { (bitmap.width + quality).toByte() } }
+        return this
+    }
+
+    @Test fun aJerseyRefusedAsTakenShowsTheNumber() {
+        TestAccounts.seed(context)
+        on("GET /teams") { teams(team("t1", members = listOf(captainRow, ece))) }
+        on("PUT /teams/t1/members/${TestAccounts.SESSION.userId}/jersey") { refuse(409, "JERSEY_TAKEN", JSONObject().put("jersey", 12)) }
+        val vm = viewModel().loaded()
+        var done = 0
+        vm.setJersey("t1", 12) { done++ }
+        await("the refusal") { vm.state.value.serverTeams.problem != null && !vm.state.value.serverTeams.busy }
+        assertEquals(12, JSONObject(seen.single { it.key.endsWith("/jersey") }.body).getInt("jersey"))
+        assertEquals(TeamProblem.JerseyTaken(12), vm.state.value.serverTeams.problem)
+        assertEquals(string(R.string.jersey_taken, 12), teamProblemText(vm.state.value.serverTeams.problem!!).resolve(context))
+        assertEquals("the dialog stays open", 0, done)
+
+        // Another number: the member's row and the account's own number follow the server's answer.
+        on("PUT /teams/t1/members/${TestAccounts.SESSION.userId}/jersey") {
+            ok(member(TestAccounts.SESSION.userId, "Test Kullanıcı", Seat.STARTER, "2026-11-20T10:00:00Z", role = "CAPTAIN", jersey = 4))
+        }
+        vm.setJersey("t1", 4) { done++ }
+        await("the jersey") { done == 1 }
+        assertNull(vm.state.value.serverTeams.problem)
+        assertEquals(4, vm.state.value.serverTeams.teamOf("t1")!!.myJersey)
+        // A null clears the number.
+        on("PUT /teams/t1/members/${TestAccounts.SESSION.userId}/jersey") {
+            ok(member(TestAccounts.SESSION.userId, "Test Kullanıcı", Seat.STARTER, "2026-11-20T10:00:00Z", role = "CAPTAIN"))
+        }
+        vm.setJersey("t1", null) { done++ }
+        await("the cleared jersey") { done == 2 }
+        assertTrue(JSONObject(seen.last { it.key.endsWith("/jersey") }.body).isNull("jersey"))
+        assertNull(vm.state.value.serverTeams.teamOf("t1")!!.myJersey)
+    }
+
+    @Test fun aRemovalReloadsTheTeamAndTheBlockedList() {
+        TestAccounts.seed(context)
+        var removed = false
+        on("GET /teams") { teams(team("t1", members = if (removed) listOf(captainRow, gul) else listOf(captainRow, ece, gul))) }
+        on("GET /teams/t1") { ok(team("t1", members = if (removed) listOf(captainRow, gul) else listOf(captainRow, ece, gul))) }
+        on("GET /teams/t1/blocks") { if (removed) blocked("u-2" to "Ece Yeni") else blocked() }
+        on("DELETE /teams/t1/members/u-2") { removed = true; MockResponse().setResponseCode(204) }
+        val vm = viewModel().loaded()
+        vm.openTeam("t1", "screen-1")
+        await("the team") { vm.state.value.serverTeams.opened?.team != null }
+        vm.loadBlocked("t1")
+        await("the empty blocked list") { vm.state.value.serverTeams.blocked?.list == emptyList<Any>() }
+        val before = seen.size
+        var done = 0
+        vm.removeMember("t1", "u-2") { done++ }
+        await("the removal") { done == 1 }
+        await("the reads after it") { vm.state.value.serverTeams.blocked?.list?.map { it.userId } == listOf("u-2") }
+        await("the team without her") { vm.state.value.serverTeams.teamOf("t1")!!.members.none { it.userId == "u-2" } }
+        await("the team's own read") { seen.drop(before).any { it.key == "GET /teams/t1" } }
+        val after = seen.drop(before).map { it.key }
+        assertEquals("DELETE /teams/t1/members/u-2", after.first())
+        assertTrue(after.toString(), after.containsAll(listOf("GET /teams", "GET /teams/t1", "GET /teams/t1/blocks")))
+        assertEquals("Ece Yeni", vm.state.value.serverTeams.blocked!!.list!!.single().displayName)
+        assertEquals(2, vm.state.value.serverTeams.opened!!.team!!.members.size)
+    }
+
+    @Test fun anUnblockRemovesTheRow() {
+        TestAccounts.seed(context)
+        var lifted = false
+        on("GET /teams") { teams(team("t1")) }
+        on("GET /teams/t1/blocks") { if (lifted) blocked("u-3" to "Gül Ak") else blocked("u-2" to "Ece Yeni", "u-3" to "Gül Ak") }
+        on("DELETE /teams/t1/blocks/u-2") { lifted = true; MockResponse().setResponseCode(204) }
+        val vm = viewModel().loaded()
+        vm.loadBlocked("t1")
+        await("the list") { vm.state.value.serverTeams.blocked?.list?.size == 2 }
+        assertEquals("t1", vm.state.value.serverTeams.blocked!!.teamId)
+        vm.unblock("t1", "u-2")
+        await("the row goes") { vm.state.value.serverTeams.blocked?.list?.map { it.userId } == listOf("u-3") }
+        vm.idle()
+        await("the list read again") { seen.count { it.key == "GET /teams/t1/blocks" } == 2 }
+        settle()
+        assertEquals(listOf("u-3"), vm.state.value.serverTeams.blocked!!.list!!.map { it.userId })
+
+        // A read of the list that fails keeps no rows of another moment and says why.
+        on("GET /teams/t1/blocks") { refuse(403, "CAPTAIN_ONLY") }
+        vm.loadBlocked("t1")
+        await("the refusal") { vm.state.value.serverTeams.blocked?.problem != null }
+        assertEquals(TeamProblem.CaptainOnly, vm.state.value.serverTeams.blocked!!.problem)
+    }
+
+    @Test fun aTransferRefusedForTheLimitNamesTheMember() {
+        TestAccounts.seed(context)
+        on("GET /teams") { teams(team("t1", members = listOf(captainRow, ece))) }
+        on("POST /teams/t1/captain") { refuse(409, "TEAM_LIMIT_REACHED", JSONObject().put("scope", "CAPTAIN").put("limit", 3).put("userId", "u-2")) }
+        val vm = viewModel().loaded()
+        var done = 0
+        vm.transferCaptain("t1", "u-2") { done++ }
+        await("the refusal") { vm.state.value.serverTeams.problem != null && !vm.state.value.serverTeams.busy }
+        assertEquals("u-2", JSONObject(seen.single { it.key == "POST /teams/t1/captain" }.body).getString("userId"))
+        assertEquals(TeamProblem.Limit(TeamLimitScope.CAPTAIN, 3, "u-2", "Ece Yeni"), vm.state.value.serverTeams.problem)
+        assertEquals(string(R.string.transfer_captain_limit, "Ece Yeni", 3), teamProblemText(vm.state.value.serverTeams.problem!!).resolve(context))
+        assertEquals(0, done)
+        // Without the member's name the app names no one.
+        assertEquals(string(R.string.account_refused), teamProblemText(TeamProblem.Limit(TeamLimitScope.CAPTAIN, 3, "u-9")).resolve(context))
+
+        // The server takes it: the team shows the account as a member now.
+        on("POST /teams/t1/captain") { ok(team("t1", role = "MEMBER", members = listOf(captainRow, ece))) }
+        on("GET /teams") { teams(team("t1", role = "MEMBER", members = listOf(captainRow, ece))) }
+        vm.transferCaptain("t1", "u-2") { done++ }
+        await("the transfer") { done == 1 }
+        assertFalse(vm.state.value.serverTeams.teamOf("t1")!!.captain)
+    }
+
+    @Test fun aLeaveRemovesTheTeamFromTheList() {
+        TestAccounts.seed(context)
+        var left = false
+        on("GET /teams") { if (left) teams(team("t1")) else teams(team("t1"), team("t2", name = "Güney Spor", role = "MEMBER")) }
+        on("DELETE /teams/t2/members/${TestAccounts.SESSION.userId}") { left = true; MockResponse().setResponseCode(204) }
+        val vm = viewModel().loaded()
+        var done = 0
+        vm.leaveTeam("t2") { done++ }
+        await("the leave") { done == 1 }
+        assertEquals(listOf("t1"), vm.state.value.serverTeams.teams!!.map { it.id })
+        assertTrue(seen.any { it.key == "DELETE /teams/t2/members/${TestAccounts.SESSION.userId}" })
+
+        // A captain with other members must hand the captaincy on first; nothing changes.
+        on("DELETE /teams/t1/members/${TestAccounts.SESSION.userId}") { refuse(409, "CAPTAIN_MUST_TRANSFER") }
+        vm.leaveTeam("t1") { done++ }
+        await("the refusal") { vm.state.value.serverTeams.problem != null && !vm.state.value.serverTeams.busy }
+        assertEquals(TeamProblem.MustTransfer, vm.state.value.serverTeams.problem)
+        assertEquals(string(R.string.team_must_transfer), teamProblemText(TeamProblem.MustTransfer).resolve(context))
+        assertEquals(listOf("t1"), vm.state.value.serverTeams.teams!!.map { it.id })
+        assertEquals(1, done)
+    }
+
+    @Test fun aDeletedTeamLeavesTheList() {
+        TestAccounts.seed(context)
+        var deleted = false
+        on("GET /teams") { if (deleted) teams(team("t2", name = "Güney Spor")) else teams(team("t1", logo = 2), team("t2", name = "Güney Spor")) }
+        on("GET /teams/t1/logo") { logoAnswer() }
+        on("DELETE /teams/t1") { deleted = true; MockResponse().setResponseCode(204) }
+        val vm = viewModel().loaded()
+        await("the logo") { vm.state.value.serverTeams.logos["t1"] != null }
+        var done = 0
+        vm.deleteServerTeam("t1") { done++ }
+        await("the deletion") { done == 1 }
+        assertEquals(listOf("t2"), vm.state.value.serverTeams.teams!!.map { it.id })
+        assertNull("the team's logo leaves the memory", vm.state.value.serverTeams.logos["t1"])
+
+        on("DELETE /teams/t2") { refuse(403, "CAPTAIN_ONLY") }
+        vm.deleteServerTeam("t2") { done++ }
+        await("the refusal") { vm.state.value.serverTeams.problem != null && !vm.state.value.serverTeams.busy }
+        assertEquals(TeamProblem.CaptainOnly, vm.state.value.serverTeams.problem)
+        assertEquals(1, done)
+    }
+
+    @Test fun theLogosOfTheListAreReadOnceForEachVersion() {
+        TestAccounts.seed(context)
+        var version: Int? = 3
+        on("GET /teams") { teams(team("t1", logo = version), team("t2", name = "Güney Spor")) }
+        on("GET /teams/t1/logo") { logoAnswer() }
+        val vm = viewModel().loaded()
+        await("the logo") { vm.state.value.serverTeams.logos["t1"]?.version == 3 }
+        val logo = vm.state.value.serverTeams.logos.getValue("t1")
+        assertTrue(logo.image.width <= com.voleybolveveleybol.volleystat.data.LogoCodec.LARGE)
+        assertEquals("only the team with a logo", setOf("t1"), vm.state.value.serverTeams.logos.keys)
+        val reads = seen.filter { it.key == "GET /teams/t1/logo" }
+        assertEquals(1, reads.size)
+        assertEquals("Bearer ${TestAccounts.SESSION.token}", reads.single().authorization)
+        // The same version is not read again.
+        vm.loaded()
+        settle()
+        assertEquals(1, seen.count { it.key == "GET /teams/t1/logo" })
+        // A new version is.
+        version = 4
+        vm.loaded()
+        await("the new version") { vm.state.value.serverTeams.logos["t1"]?.version == 4 }
+        assertEquals(2, seen.count { it.key == "GET /teams/t1/logo" })
+        // A team without a logo shows its initials again.
+        version = null
+        vm.loaded()
+        await("no logo") { vm.state.value.serverTeams.logos["t1"] == null }
+        // A logo the server no longer has, or can not send, leaves the initials and no problem.
+        version = 5
+        on("GET /teams/t1/logo") { refuse(404, "LOGO_NOT_FOUND") }
+        vm.loaded()
+        await("the read") { seen.count { it.key == "GET /teams/t1/logo" } == 3 }
+        settle()
+        assertNull(vm.state.value.serverTeams.logos["t1"])
+        assertNull(vm.state.value.serverTeams.problem)
+        assertNull(vm.state.value.serverTeams.loadProblem)
+    }
+
+    @Test fun aLogoGoesToTheServerAsTwoFilesAndShowsAtOnce() {
+        TestAccounts.seed(context)
+        on("GET /teams") { teams(team("t1")) }
+        on("PUT /teams/t1/logo") { ok(JSONObject().put("logo", JSONObject().put("version", 1))) }
+        val vm = viewModel().withFakeEncoder().loaded()
+        var done = 0
+        vm.setLogo("t1", picture("logo.png")) { done++ }
+        await("the logo") { done == 1 }
+        val sent = JSONObject(seen.single { it.key == "PUT /teams/t1/logo" }.body)
+        val decoder = java.util.Base64.getDecoder()
+        // The fake encoder writes the side and the quality into its bytes: 256 and 128 px at quality 80.
+        assertTrue(decoder.decode(sent.getString("large")).all { it == (256 + 80).toByte() })
+        assertTrue(decoder.decode(sent.getString("small")).all { it == (128 + 80).toByte() })
+        assertEquals(1, vm.state.value.serverTeams.teamOf("t1")!!.logoVersion)
+        assertEquals("the app shows the logo it sent without reading it back", 1, vm.state.value.serverTeams.logos["t1"]?.version)
+        assertEquals(0, seen.count { it.key == "GET /teams/t1/logo" })
+
+        // Logoyu Kaldır.
+        on("DELETE /teams/t1/logo") { MockResponse().setResponseCode(204) }
+        vm.removeLogo("t1")
+        await("no logo") { vm.state.value.serverTeams.logos["t1"] == null && !vm.state.value.serverTeams.busy }
+        assertNull(vm.state.value.serverTeams.teamOf("t1")!!.logoVersion)
+    }
+
+    @Test fun aLogoRefusedByTheServerSaysSo() {
+        TestAccounts.seed(context)
+        on("GET /teams") { teams(team("t1")) }
+        on("PUT /teams/t1/logo") { refuse(422, "LOGO_INVALID", JSONObject().put("image", "large")) }
+        val vm = viewModel().withFakeEncoder().loaded()
+        vm.setLogo("t1", picture("logo.png")) { error("refused") }
+        await("the refusal") { vm.state.value.serverTeams.problem != null && !vm.state.value.serverTeams.busy }
+        assertEquals(TeamProblem.LogoInvalid("large"), vm.state.value.serverTeams.problem)
+        assertEquals(string(R.string.logo_invalid), teamProblemText(vm.state.value.serverTeams.problem!!).resolve(context))
+        assertNull(vm.state.value.serverTeams.teamOf("t1")!!.logoVersion)
+        assertTrue(vm.state.value.serverTeams.logos.isEmpty())
+    }
+
+    @Test fun aLogoTheAppCanNotReadSaysSoAndSendsNothing() {
+        TestAccounts.seed(context)
+        on("GET /teams") { teams(team("t1")) }
+        on("PUT /teams/t1/logo") { ok(JSONObject().put("logo", JSONObject().put("version", 1))) }
+        val vm = viewModel().withFakeEncoder().loaded()
+        val text = java.io.File(context.cacheDir, "not-a-picture.png").apply { writeText("this is no picture") }
+        vm.setLogo("t1", android.net.Uri.fromFile(text)) { error("unreadable") }
+        await("the problem") { vm.state.value.serverTeams.problem != null && !vm.state.value.serverTeams.busy }
+        assertEquals(TeamProblem.LogoUnreadable, vm.state.value.serverTeams.problem)
+        assertEquals(string(R.string.logo_unreadable), teamProblemText(TeamProblem.LogoUnreadable).resolve(context))
+        // A picture the encoder can not make small enough.
+        vm.withFakeEncoder(size = com.voleybolveveleybol.volleystat.data.LogoCodec.LARGE_MAX_BYTES + 1)
+        vm.setLogo("t1", picture("busy.png")) { error("too large") }
+        await("the second problem") { vm.state.value.serverTeams.problem == TeamProblem.LogoTooLarge && !vm.state.value.serverTeams.busy }
+        assertEquals(string(R.string.logo_too_large), teamProblemText(TeamProblem.LogoTooLarge).resolve(context))
+        assertEquals("nothing went to the server", 0, seen.count { it.key == "PUT /teams/t1/logo" })
+    }
+
+    @Test fun takimKurSendsTheChosenLogoAfterTheTeam() {
+        TestAccounts.seed(context)
+        on("GET /teams") { teams() }
+        on("PUT /teams/{new}") { request -> ok(team(request.requestUrl!!.encodedPath.substringAfterLast('/')), 201) }
+        val vm = viewModel().withFakeEncoder().loaded()
+        vm.pickDraftLogo(picture("draft.png"))
+        await("the draft logo") { vm.state.value.serverTeams.draftLogo != null && !vm.state.value.serverTeams.busy }
+        val id = CopyOnWriteArrayList<String>()
+        on("PUT /teams/{new}/logo") { ok(JSONObject().put("logo", JSONObject().put("version", 1))) }
+        vm.createTeam(TeamDraft("Kuzey Spor")) { id += it }
+        await("the team") { id.isNotEmpty() }
+        await("the logo") { seen.any { it.key == "PUT /teams/{new}/logo" } && !vm.state.value.serverTeams.busy }
+        val order = seen.map { it.key }.filter { it.startsWith("PUT") }
+        assertEquals(listOf("PUT /teams/{new}", "PUT /teams/{new}/logo"), order)
+        assertEquals("the logo goes to the team just made", "/teams/${id.single()}/logo", seen.single { it.key == "PUT /teams/{new}/logo" }.path)
+        assertNull("the draft's logo is spent", vm.state.value.serverTeams.draftLogo)
+        await("the logo shows") { vm.state.value.serverTeams.logos[id.single()]?.version == 1 }
+
+        // A picture the app can not read is refused on the form, and Takım Kur sends no logo.
+        vm.pickDraftLogo(android.net.Uri.fromFile(java.io.File(context.cacheDir, "yok.png")))
+        await("the problem") { vm.state.value.serverTeams.problem == TeamProblem.LogoUnreadable && !vm.state.value.serverTeams.busy }
+        assertNull(vm.state.value.serverTeams.draftLogo)
+        vm.pickDraftLogo(picture("draft2.png"))
+        await("the second draft logo") { vm.state.value.serverTeams.draftLogo != null && !vm.state.value.serverTeams.busy }
+        vm.clearDraftLogo()
+        assertNull(vm.state.value.serverTeams.draftLogo)
+    }
+
     // ----- the session (D1) -----
 
     @Test fun anEndedSessionDuringATeamCallLeadsToTheLogin() {
@@ -740,20 +1042,30 @@ class AppViewModelTeamsTest {
         assertEquals(TeamsUi(), vm.state.value.serverTeams)
     }
 
-    /** A logs in, reads a team with a new member and leaves a creation whose answer was lost. */
+    /**
+     * A logs in, reads a team with a new member, its logo and its Çıkarılanlar, picks a logo for Takım Kur and leaves a
+     * creation whose answer was lost.
+     */
     private fun firstAccountWithATeam(): Pair<AppViewModel, String> {
         on("GET /teams") { request ->
             if (request.getHeader("Authorization")!!.contains("ali")) {
-                teams(team("t1", newJoins = 1, members = listOf(captainRow, member("u-2", "Ece Yeni", Seat.SUBSTITUTE, "2026-11-21T12:00:00Z"))))
+                teams(team("t1", newJoins = 1, logo = 1, members = listOf(captainRow, member("u-2", "Ece Yeni", Seat.SUBSTITUTE, "2026-11-21T12:00:00Z"))))
             } else {
                 refuse(500, "INTERNAL")
             }
         }
+        on("GET /teams/t1/logo") { logoAnswer() }
+        on("GET /teams/t1/blocks") { blocked("u-9" to "Engelli Kişi") }
         on("PUT /teams/{new}") { lost() }
-        val vm = viewModel()
+        val vm = viewModel().withFakeEncoder()
         vm.loginAndWait("ali")
         vm.loaded()
         assertEquals(1, vm.state.value.serverTeams.badge)
+        await("A's logo") { vm.state.value.serverTeams.logos["t1"] != null }
+        vm.loadBlocked("t1")
+        await("A's Çıkarılanlar") { vm.state.value.serverTeams.blocked?.list?.size == 1 }
+        vm.pickDraftLogo(picture("a-logo.png"))
+        await("A's logo for Takım Kur") { vm.state.value.serverTeams.draftLogo != null && !vm.state.value.serverTeams.busy }
         vm.createTeam(TeamDraft("Batı Spor")) { error("lost") }
         await("the lost creation") { vm.state.value.serverTeams.problem == TeamProblem.Unreachable && !vm.state.value.serverTeams.busy }
         return vm to creations().single()
@@ -765,8 +1077,11 @@ class AppViewModelTeamsTest {
         val ui = vm.state.value.serverTeams
         assertNull("B's list failed to load and shows no team", ui.teams)
         assertEquals(0, ui.badge)
+        assertTrue("no logo of A is left in memory", ui.logos.isEmpty())
+        assertNull("no Çıkarılanlar of A", ui.blocked)
+        assertNull("no logo A picked for Takım Kur", ui.draftLogo)
         val everything = vm.state.value.toString()
-        listOf("Kuzey Spor", "Deniz Kaptan", "Ece Yeni", "K7Q2", "pool-t1").forEach { assertFalse("$it is left in B's state", everything.contains(it)) }
+        listOf("Kuzey Spor", "Deniz Kaptan", "Ece Yeni", "K7Q2", "pool-t1", "Engelli Kişi").forEach { assertFalse("$it is left in B's state", everything.contains(it)) }
         on("PUT /teams/{new}") { request -> ok(team(request.requestUrl!!.encodedPath.substringAfterLast('/'), name = "Veli Spor"), 201) }
         val created = CopyOnWriteArrayList<String>()
         vm.createTeam(TeamDraft("Veli Spor")) { created += it }

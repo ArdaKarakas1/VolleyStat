@@ -30,7 +30,18 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.test.core.app.ApplicationProvider
 import com.voleybolveveleybol.volleystat.R
+import com.voleybolveveleybol.volleystat.BlockedRead
 import com.voleybolveveleybol.volleystat.TeamsUi
+import com.voleybolveveleybol.volleystat.model.BlockedMember
+import com.voleybolveveleybol.volleystat.ui.screens.TeamActions
+import com.voleybolveveleybol.volleystat.ui.screens.TeamBlockedScreen
+import com.voleybolveveleybol.volleystat.ui.screens.TeamJerseyScreen
+import com.voleybolveveleybol.volleystat.ui.screens.TeamSettingsScreen
+import com.voleybolveveleybol.volleystat.ui.screens.memberMenuTag
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onLast
 import com.voleybolveveleybol.volleystat.data.TeamProblem
 import com.voleybolveveleybol.volleystat.model.Seat
 import com.voleybolveveleybol.volleystat.model.SeatCount
@@ -323,5 +334,230 @@ class TeamScreensTest {
                 }
             }
         }
+    }
+
+    // ----- P7: member management, Çıkarılanlar and the settings -----
+
+    private val me = "u-1"
+
+    private fun teamScreen(
+        shownTeam: TeamInfo, actions: TeamActions = TeamActions(), problem: TeamProblem? = null, busy: Boolean = false, myId: String = me,
+    ) = show { TeamScreen(shownTeam, loading = false, problem = null, onSeats = {}, onRetry = {}, onBack = {}, myUserId = myId, busy = busy, actionProblem = problem, actions = actions) }
+
+    private fun button(label: String) = compose.onNode(hasClickAction() and hasText(label))
+
+    @Test fun theRemovalDialogNamesTheBlockAndOffersNoLinkSwitchBeforeInvitesExist() {
+        val removed = mutableListOf<String>()
+        teamScreen(team(members = squad), TeamActions(onRemove = { id, done -> removed += id; done() }))
+        // The captain's own row has no menu; another member's row has one.
+        assertTrue(compose.onAllNodesWithTag(memberMenuTag(me), useUnmergedTree = true).fetchSemanticsNodes().isEmpty())
+        compose.onNodeWithTag(memberMenuTag("u-2"), useUnmergedTree = true).performScrollTo().performClick()
+        compose.onNodeWithText(text(R.string.action_remove_member)).performClick()
+        assertTrue(shown(text(R.string.member_remove_title, "Ece")))
+        assertTrue(shown(text(R.string.member_remove_body_no_invite)))
+        // No Bağlantıyı da Yenile before invites exist (plan U2, U4): no switch and no word of a link.
+        assertTrue(compose.onAllNodes(androidx.compose.ui.test.isToggleable()).fetchSemanticsNodes().isEmpty())
+        everything().forEach { shown -> listOf("bağlantı", "Yenile", "davet").forEach { assertFalse("'$shown' names $it", shown.contains(it, ignoreCase = true)) } }
+        // Vazgeç sends nothing; Takımdan Çıkar sends the member.
+        button(text(R.string.action_give_up)).performClick()
+        assertTrue(removed.isEmpty())
+        assertFalse(shown(text(R.string.member_remove_body_no_invite)))
+        compose.onNodeWithTag(memberMenuTag("u-2"), useUnmergedTree = true).performScrollTo().performClick()
+        compose.onNodeWithText(text(R.string.action_remove_member)).performClick()
+        compose.onAllNodes(hasClickAction() and hasText(text(R.string.action_remove_member))).onLast().performClick()
+        assertEquals(listOf("u-2"), removed)
+        compose.waitForIdle()
+        assertFalse("the dialog closes after the server took it", shown(text(R.string.member_remove_body_no_invite)))
+    }
+
+    @Test fun theTransferDialogNamesTheMemberAndShowsTheServersLimit() {
+        val transferred = mutableListOf<String>()
+        var problem by mutableStateOf<TeamProblem?>(null)
+        var dismissed = 0
+        show {
+            TeamScreen(
+                team(members = squad), loading = false, problem = null, onSeats = {}, onRetry = {}, onBack = {}, myUserId = me, actionProblem = problem,
+                actions = TeamActions(onTransfer = { id, _ -> transferred += id }, onDismiss = { dismissed++ }),
+            )
+        }
+        compose.onNodeWithTag(memberMenuTag("u-3"), useUnmergedTree = true).performScrollTo().performClick()
+        compose.onNodeWithText(text(R.string.action_transfer_captain)).performClick()
+        assertTrue(shown(text(R.string.transfer_title)))
+        assertTrue(shown(text(R.string.transfer_body, "Fatma")))
+        compose.onAllNodes(hasClickAction() and hasText(text(R.string.action_transfer_captain))).onLast().performClick()
+        assertEquals(listOf("u-3"), transferred)
+        // The server refuses: the dialog stays and names the member and the limit.
+        problem = TeamProblem.Limit(com.voleybolveveleybol.volleystat.data.TeamLimitScope.CAPTAIN, 3, "u-3", "Fatma")
+        compose.waitForIdle()
+        assertTrue(shown(text(R.string.transfer_captain_limit, "Fatma", 3)))
+        button(text(R.string.action_give_up)).performClick()
+        assertTrue("closing the dialog clears the refusal", dismissed > 0)
+    }
+
+    @Test fun aSoleCaptainSeesTakimiSilAndNoTakimdanAyril() {
+        var deleted = 0
+        teamScreen(team(), TeamActions(onDelete = { deleted++ }))
+        assertFalse(shown(text(R.string.action_leave_team)))
+        listOf(R.string.seats_title, R.string.action_team_settings, R.string.blocked_title, R.string.jersey_title).forEach {
+            assertTrue(text(it), shown(text(it)))
+        }
+        button(text(R.string.action_delete_team)).performScrollTo().performClick()
+        assertTrue(shown(text(R.string.team_delete_title)))
+        assertTrue(shown(text(R.string.team_delete_body)))
+        compose.onAllNodes(hasClickAction() and hasText(text(R.string.action_delete_team))).onLast().performClick()
+        assertEquals(1, deleted)
+    }
+
+    @Test fun aCaptainWithMembersSeesNoTakimdanAyrilEither() {
+        teamScreen(team(members = squad))
+        assertFalse("a captain hands the captaincy on and never leaves (plan U8)", shown(text(R.string.action_leave_team)))
+        assertTrue(shown(text(R.string.action_delete_team)))
+    }
+
+    @Test fun aMemberSeesTakimdanAyril() {
+        var left = 0
+        var problem by mutableStateOf<TeamProblem?>(null)
+        show {
+            TeamScreen(
+                team(role = TeamRole.MEMBER, members = squad), loading = false, problem = null, onSeats = {}, onRetry = {}, onBack = {}, myUserId = "u-2",
+                actionProblem = problem, actions = TeamActions(onLeave = { left++ }),
+            )
+        }
+        // A member has none of the captain's buttons and no menu on any row.
+        listOf(R.string.seats_title, R.string.action_team_settings, R.string.blocked_title, R.string.action_delete_team).forEach {
+            assertFalse(text(it), shown(text(it)))
+        }
+        squad.forEach { assertTrue(compose.onAllNodesWithTag(memberMenuTag(it.userId), useUnmergedTree = true).fetchSemanticsNodes().isEmpty()) }
+        button(text(R.string.action_leave_team)).performScrollTo().performClick()
+        assertTrue(shown(text(R.string.team_leave_title)))
+        assertTrue(shown(text(R.string.team_leave_body)))
+        compose.onAllNodes(hasClickAction() and hasText(text(R.string.action_leave_team))).onLast().performClick()
+        assertEquals(1, left)
+        problem = TeamProblem.Unreachable
+        compose.waitForIdle()
+        assertTrue("the dialog says why", shown(text(R.string.net_no_answer)))
+    }
+
+    @Test fun theTeamScreenOpensFormaNumaranForEveryMember() {
+        // The team screen's button opens Forma Numaran, for the captain and for a member.
+        var opened = 0
+        var member by mutableStateOf(false)
+        show {
+            TeamScreen(
+                if (member) team(role = TeamRole.MEMBER, members = squad) else team(members = squad), loading = false, problem = null,
+                onSeats = {}, onRetry = {}, onBack = {}, myUserId = if (member) "u-2" else me, actions = TeamActions(onJersey = { opened++ }),
+            )
+        }
+        button(text(R.string.jersey_title)).performScrollTo().performClick()
+        member = true
+        compose.waitForIdle()
+        button(text(R.string.jersey_title)).performScrollTo().performClick()
+        assertEquals(2, opened)
+    }
+
+    @Test fun theJerseyScreenSendsTheNumberAndShowsTheTakenNumber() {
+        val sent = mutableListOf<Int?>()
+        var problem by mutableStateOf<TeamProblem?>(null)
+        var back = 0
+        show { TeamJerseyScreen(7, busy = false, problem = problem, onSave = { sent += it }, onEdit = { problem = null }, onBack = { back++ }) }
+        assertTrue(shown(text(R.string.team_jersey_body)))
+        assertTrue(shown(text(R.string.jersey_empty_hint)))
+        val field = compose.onNode(hasSetTextAction() and hasText(text(R.string.field_my_jersey)))
+        field.assertTextContains("7")
+        field.performTextReplacement("12")
+        button(text(R.string.action_save)).performClick()
+        assertEquals(listOf<Int?>(12), sent)
+        problem = TeamProblem.JerseyTaken(12)
+        compose.waitForIdle()
+        assertTrue(shown(text(R.string.jersey_taken, 12)))
+        // An empty field clears the number; only digits go in, at most two, without a leading zero.
+        field.performTextReplacement("")
+        button(text(R.string.action_save)).performClick()
+        assertEquals(listOf(12, null), sent)
+        field.performTextReplacement("1a23")
+        field.assertTextContains("12")
+        field.performTextReplacement("07")
+        field.assertTextContains("7")
+        button(text(R.string.action_not_now)).performClick()
+        assertEquals(1, back)
+    }
+
+    @Test fun cikarilanlarListsTheBlockedAndUnblocks() {
+        val unblocked = mutableListOf<String>()
+        var read by mutableStateOf<BlockedRead?>(
+            BlockedRead("t1", listOf(BlockedMember("u-7", "Gül", "2026-11-22T10:00:00Z"), BlockedMember("u-8", "Hale", "2026-11-23T10:00:00Z"))),
+        )
+        var retries = 0
+        show { TeamBlockedScreen(read, busy = false, problem = null, onUnblock = { unblocked += it }, onRetry = { retries++ }, onBack = {}) }
+        assertTrue(shown(text(R.string.blocked_title)))
+        assertTrue(shown("Gül"))
+        assertTrue(shown("Hale"))
+        assertEquals(2, compose.onAllNodes(hasClickAction() and hasText(text(R.string.action_unblock))).fetchSemanticsNodes().size)
+        compose.onAllNodes(hasClickAction() and hasText(text(R.string.action_unblock)))[1].performClick()
+        assertEquals(listOf("u-8"), unblocked)
+        // Loading, empty and a failed read.
+        read = BlockedRead("t1", loading = true)
+        compose.waitForIdle()
+        assertTrue(shown(text(R.string.blocked_loading)))
+        read = BlockedRead("t1", emptyList())
+        compose.waitForIdle()
+        assertTrue(shown(text(R.string.blocked_empty)))
+        assertTrue(shown(text(R.string.blocked_empty_body)))
+        read = BlockedRead("t1", problem = TeamProblem.Unreachable)
+        compose.waitForIdle()
+        assertTrue(shown(text(R.string.net_no_answer)))
+        button(text(R.string.action_retry)).performClick()
+        assertEquals(1, retries)
+    }
+
+    @Test fun theSettingsScreenSavesNameAndSchedule() {
+        val saved = mutableListOf<Pair<String, com.voleybolveveleybol.volleystat.model.Schedule?>>()
+        var picks = 0
+        var removals = 0
+        val shownTeam = team().copy(schedule = com.voleybolveveleybol.volleystat.model.Schedule(2, "20:00"), logoVersion = 3)
+        var problem by mutableStateOf<TeamProblem?>(null)
+        show {
+            TeamSettingsScreen(
+                shownTeam, logo = null, busy = false, problem = problem, onSave = { name, schedule -> saved += name to schedule },
+                onPickLogo = { picks++ }, onRemoveLogo = { removals++ }, onEdit = {}, onBack = {},
+            )
+        }
+        // The form starts from the team as the server holds it.
+        compose.onNode(hasSetTextAction() and hasText(text(R.string.field_team_name))).assertTextContains("Kuzey Spor")
+        compose.onNode(hasSetTextAction() and hasText(text(R.string.field_schedule_time))).assertTextContains("20:00")
+        compose.onNodeWithText(dayName(2)).assertIsSelected()
+        compose.onNode(hasSetTextAction() and hasText(text(R.string.field_team_name))).performTextReplacement("  Güney Spor ")
+        compose.onNodeWithText(dayName(5)).performScrollTo().performClick()
+        compose.onNode(hasSetTextAction() and hasText(text(R.string.field_schedule_time))).performScrollTo().performTextReplacement("1930")
+        button(text(R.string.action_save)).performClick()
+        assertEquals(listOf("Güney Spor" to com.voleybolveveleybol.volleystat.model.Schedule(5, "19:30")), saved)
+        // Yok clears the schedule; a day without a valid time can not be saved.
+        compose.onNodeWithText(dayName(5)).performScrollTo().performClick()
+        compose.onNode(hasSetTextAction() and hasText(text(R.string.field_schedule_time))).performScrollTo().performTextReplacement("2500")
+        button(text(R.string.action_save)).assertIsNotEnabled()
+        compose.onNodeWithText(text(R.string.team_schedule_none)).performScrollTo().performClick()
+        button(text(R.string.action_save)).assertIsEnabled().performClick()
+        assertEquals("Güney Spor" to null, saved.last())
+        // The logo: Logo Seç and, while the team has one, Logoyu Kaldır.
+        button(text(R.string.action_pick_logo)).performScrollTo().performClick()
+        button(text(R.string.action_remove_logo)).performScrollTo().performClick()
+        assertEquals(1 to 1, picks to removals)
+        problem = TeamProblem.LogoInvalid("large")
+        compose.waitForIdle()
+        assertTrue(shown(text(R.string.logo_invalid)))
+    }
+
+    @Test fun takimKurOffersALogoAndShowsTheChosenOne() {
+        var picks = 0
+        var removals = 0
+        var logo by mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null)
+        show { TeamCreateScreen(busy = false, problem = null, onCreate = {}, onEdit = {}, onBack = {}, logo = logo, onPickLogo = { picks++ }, onRemoveLogo = { removals++ }) }
+        button(text(R.string.action_pick_logo)).performScrollTo().performClick()
+        assertEquals(1, picks)
+        assertFalse("nothing to remove yet", shown(text(R.string.action_remove_logo)))
+        logo = android.graphics.Bitmap.createBitmap(256, 256, android.graphics.Bitmap.Config.ARGB_8888).asImageBitmap()
+        compose.waitForIdle()
+        button(text(R.string.action_remove_logo)).performScrollTo().performClick()
+        assertEquals(1, removals)
     }
 }

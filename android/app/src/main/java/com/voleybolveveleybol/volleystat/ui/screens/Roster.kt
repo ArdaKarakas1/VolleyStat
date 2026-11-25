@@ -126,8 +126,8 @@ fun TeamRosterScreen(
     if (confirmDelete) {
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
-            title = { Text(stringResource(R.string.team_delete_title)) },
-            text = { Text(stringResource(R.string.team_delete_body, team.name)) },
+            title = { Text(stringResource(R.string.roster_delete_title)) },
+            text = { Text(stringResource(R.string.roster_delete_body, team.name)) },
             confirmButton = { TextButton(onClick = { confirmDelete = false; onDeleteTeam() }) { Text(stringResource(R.string.action_delete)) } },
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text(stringResource(R.string.action_give_up)) } },
         )

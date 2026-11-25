@@ -56,6 +56,9 @@ import com.voleybolveveleybol.volleystat.model.Seat
 import com.voleybolveveleybol.volleystat.model.Team
 import com.voleybolveveleybol.volleystat.model.TeamDraft
 import com.voleybolveveleybol.volleystat.model.TeamInfo
+import com.voleybolveveleybol.volleystat.model.BlockedMember
+import com.voleybolveveleybol.volleystat.data.LogoCodec
+import android.graphics.Bitmap
 import com.voleybolveveleybol.volleystat.model.normalizeUsername
 import com.voleybolveveleybol.volleystat.model.uploadFormat
 import kotlinx.coroutines.CancellationException
@@ -275,6 +278,15 @@ data class TeamsUi(
     val busy: Boolean = false,
     /** Why the last team action failed. The next action and clearTeamProblem() clear it. */
     val problem: TeamProblem? = null,
+    /**
+     * The logos the app read or sent, by team id, each with the version it shows (plan P7, U20). They live in memory only,
+     * and the session's end empties them with the rest.
+     */
+    val logos: Map<String, TeamLogo> = emptyMap(),
+    /** Çıkarılanlar of one team, as the captain's screen last read it. */
+    val blocked: BlockedRead? = null,
+    /** The logo picked on Takım Kur, ready to go to the server once the team exists. */
+    val draftLogo: DraftLogo? = null,
 ) {
     /** The new members of the teams this account captains: the Teams tab's badge. */
     val badge: Int get() = teams.orEmpty().sumOf { it.newJoins ?: 0 }
@@ -282,6 +294,15 @@ data class TeamsUi(
     /** The team [id] as the app knows it: from the list, else as the team screen read it. */
     fun teamOf(id: String): TeamInfo? = teams?.firstOrNull { it.id == id } ?: opened?.team?.takeIf { it.id == id }
 }
+
+/** A team's logo as the app shows it: the decoded large file and the version it belongs to. */
+data class TeamLogo(val version: Int, val image: Bitmap)
+
+/** Çıkarılanlar of the team [teamId]: the list, null until the server answered, and the read's state. */
+data class BlockedRead(val teamId: String, val list: List<BlockedMember>? = null, val loading: Boolean = false, val problem: TeamProblem? = null)
+
+/** A logo picked on Takım Kur: its square for the form, and the two files the app sends after the team is made. */
+class DraftLogo(val image: Bitmap, val large: ByteArray, val small: ByteArray)
 
 /**
  * The read of one team that a team screen asked for (plan P6). Only that screen's next read changes its outcome: a read of
@@ -466,6 +487,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val accountLock = Any()
 
     private val inspector = VideoInspector(application) { (space ?: signedOut).thumbnails }
+    /** Reads the pictures the photo picker hands the app (a team's logo). */
+    private val resolver = application.contentResolver
     private val recordingsFolder: File get() = (space ?: signedOut).recordings
     @Volatile private var uploadJob: Job? = null
 
@@ -1368,6 +1391,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
      * read race when the user opens a team at once).
      */
     private val newerTeamReads = HashMap<String, Long>()
+    /** The logo reads on their way, as "team id@version": each version is read once (plan P7). */
+    private val logoReads = HashSet<String>()
+    /** The read of Çıkarılanlar on its way. A new read replaces it. */
+    @Volatile private var blockedJob: Job? = null
+
+    /** Encodes a logo's files. Tests put a recording encoder here; LogoDeviceTest runs the platform's on an emulator. */
+    @Volatile internal var logoCompressor: LogoCodec.Compressor = LogoCodec.platform
 
     private fun cancelTeamCalls() {
         teamCalls.cancel()
@@ -1375,6 +1405,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         listJob = null
         pendingCreation = null
         newerTeamReads.clear()
+        logoReads.clear()
+        blockedJob = null
     }
 
     private fun resetTeams() {
@@ -1444,6 +1476,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     onFailure = { ui.copy(loading = false, loadProblem = TeamProblem.of(it)) },
                 )
             }
+            _state.value.serverTeams.teams?.let { readLogos(token, it) }
         }
     }
 
@@ -1488,6 +1521,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     ui.listing(team).copy(opened = read.copy(team = team, problem = null, recentJoins = read.recentJoins ?: joins))
                 }
             }
+            if (team != null) readLogos(token, listOf(_state.value.serverTeams.teamOf(id) ?: team))
             val upTo = markUpTo
             if (upTo != null && session?.token == token) teamCall(token, { it.joinsSeen(id, upTo) }) { loadTeams() }
         }
@@ -1542,6 +1576,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun createTeam(draft: TeamDraft, onCreated: (String) -> Unit) {
         if (session == null) return
+        // The logo picked on the form goes once the team exists (design 10.1: Takım Kur has the logo).
+        val logo = _state.value.serverTeams.draftLogo
         val sent = draft.copy(name = draft.name.trim())
         val pending = pendingCreation
         val creation = when {
@@ -1559,10 +1595,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 if (problem == TeamProblem.IdTaken && pendingCreation?.id == id) pendingCreation = null
                 problem
             },
-            apply = { ui, (team, _) -> ui.with(team, add = true).copy(opened = TeamRead(screen = null, id = team.id, number = 0, team = team)) },
+            apply = { ui, (team, _) ->
+                ui.with(team, add = true).copy(opened = TeamRead(screen = null, id = team.id, number = 0, team = team), draftLogo = ui.draftLogo.takeUnless { it === logo })
+            },
         ) { (team, _) ->
             if (pendingCreation?.id == id) pendingCreation = null
             onCreated(team.id)
+            if (logo != null) sendLogo(team.id, logo.image, logo.large to logo.small) {}
         }
         // A Takım Kur that did not start (another team action is on its way) leaves the pending one as it was.
         if (started) pendingCreation = creation
@@ -1585,6 +1624,198 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     /** Sends the team's name and usual match day and time (captain). A null [schedule] clears it. */
     fun saveTeamSettings(teamId: String, name: String, schedule: Schedule?, onDone: () -> Unit) {
         teamAction(teamId, { it.teamSettings(teamId, name.trim(), schedule) }, apply = { ui, team -> ui.with(team) }) { onDone() }
+    }
+
+    // ----- Slice B4, plan P7: the jersey, the members, Çıkarılanlar, the transfer, leaving, deletion and the logo -----
+
+    /** [change] applied to the team [id] in the list and in the team screen's read. */
+    private fun TeamsUi.change(id: String, change: (TeamInfo) -> TeamInfo) = copy(
+        teams = teams?.map { if (it.id == id) change(it) else it },
+        opened = opened?.let { read -> if (read.id == id && read.team != null) read.copy(team = change(read.team)) else read },
+    )
+
+    /** The team [id] with [logo] (or without one), in the list, the screen's read and the logo memory. */
+    private fun TeamsUi.withLogo(id: String, logo: TeamLogo?) =
+        change(id) { it.copy(logoVersion = logo?.version) }.copy(logos = if (logo == null) logos - id else logos + (id to logo))
+
+    /** The list without the team [id] that this account left or deleted, with its logo and its Çıkarılanlar. */
+    private fun TeamsUi.gone(id: String) = without(id).copy(logos = logos - id, blocked = blocked?.takeUnless { it.teamId == id })
+
+    /**
+     * Reads the logos of [teams] that the app does not hold in their version: the large file, which the Teams tab and the
+     * team screen both show. A team without a logo, a logo the server no longer has and a failed read all leave the
+     * initials, and no problem shows: the logo is no part of what the user asked for.
+     */
+    private fun readLogos(token: String, teams: List<TeamInfo>) {
+        teams.forEach { team ->
+            val version = team.logoVersion
+            if (version == null) {
+                if (_state.value.serverTeams.logos.containsKey(team.id)) teamState(token) { it.copy(logos = it.logos - team.id) }
+                return@forEach
+            }
+            if (_state.value.serverTeams.logos[team.id]?.version == version) return@forEach
+            val key = "${team.id}@$version"
+            if (!logoReads.add(key)) return@forEach
+            teamCall(token, { api -> api.logo(team.id, "large")?.let { LogoCodec.decode(it, LogoCodec.LARGE) } }) { outcome ->
+                logoReads.remove(key)
+                val image = outcome.getOrNull()
+                teamState(token) { ui ->
+                    // The answer counts only while the team still shows this version.
+                    when {
+                        ui.teamOf(team.id)?.logoVersion != version -> ui
+                        image == null -> ui.copy(logos = ui.logos - team.id)
+                        else -> ui.copy(logos = ui.logos + (team.id to TeamLogo(version, image)))
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * The picked picture's square for the screen and its two files. Throws LogoCodec.Unreadable when the app can not read
+     * the picture or encode it, and LogoCodec.TooLarge when a file stays above the server's limit: nothing is sent then.
+     */
+    private fun prepareLogo(uri: Uri, compressor: LogoCodec.Compressor): Pair<Bitmap, Pair<ByteArray, ByteArray>> {
+        val source = LogoCodec.decodeSource(resolver, uri)
+        return try {
+            LogoCodec.square(source, LogoCodec.LARGE) to LogoCodec.encode(source, compressor = compressor)
+        } catch (error: LogoCodec.TooLarge) {
+            throw error
+        } catch (error: Exception) {
+            throw LogoCodec.Unreadable(error)
+        }
+    }
+
+    /** Sends a logo's two files (captain); the team shows [image] with the server's new version at once. */
+    private fun sendLogo(teamId: String, image: Bitmap, files: Pair<ByteArray, ByteArray>, onDone: () -> Unit) {
+        teamAction(teamId, { api -> TeamLogo(api.putLogo(teamId, files.first, files.second), image) }, apply = { ui, logo -> ui.withLogo(teamId, logo) }) { onDone() }
+    }
+
+    /**
+     * Logo Seç on the team's settings (captain, design 4.2): reads the picked picture with bounds, makes the two lossy WebP
+     * files and sends them. A picture the app can not read, or can not make small enough, sends nothing and says so.
+     */
+    fun setLogo(teamId: String, uri: Uri, onDone: () -> Unit = {}) {
+        val compressor = logoCompressor
+        teamAction(teamId, { api ->
+            val (image, files) = prepareLogo(uri, compressor)
+            TeamLogo(api.putLogo(teamId, files.first, files.second), image)
+        }, apply = { ui, logo -> ui.withLogo(teamId, logo) }) { onDone() }
+    }
+
+    /** Logoyu Kaldır (captain): the team shows its initials again. */
+    fun removeLogo(teamId: String) {
+        teamAction(teamId, { it.deleteLogo(teamId) }, apply = { ui, _ -> ui.withLogo(teamId, null) }) {}
+    }
+
+    /**
+     * Logo Seç on Takım Kur: the app prepares the picture's files at once, so the form shows the square and says at once
+     * when the picture can not be used. The files go to the server after the team is made.
+     */
+    fun pickDraftLogo(uri: Uri) {
+        val token = session?.token ?: return
+        val compressor = logoCompressor
+        var started = false
+        _state.update {
+            started = false
+            if (session?.token != token || it.serverTeams.busy) return@update it
+            started = true
+            it.copy(serverTeams = it.serverTeams.copy(busy = true, problem = null))
+        }
+        if (!started) return
+        viewModelScope.launch(teamCalls) {
+            val outcome = withContext(Dispatchers.IO) { runCatching { prepareLogo(uri, compressor) } }
+            teamState(token) { ui ->
+                outcome.fold(
+                    onSuccess = { (image, files) -> ui.copy(busy = false, draftLogo = DraftLogo(image, files.first, files.second)) },
+                    onFailure = { ui.copy(busy = false, draftLogo = null, problem = TeamProblem.of(it)) },
+                )
+            }
+        }
+    }
+
+    /** Takım Kur's logo goes: the user removed it or left the form. */
+    fun clearDraftLogo() = _state.update { it.copy(serverTeams = it.serverTeams.copy(draftLogo = null)) }
+
+    /** Forma Numaran: sets the account's own jersey in the team; null clears it. */
+    fun setJersey(teamId: String, jersey: Int?, onDone: () -> Unit) {
+        val userId = session?.userId ?: return
+        teamAction(teamId, { it.setJersey(teamId, userId, jersey) }, apply = { ui, member ->
+            ui.change(teamId) { team ->
+                team.copy(
+                    members = team.members.map { if (it.userId == member.userId) member else it },
+                    myJersey = if (member.userId == userId) member.jersey else team.myJersey,
+                )
+            }
+        }) { onDone() }
+    }
+
+    /**
+     * Takımdan Çıkar (captain): the server ends the membership and blocks the account. The team screen's team and
+     * Çıkarılanlar are read again, as is the list after every action.
+     */
+    fun removeMember(teamId: String, userId: String, onDone: () -> Unit) {
+        teamAction(teamId, { it.removeMember(teamId, userId) }, apply = { ui, _ ->
+            ui.change(teamId) { team -> team.copy(members = team.members.filterNot { it.userId == userId }) }
+        }) {
+            onDone()
+            _state.value.serverTeams.opened?.takeIf { it.id == teamId }?.screen?.let { screen -> openTeam(teamId, screen) }
+            loadBlocked(teamId)
+        }
+    }
+
+    /** Takımdan Ayrıl (a member; the server refuses a captain with other members, CAPTAIN_MUST_TRANSFER). */
+    fun leaveTeam(teamId: String, onDone: () -> Unit) {
+        val userId = session?.userId ?: return
+        teamAction(teamId, { it.removeMember(teamId, userId) }, apply = { ui, _ -> ui.gone(teamId) }) { onDone() }
+    }
+
+    /** Takımı Sil (captain): the team, its logo, its seats, its memberships and its blocks. */
+    fun deleteServerTeam(teamId: String, onDone: () -> Unit) {
+        teamAction(teamId, { it.deleteTeam(teamId) }, apply = { ui, _ -> ui.gone(teamId) }) { onDone() }
+    }
+
+    /**
+     * Kaptanlığı Devret (captain). A refusal for the captain limit names the member by the display name the team shows
+     * (transfer_captain_limit); the server's answer names the member only by id.
+     */
+    fun transferCaptain(teamId: String, userId: String, onDone: () -> Unit) {
+        val name = _state.value.serverTeams.teamOf(teamId)?.members?.firstOrNull { it.userId == userId }?.displayName
+        teamAction(
+            teamId, { it.transferCaptain(teamId, userId) },
+            onRefused = { problem ->
+                if (problem is TeamProblem.Limit && problem.scope == com.voleybolveveleybol.volleystat.data.TeamLimitScope.CAPTAIN) {
+                    problem.copy(userId = problem.userId ?: userId, memberName = name.takeIf { (problem.userId ?: userId) == userId })
+                } else {
+                    problem
+                }
+            },
+            apply = { ui, team -> ui.with(team).copy(blocked = ui.blocked?.takeUnless { it.teamId == teamId }) },
+        ) { onDone() }
+    }
+
+    /** Reads Çıkarılanlar of the team [teamId] (captain). A new read replaces the one on its way. */
+    fun loadBlocked(teamId: String) {
+        val token = session?.token ?: return
+        blockedJob?.cancel()
+        teamState(token) { ui ->
+            ui.copy(blocked = ui.blocked?.takeIf { it.teamId == teamId }?.copy(loading = true, problem = null) ?: BlockedRead(teamId, loading = true))
+        }
+        blockedJob = teamCall(token, { it.blocks(teamId) }) { outcome ->
+            teamState(token) { ui ->
+                val problem = outcome.exceptionOrNull()?.let(TeamProblem::of)
+                val left = if (problem == TeamProblem.NoAccess || problem == TeamProblem.Gone) ui.without(teamId) else ui
+                // A read of another team's list replaced this one: its answer reaches nothing.
+                if (left.blocked?.teamId != teamId) left else left.copy(blocked = BlockedRead(teamId, outcome.getOrNull(), loading = false, problem = problem))
+            }
+        }
+    }
+
+    /** Engeli Kaldır (captain): the row goes once the server took it, and the list is read again. */
+    fun unblock(teamId: String, userId: String) {
+        teamAction(teamId, { it.unblock(teamId, userId) }, apply = { ui, _ ->
+            ui.copy(blocked = ui.blocked?.let { read -> if (read.teamId == teamId) read.copy(list = read.list?.filterNot { it.userId == userId }) else read })
+        }) { loadBlocked(teamId) }
     }
 
     // ----- Accounts (design 3, 10.3, 10.5 and 10.7; docs/API_V1.md section 10) -----

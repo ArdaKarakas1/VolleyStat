@@ -739,7 +739,7 @@ private fun LogoutDialog(account: AccountUi, uploading: Boolean, onClose: () -> 
 
 /** A button for an action that deletes: the error colour, and the same size as the other buttons. */
 @Composable
-private fun DangerButton(text: String, onClick: () -> Unit, enabled: Boolean) {
+internal fun DangerButton(text: String, onClick: () -> Unit, enabled: Boolean) {
     Button(
         onClick, Modifier.fillMaxWidth().heightIn(min = Dimens.buttonHeight), enabled = enabled, shape = MaterialTheme.shapes.medium,
         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error, contentColor = MaterialTheme.colorScheme.onError),

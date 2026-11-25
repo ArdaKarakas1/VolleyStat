@@ -94,8 +94,8 @@
     <string name="roster_remove_description">%1$s oyuncusunu kadrodan çıkar</string>
     <string name="roster_no_number">No yok</string>
     <string name="roster_unnamed">Adsız oyuncu</string>
-    <string name="team_delete_title">Bu takımı sileyim mi?</string>
-    <string name="team_delete_body">Uygulama %1$s takımını ve kadrosunu bu telefondan siler. Eski maçlar listede kalır.</string>
+    <string name="roster_delete_title">Bu takımı sileyim mi?</string>
+    <string name="roster_delete_body">Uygulama %1$s takımını ve kadrosunu bu telefondan siler. Eski maçlar listede kalır.</string>
 
     <!-- The server's teams (slice B4; design 2.12 F, 10.1 and 10.7; plan P6). The texts from the design are verbatim: team_new_seats_body,
          team_new_my_seat with seat_starter and seat_substitute, team_limit_captain, team_wait_create, seats_title, team_seats_body (its
@@ -155,6 +155,54 @@
     <string name="seats_below_substitute">Bu değişiklikle takımda %1$d yedek oyuncu olur ama yalnız %2$d yedek yeri var. Yedek yeri sayısı yedek oyuncu sayısından az olamaz.</string>
     <string name="seats_raise_or_swap_hint">Bir as oyuncuyu yedek yapmak için yedek yeri sayısını artırabilir ya da bir yedeği as yapıp birlikte kaydedebilirsin.</string>
     <string name="seats_swap_hint">Bir as oyuncuyu yedek yapmak için bir yedeği as yapıp birlikte kaydedebilirsin.</string>
+    <!-- Slice B4, plan P7: the team settings and the logo, member management and Çıkarılanlar (design 2.12 E and F, 4.2, 4.3, 10.1).
+         Verbatim from the design: transfer_captain_limit, blocked_title, action_unblock, jersey_title, jersey_taken, action_not_now (2.12 E's
+         button), action_leave_team, action_transfer_captain. Shortened from the design (plan §11.2, each a subset of its sentences, word for
+         word): member_remove_body_no_invite (sentences 1 and 4 of member_remove_body: no invite exists before slice B5, U4) and
+         team_jersey_body (sentence 1 of jersey_body: match rosters come with B8, U6). The others are new proposals of the plan (U7). -->
+    <string name="action_team_settings">Takım Ayarları</string>
+    <string name="field_logo">Logo</string>
+    <string name="action_pick_logo">Logo Seç</string>
+    <string name="action_remove_logo">Logoyu Kaldır</string>
+    <!-- 422 LOGO_INVALID: the server stored nothing. -->
+    <string name="logo_invalid">Sunucu bu resmi logo olarak kabul etmedi ve takımın logosunu değiştirmedi. Başka bir resim seçebilirsin.</string>
+    <!-- The app could not open or decode the picked picture, and sent nothing. -->
+    <string name="logo_unreadable">Uygulama bu resmi açamadı. Başka bir resim seçebilirsin.</string>
+    <!-- At quality 60 a file still stayed above the server's limit (36 KiB and 8 KiB), and the app sent nothing. -->
+    <string name="logo_too_large">Uygulama bu resimden sunucunun kabul ettiği büyüklükte bir logo dosyası yapamadı. Daha sade bir resim seçebilirsin.</string>
+    <string name="jersey_title">Forma Numaran</string>
+    <string name="team_jersey_body">Takım arkadaşların forma numaranı görür.</string>
+    <string name="jersey_empty_hint">Alanı boş bırakıp kaydedersen sunucu forma numaranı siler.</string>
+    <!-- 409 JERSEY_TAKEN. %1$d is details.jersey. -->
+    <string name="jersey_taken">Takımda %1$d numaralı formayı başka bir üye taşıyor. Başka bir numara seçebilirsin.</string>
+    <string name="action_not_now">Şimdi Değil</string>
+    <!-- The menu of another member's row (captain). %1$s is the member's display name. -->
+    <string name="member_options_a11y">%1$s için seçenekler</string>
+    <string name="action_remove_member">Takımdan Çıkar</string>
+    <!-- %1$s is the member's display name. -->
+    <string name="member_remove_title">%1$s adlı üyeyi takımdan çıkarmak istiyor musun?</string>
+    <string name="member_remove_body_no_invite">Bir üyeyi çıkarınca sunucu bu hesabın takıma yeniden katılmasını engeller. Engeli Çıkarılanlar listesinden kaldırabilirsin.</string>
+    <string name="action_transfer_captain">Kaptanlığı Devret</string>
+    <string name="transfer_title">Kaptanlığı devretmek istiyor musun?</string>
+    <!-- %1$s is the member's display name. The server moves no seat with the captaincy (design 4.3). -->
+    <string name="transfer_body">%1$s takımın kaptanı olur ve sen takımda üye olarak kalırsın. Sunucu kimsenin as ya da yedek yerini değiştirmez.</string>
+    <!-- 409 TEAM_LIMIT_REACHED (CAPTAIN) on Kaptanlığı Devret. %1$s is the member's display name, %2$d is details.limit. -->
+    <string name="transfer_captain_limit">%1$s şu an en az %2$d takımın kaptanı. Sunucu bir kişiye en çok %2$d takımın kaptanlığını verir.</string>
+    <string name="action_leave_team">Takımdan Ayrıl</string>
+    <string name="team_leave_title">Takımdan ayrılmak istiyor musun?</string>
+    <string name="team_leave_body">Sunucu bu takımdaki üyeliğini, yerini ve forma numaranı siler. Sunucu kendi isteğiyle ayrılan üyeyi engellemez.</string>
+    <!-- 409 CAPTAIN_MUST_TRANSFER. The app shows no Takımdan Ayrıl to a captain (plan U8), so this answer is defensive. -->
+    <string name="team_must_transfer">Sunucu takımda başka üyeler varken kaptanın takımdan ayrılmasını kabul etmez. Önce kaptanlığı başka bir üyeye devredebilirsin.</string>
+    <string name="action_delete_team">Takımı Sil</string>
+    <string name="team_delete_title">Takımı silmek istiyor musun?</string>
+    <string name="team_delete_body">Sunucu takımı, logosunu, as ve yedek yerlerini, bütün üyeliklerini ve Çıkarılanlar listesini siler.</string>
+    <!-- Çıkarılanlar (captain). %1$s of blocked_on is the day of the removal. -->
+    <string name="blocked_title">Çıkarılanlar</string>
+    <string name="action_unblock">Engeli Kaldır</string>
+    <string name="blocked_loading">Uygulama çıkarılanları alıyor</string>
+    <string name="blocked_empty">Çıkarılan üye yok</string>
+    <string name="blocked_empty_body">Takımdan bir üyeyi çıkarırsan sunucu o hesabı bu listede gösterir.</string>
+    <string name="blocked_on">Çıkarma günü · %1$s</string>
 
     <!-- 03 Match create -->
     <string name="match_new_title">Yeni Maç</string>
@@ -563,7 +611,9 @@
     <string name="privacy_matches">Sunucu hesabına bağladığı maçları ve videolarını yalnız bu hesapla giriş yapan kişiye gösterir. Sunucunun eski sürümleri maçları hiçbir hesaba bağlamıyordu. Voleybol Ve Veleybol bu maçlardan birini bir hesaba bağlayana kadar sunucu o maçı hiçbir hesaba göstermez. Sunucunun çalıştığı bilgisayarı kullanan kişi sunucunun dosyalarındaki videoları yine de açabilir. Oyuncuların izin vermediği videoları ve telifli yayınları yükleme.</string>
     <string name="privacy_phone_accounts">Uygulama bu telefonda her hesabın maçlarını, kadrolarını ve kamera kayıtlarını ayrı tutar. Bu telefonda başka bir hesapla giriş yapan kişi uygulamada senin maçlarını görmez.</string>
     <string name="privacy_session">Uygulama şifreni telefona yazmaz ve oturum bilgisini telefonun anahtar deposundaki bir anahtarla şifreleyip saklar.</string>
-    <string name="privacy_retention">Sunucu hesabını sen silene kadar saklar. Sunucu hesabına bağladığı maçların videolarını ve bilgilerini sen maçı ya da hesabını silene kadar saklar. Sunucu hiçbir hesaba bağlı olmayan maçları Voleybol Ve Veleybol silene ya da bir hesaba bağlayana kadar saklar. Sen hesabını silince sunucu bu maçları silmez. Sunucunun açık kaldığı bir gün boyunca yükleme sürmezse sunucu yarım kalan videonun aldığı kısmını siler.</string>
+    <string name="privacy_retention">Sunucu hesabını, takımlarını ve maçlarını sen silene kadar saklar. Sunucu hesabına bağladığı maçların videolarını ve bilgilerini sen maçı ya da hesabını silene kadar saklar. Sunucu hiçbir hesaba bağlı olmayan maçları Voleybol Ve Veleybol silene ya da bir hesaba bağlayana kadar saklar. Sen hesabını silince sunucu bu maçları silmez. Sunucunun açık kaldığı bir gün boyunca yükleme sürmezse sunucu yarım kalan videonun aldığı kısmını siler.</string>
+    <!-- Slice B4 (plan §11.3, U25): the part of the design's privacy_teammates that holds in B4; reports and statistics come with B7 to B9. -->
+    <string name="privacy_teams">Takım arkadaşların görünen adını, forma numaranı ve as ya da yedek olduğunu görür.</string>
     <string name="privacy_delete">Sen maçı silince sunucu o maçın videosunu, analiz sonuçlarını, verdiğin kararları, yaptığın düzeltmeleri ve maç bilgilerini siler. Telefonundaki video dosyası kalır. Sen hesabını silince sunucu hesabın için sakladığı bütün bilgileri siler.</string>
     <string name="privacy_faces">Uygulama ve sunucu yüz tanımaz. Rapor bir sayıyı oyuncuya yalnızca sen forma numarasını seçince yazar.</string>
     <string name="profile_server">Sunucu bağlantısı</string>
@@ -786,7 +836,9 @@
     <string name="action_logout_anyway">Yine de Çıkış Yap</string>
     <string name="action_delete_account">Hesabı Sil</string>
     <string name="delete_account_title">Hesabını silmek istiyor musun?</string>
-    <string name="delete_account_body">Sunucu kullanıcı adını, görünen adını, şifrenin özetini ve oturumlarını siler. Sunucu bu hesaba bağladığı maçları, videolarını ve analizlerini de siler. Uygulama bu telefondaki maç kayıtlarını, kadroları ve kamerayla çektiğin videoları da siler. Galeriden seçtiğin videolar galeride kalır.</string>
+    <!-- Slice B4 (plan U24): the design's first sentence, B3's sentences, and the team step of the server (design 3.7 without the
+         team matches of B7: a team without another member goes, a captaincy moves to the earliest-joined other member). -->
+    <string name="delete_account_body">Sunucu kullanıcı adını, görünen adını, şifre özetini, oturumlarını ve takım üyeliklerini siler. Sunucu bu hesaba bağladığı maçları, videolarını ve analizlerini de siler. Takımında senden başka üye yoksa sunucu takımı da siler. Başka üyesi olan bir takımın kaptanıysan sunucu kaptanlığı takıma en önce katılan öteki üyeye verir. Uygulama bu telefondaki maç kayıtlarını, kadroları ve kamerayla çektiğin videoları da siler. Galeriden seçtiğin videolar galeride kalır.</string>
     <!-- Shown while the list holds a match the app started to send to a server (it has a server id). The app can not tell
          whether an older server stored it, so the text is a condition that holds for every such match. The app deletes its
          match records with the account, so the last sentence names what the operator finds the match by in its legacy list

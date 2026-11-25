@@ -25,8 +25,11 @@ sealed interface TeamProblem {
     data object NameInvalid : TeamProblem
     /** 409 TEAM_ID_TAKEN: another account's team has the id this phone chose. */
     data object IdTaken : TeamProblem
-    /** 409 TEAM_LIMIT_REACHED. [limit] is null when the answer named none; [userId] names the member of a transfer. */
-    data class Limit(val scope: TeamLimitScope, val limit: Int?, val userId: String? = null) : TeamProblem
+    /**
+     * 409 TEAM_LIMIT_REACHED. [limit] is null when the answer named none; [userId] names the member of a transfer, and
+     * [memberName] is that member's display name as the team the app showed lists it (Kaptanlığı Devret, P7).
+     */
+    data class Limit(val scope: TeamLimitScope, val limit: Int?, val userId: String? = null, val memberName: String? = null) : TeamProblem
     /** 429 TOO_MANY_ATTEMPTS (scope TEAMS): the server stopped new teams of this account for [retryAfterSeconds]. */
     data class TooMany(val retryAfterSeconds: Int?) : TeamProblem
     /** 422 SEATS_INVALID. */
@@ -39,6 +42,16 @@ sealed interface TeamProblem {
     data class SeatsBelowHolders(val seat: Seat, val holders: Int, val seats: Int, val movedStarterDown: Boolean = false) : TeamProblem
     /** 422 NOT_A_TEAM_MEMBER: the account the call named is no longer a member. */
     data class NotAMember(val userId: String?) : TeamProblem
+    /** 409 JERSEY_TAKEN: another member wears [jersey] (null when the answer named no number). */
+    data class JerseyTaken(val jersey: Int?) : TeamProblem
+    /** 409 CAPTAIN_MUST_TRANSFER: the captain of a team with other members asked to leave it. */
+    data object MustTransfer : TeamProblem
+    /** 422 LOGO_INVALID: the server refused the logo's file [image] (`large` or `small`) and stored nothing. */
+    data class LogoInvalid(val image: String?) : TeamProblem
+    /** The app could not open or decode the picture the user picked, and sent nothing. */
+    data object LogoUnreadable : TeamProblem
+    /** The app could not make the picture's files as small as the server takes them (design 4.2), and sent nothing. */
+    data object LogoTooLarge : TeamProblem
     /** 404 NOT_FOUND or 405 on a team route: the server is older than 0.10 and has no teams. */
     data object ServerOutdated : TeamProblem
     /** No answer came, or the request never left the phone. */
@@ -49,6 +62,9 @@ sealed interface TeamProblem {
     companion object {
         fun of(error: Throwable): TeamProblem = when (error) {
             is ApiException -> of(error)
+            // The app's own steps with the picked picture come before any request, so they never read as no answer.
+            is LogoCodec.Unreadable -> LogoUnreadable
+            is LogoCodec.TooLarge -> LogoTooLarge
             is IOException -> Unreachable
             else -> Failed(200, "UNEXPECTED_ANSWER")
         }
@@ -73,6 +89,9 @@ sealed interface TeamProblem {
                     if (seat == null || holders == null || seats == null) Failed(error.status, error.code) else SeatsBelowHolders(seat, holders, seats)
                 }
                 "NOT_A_TEAM_MEMBER" -> NotAMember(text("userId"))
+                "JERSEY_TAKEN" -> JerseyTaken(number("jersey")?.takeIf { it in 1..99 })
+                "CAPTAIN_MUST_TRANSFER" -> MustTransfer
+                "LOGO_INVALID" -> LogoInvalid(text("image"))
                 // The API's own envelope for a route it does not have: a server before 0.10.
                 "NOT_FOUND", "METHOD_NOT_ALLOWED" -> ServerOutdated
                 else -> Failed(error.status, error.code)

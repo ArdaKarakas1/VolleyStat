@@ -1257,6 +1257,10 @@ class ScreenStatesTest {
         show { DeleteAccountScreen(AccountUi(user = ali), holdsUploadedMatches = false, onDelete = {}, onBack = {}) }
         compose.onNodeWithText(text(R.string.delete_account_body)).assertIsDisplayed()
         assertTrue(text(R.string.delete_account_body).contains("Sunucu bu hesaba bağladığı maçları, videolarını ve analizlerini de siler."))
+        // Slice B4 (plan U24): the memberships, a team without another member, and the captaincy that moves on.
+        assertTrue(text(R.string.delete_account_body).startsWith("Sunucu kullanıcı adını, görünen adını, şifre özetini, oturumlarını ve takım üyeliklerini siler."))
+        assertTrue(text(R.string.delete_account_body).contains("Takımında senden başka üye yoksa sunucu takımı da siler."))
+        assertTrue(text(R.string.delete_account_body).contains("Başka üyesi olan bir takımın kaptanıysan sunucu kaptanlığı takıma en önce katılan öteki üyeye verir."))
         assertFalse(shown("maç listendeki"))
         // No match in the list went to a server: none of them can be a match an older server stored.
         assertFalse(shown(text(R.string.delete_account_legacy)))
@@ -1284,6 +1288,9 @@ class ScreenStatesTest {
         assertTrue(text(R.string.privacy_retention).contains("Sunucu hesabına bağladığı maçların videolarını ve bilgilerini sen maçı ya da hesabını silene kadar saklar."))
         assertTrue(text(R.string.privacy_retention).contains("Sunucu hiçbir hesaba bağlı olmayan maçları Voleybol Ve Veleybol silene ya da bir hesaba bağlayana kadar saklar."))
         assertTrue(text(R.string.privacy_retention).contains("Sen hesabını silince sunucu bu maçları silmez."))
+        // Slice B4 (plan U25): the first sentence names the teams, and the teammates' line says what they see.
+        assertTrue(text(R.string.privacy_retention).startsWith("Sunucu hesabını, takımlarını ve maçlarını sen silene kadar saklar. "))
+        compose.onNodeWithText(text(R.string.privacy_teams)).performScrollTo().assertIsDisplayed()
     }
 
     /** Review finding F6: the lists show the server's refusal, not the analysis state the phone remembered before it. */

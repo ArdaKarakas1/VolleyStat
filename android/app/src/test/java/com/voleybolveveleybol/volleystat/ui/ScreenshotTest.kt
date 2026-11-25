@@ -10,6 +10,17 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.test.core.app.ApplicationProvider
 import com.github.takahirom.roborazzi.captureRoboImage
+import com.github.takahirom.roborazzi.captureScreenRoboImage
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.test.core.app.ActivityScenario
+import com.voleybolveveleybol.volleystat.BlockedRead
+import com.voleybolveveleybol.volleystat.TeamLogo
+import com.voleybolveveleybol.volleystat.model.BlockedMember
+import com.voleybolveveleybol.volleystat.ui.screens.TeamBlockedScreen
+import com.voleybolveveleybol.volleystat.ui.screens.TeamJerseyScreen
+import com.voleybolveveleybol.volleystat.ui.screens.TeamSettingsScreen
+import androidx.compose.ui.graphics.asImageBitmap
 import com.voleybolveveleybol.volleystat.AnalysisUi
 import com.voleybolveveleybol.volleystat.CorrectionProblem
 import com.voleybolveveleybol.volleystat.RalliesLoad
@@ -198,6 +209,44 @@ class ScreenshotTest {
         captureRoboImage("build/outputs/roborazzi/$name.png") { VolleyStatTheme(dark = dark) { content() } }
     }
 
+    /**
+     * A screen with a dialog open. A dialog has a window of its own, so the picture is taken of the whole screen with
+     * every window, in an activity of its own.
+     */
+    private fun dialogShot(name: String, dark: Boolean = false, qualifiers: String? = null, fontScale: Float = 1f, content: @Composable () -> Unit) {
+        qualifiers?.let { RuntimeEnvironment.setQualifiers(it) }
+        RuntimeEnvironment.setFontScale(fontScale)
+        RuntimeEnvironment.setQualifiers(if (dark) "+night" else "+notnight")
+        try {
+            ActivityScenario.launch(ComponentActivity::class.java).use { scenario ->
+                scenario.onActivity { it.setContent { VolleyStatTheme(dark = dark) { content() } } }
+                org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+                captureScreenRoboImage("build/outputs/roborazzi/$name.png")
+            }
+        } finally {
+            RuntimeEnvironment.setFontScale(1f)
+            RuntimeEnvironment.setQualifiers("+w411dp-h891dp-port")
+        }
+    }
+
+    /** An invented logo: a gradient with a ball and two letters, drawn in the test. No real picture. */
+    private val fakeLogo: android.graphics.Bitmap by lazy {
+        android.graphics.Bitmap.createBitmap(256, 256, android.graphics.Bitmap.Config.ARGB_8888).apply {
+            val canvas = android.graphics.Canvas(this)
+            val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+            paint.shader = android.graphics.LinearGradient(0f, 0f, 256f, 256f, android.graphics.Color.rgb(48, 30, 120), android.graphics.Color.rgb(140, 90, 230), android.graphics.Shader.TileMode.CLAMP)
+            canvas.drawRect(0f, 0f, 256f, 256f, paint)
+            paint.shader = null
+            paint.color = android.graphics.Color.rgb(250, 200, 40)
+            canvas.drawCircle(128f, 110f, 62f, paint)
+            paint.color = android.graphics.Color.WHITE
+            paint.textSize = 64f
+            paint.textAlign = android.graphics.Paint.Align.CENTER
+            paint.isFakeBoldText = true
+            canvas.drawText("KS", 128f, 228f, paint)
+        }
+    }
+
     /** One screen on another device shape or text size, then back to the default phone. */
     private fun shotOn(name: String, qualifiers: String, fontScale: Float = 1f, dark: Boolean = false, content: @Composable () -> Unit) {
         RuntimeEnvironment.setQualifiers(qualifiers)
@@ -258,13 +307,14 @@ class ScreenshotTest {
         }
         shotOn("16b_takim_kur_bekle", "+w411dp-h1400dp-port") { TeamCreateScreen(busy = false, problem = TeamProblem.TooMany(5400), onCreate = {}, onEdit = {}, onBack = {}) }
 
-        shotOn("17_takim", "+w411dp-h1200dp-port") { TeamScreen(captainTeam, loading = false, problem = null, onSeats = {}, onRetry = {}, onBack = {}) }
-        shotOn("17_takim_uye", "+w411dp-h1200dp-port") { TeamScreen(memberTeam, loading = false, problem = null, onSeats = {}, onRetry = {}, onBack = {}) }
-        shot("17_takim_tek") { TeamScreen(aloneTeam, loading = false, problem = null, onSeats = {}, onRetry = {}, onBack = {}) }
+        // The team screens carry the account's id, as the app passes it: the captain's menus show on the other members' rows.
+        shotOn("17_takim", "+w411dp-h1400dp-port") { TeamScreen(captainTeam, loading = false, problem = null, onSeats = {}, onRetry = {}, onBack = {}, myUserId = "u1") }
+        shotOn("17_takim_uye", "+w411dp-h1400dp-port") { TeamScreen(memberTeam, loading = false, problem = null, onSeats = {}, onRetry = {}, onBack = {}, myUserId = "u2") }
+        shotOn("17_takim_tek", "+w411dp-h1100dp-port") { TeamScreen(aloneTeam, loading = false, problem = null, onSeats = {}, onRetry = {}, onBack = {}, myUserId = "u1") }
         shot("17_takim_yukleniyor") { TeamScreen(null, loading = true, problem = null, onSeats = {}, onRetry = {}, onBack = {}) }
         shot("17_takim_yok") { TeamScreen(null, loading = false, problem = TeamProblem.Gone, onSeats = {}, onRetry = {}, onBack = {}) }
-        shotOn("17_takim_koyu", "+w411dp-h1200dp-port", dark = true) { TeamScreen(captainTeam, loading = false, problem = null, onSeats = {}, onRetry = {}, onBack = {}) }
-        shotOn("kucuk_buyuk_yazi_17_takim", "+w320dp-h1600dp-port", fontScale = 1.5f) { TeamScreen(captainTeam, loading = false, problem = null, onSeats = {}, onRetry = {}, onBack = {}) }
+        shotOn("17_takim_koyu", "+w411dp-h1400dp-port", dark = true) { TeamScreen(captainTeam, loading = false, problem = null, onSeats = {}, onRetry = {}, onBack = {}, myUserId = "u1") }
+        shotOn("kucuk_buyuk_yazi_17_takim", "+w320dp-h2000dp-port", fontScale = 1.5f) { TeamScreen(captainTeam, loading = false, problem = null, onSeats = {}, onRetry = {}, onBack = {}, myUserId = "u1") }
 
         shotOn("18a_as_yedek", "+w411dp-h1200dp-port") { TeamSeatsScreen(captainTeam, busy = false, problem = null, onSave = { _, _ -> }, onEdit = {}, onBack = {}) }
         shot("18a_as_yedek_tek") { TeamSeatsScreen(aloneTeam, busy = false, problem = null, onSave = { _, _ -> }, onEdit = {}, onBack = {}) }
@@ -274,6 +324,65 @@ class ScreenshotTest {
         shotOn("18a_as_yedek_koyu", "+w411dp-h1200dp-port", dark = true) { TeamSeatsScreen(captainTeam, busy = false, problem = null, onSave = { _, _ -> }, onEdit = {}, onBack = {}) }
         shotOn("kucuk_buyuk_yazi_18a_as_yedek", "+w320dp-h1800dp-port", fontScale = 1.5f) {
             TeamSeatsScreen(captainTeam, busy = false, problem = null, onSave = { _, _ -> }, onEdit = {}, onBack = {})
+        }
+
+        // Plan P7: the logo on the Teams tab and the team screen, the member menus, Takım Ayarları, Forma Numaran,
+        // Çıkarılanlar and the dialogs of removal, transfer, leaving and deletion.
+        val logo = fakeLogo.asImageBitmap()
+        val withLogo = captainTeam.copy(logoVersion = 3)
+        shot("16_takimlar_logo") { TeamsScreen(list.copy(teams = listOf(withLogo, memberTeam, aloneTeam), logos = mapOf("s1" to TeamLogo(3, fakeLogo))), {}, {}, {}) }
+        shotOn("17_takim_logo", "+w411dp-h1400dp-port") {
+            TeamScreen(withLogo, loading = false, problem = null, onSeats = {}, onRetry = {}, onBack = {}, myUserId = "u1", logo = logo)
+        }
+        dialogShot("17_takim_cikar") { TeamScreen(captainTeam, loading = false, problem = null, onSeats = {}, onRetry = {}, onBack = {}, myUserId = "u1", initialDialog = "remove:u4") }
+        dialogShot("17_takim_cikar_koyu", dark = true) {
+            TeamScreen(captainTeam, loading = false, problem = null, onSeats = {}, onRetry = {}, onBack = {}, myUserId = "u1", initialDialog = "remove:u4")
+        }
+        dialogShot("17_takim_devret") { TeamScreen(captainTeam, loading = false, problem = null, onSeats = {}, onRetry = {}, onBack = {}, myUserId = "u1", initialDialog = "transfer:u2") }
+        dialogShot("17_takim_devret_sinir") {
+            TeamScreen(
+                captainTeam, loading = false, problem = null, onSeats = {}, onRetry = {}, onBack = {}, myUserId = "u1", initialDialog = "transfer:u2",
+                actionProblem = TeamProblem.Limit(com.voleybolveveleybol.volleystat.data.TeamLimitScope.CAPTAIN, 3, "u2", "Ece Yıldız"),
+            )
+        }
+        dialogShot("17_takim_ayril") { TeamScreen(memberTeam, loading = false, problem = null, onSeats = {}, onRetry = {}, onBack = {}, myUserId = "u2", initialDialog = "leave") }
+        dialogShot("17_takim_sil") { TeamScreen(aloneTeam, loading = false, problem = null, onSeats = {}, onRetry = {}, onBack = {}, myUserId = "u1", initialDialog = "delete") }
+        dialogShot("kucuk_buyuk_yazi_17_takim_cikar", qualifiers = "+w320dp-h568dp-port", fontScale = 1.5f) {
+            TeamScreen(captainTeam, loading = false, problem = null, onSeats = {}, onRetry = {}, onBack = {}, myUserId = "u1", initialDialog = "remove:u4")
+        }
+
+        fun settings(problem: TeamProblem? = null, shownLogo: Boolean = true): @Composable () -> Unit = {
+            TeamSettingsScreen(
+                if (shownLogo) withLogo else captainTeam, logo = if (shownLogo) logo else null, busy = false, problem = problem,
+                onSave = { _, _ -> }, onPickLogo = {}, onRemoveLogo = {}, onEdit = {}, onBack = {},
+            )
+        }
+        shotOn("18_takim_ayarlari", "+w411dp-h1200dp-port", content = settings())
+        shotOn("18_takim_ayarlari_logosuz", "+w411dp-h1200dp-port", content = settings(shownLogo = false))
+        shotOn("18_takim_ayarlari_koyu", "+w411dp-h1200dp-port", dark = true, content = settings())
+        shotOn("18_takim_ayarlari_logo_ret", "+w411dp-h1200dp-port", content = settings(TeamProblem.LogoInvalid("large")))
+        shotOn("18_takim_ayarlari_logo_buyuk", "+w411dp-h1200dp-port", content = settings(TeamProblem.LogoTooLarge))
+        shotOn("kucuk_buyuk_yazi_18_takim_ayarlari", "+w320dp-h1600dp-port", fontScale = 1.5f, content = settings())
+
+        shot("18c_forma_numaran") { TeamJerseyScreen(7, busy = false, problem = null, onSave = {}, onEdit = {}, onBack = {}) }
+        shot("18c_forma_numaran_ret") { TeamJerseyScreen(9, busy = false, problem = TeamProblem.JerseyTaken(9), onSave = {}, onEdit = {}, onBack = {}) }
+        shot("18c_forma_numaran_koyu", dark = true) { TeamJerseyScreen(7, busy = false, problem = null, onSave = {}, onEdit = {}, onBack = {}) }
+
+        val blocked = BlockedRead("s1", listOf(BlockedMember("u8", "Irmak Çınar", "2026-11-22T18:30:00Z"), BlockedMember("u9", "Jale Öz", "2026-11-24T09:15:00Z")))
+        fun cikarilanlar(read: BlockedRead?, problem: TeamProblem? = null): @Composable () -> Unit = {
+            TeamBlockedScreen(read, busy = false, problem = problem, onUnblock = {}, onRetry = {}, onBack = {})
+        }
+        shot("18b_cikarilanlar", content = cikarilanlar(blocked))
+        shot("18b_cikarilanlar_bos", content = cikarilanlar(BlockedRead("s1", emptyList())))
+        shot("18b_cikarilanlar_yukleniyor", content = cikarilanlar(BlockedRead("s1", loading = true)))
+        shot("18b_cikarilanlar_baglanti_yok", content = cikarilanlar(BlockedRead("s1", problem = TeamProblem.Unreachable)))
+        shot("18b_cikarilanlar_ret", content = cikarilanlar(blocked, TeamProblem.CaptainOnly))
+        shot("18b_cikarilanlar_koyu", dark = true, content = cikarilanlar(blocked))
+        shotOn("kucuk_buyuk_yazi_18b_cikarilanlar", "+w320dp-h568dp-port", fontScale = 1.5f, content = cikarilanlar(blocked))
+
+        // Takım Kur with a logo picked.
+        shotOn("16b_takim_kur_logo", "+w411dp-h1500dp-port") {
+            TeamCreateScreen(busy = false, problem = null, onCreate = {}, onEdit = {}, onBack = {}, logo = logo)
         }
     }
 

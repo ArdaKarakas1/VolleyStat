@@ -256,4 +256,113 @@ class TeamApiTest {
         server.enqueue(error(404, "TEAM_NOT_FOUND"))
         assertEquals(TeamProblem.Gone, TeamProblem.of(runCatching { client.team("t-1") }.exceptionOrNull()!!))
     }
+
+    // ----- P7: members, blocks, the transfer and the logo -----
+
+    @Test fun memberCallsSendTheirRoutesAndRead204() {
+        // The jersey: the body names the number, and the answer is the member's row.
+        server.enqueue(json(200, member("u-1", "Deniz", 12, "CAPTAIN", "STARTER", "2026-11-20T10:00:00Z")))
+        assertEquals(TeamMember("u-1", "Deniz", 12, TeamRole.CAPTAIN, Seat.STARTER, "2026-11-20T10:00:00Z"), client.setJersey("t-1", "u-1", 12))
+        server.takeRequest().let { request ->
+            assertEquals("PUT", request.method)
+            assertEquals("/v1/teams/t-1/members/u-1/jersey", request.path)
+            assertEquals("Bearer session-1", request.getHeader("Authorization"))
+            val sent = body(request)
+            assertEquals(12, sent.getInt("jersey"))
+            assertEquals(setOf("jersey"), sent.keys().asSequence().toSet())
+        }
+        // A null jersey clears it: the body still names the field.
+        server.enqueue(json(200, member("u-1", "Deniz", null, "CAPTAIN", "STARTER", "2026-11-20T10:00:00Z")))
+        assertNull(client.setJersey("t-1", "u-1", null).jersey)
+        assertTrue(body(server.takeRequest()).isNull("jersey"))
+
+        // Removal and leaving: one route, only its own 204 counts.
+        server.enqueue(MockResponse().setResponseCode(204))
+        client.removeMember("t-1", "u-2")
+        server.takeRequest().let { assertEquals("DELETE /v1/teams/t-1/members/u-2", "${it.method} ${it.path}") }
+        server.enqueue(json(200, JSONObject()))
+        assertEquals("UNEXPECTED_ANSWER", (runCatching { client.removeMember("t-1", "u-2") }.exceptionOrNull() as ApiException).code)
+        server.takeRequest()
+
+        // The blocked list, in the server's order.
+        val blocked = JSONArray()
+            .put(JSONObject().put("userId", "u-7").put("displayName", "Gül").put("blockedAt", "2026-11-22T10:00:00Z"))
+            .put(JSONObject().put("userId", "u-8").put("displayName", "Hale").put("blockedAt", "2026-11-23T10:00:00Z"))
+        server.enqueue(json(200, JSONObject().put("blocked", blocked)))
+        val list = client.blocks("t-1")
+        assertEquals(listOf("u-7", "u-8"), list.map { it.userId })
+        assertEquals(com.voleybolveveleybol.volleystat.model.BlockedMember("u-8", "Hale", "2026-11-23T10:00:00Z"), list[1])
+        server.takeRequest().let { assertEquals("GET /v1/teams/t-1/blocks", "${it.method} ${it.path}") }
+
+        // Unblock: 204.
+        server.enqueue(MockResponse().setResponseCode(204))
+        client.unblock("t-1", "u-7")
+        server.takeRequest().let { assertEquals("DELETE /v1/teams/t-1/blocks/u-7", "${it.method} ${it.path}") }
+
+        // The transfer names the member, and the answer is the team as the old captain sees it now.
+        server.enqueue(json(200, team().put("myRole", "MEMBER").put("newJoins", JSONObject.NULL)))
+        assertEquals(TeamRole.MEMBER, client.transferCaptain("t-1", "u-2").myRole)
+        server.takeRequest().let { request ->
+            assertEquals("POST /v1/teams/t-1/captain", "${request.method} ${request.path}")
+            assertEquals("u-2", body(request).getString("userId"))
+        }
+
+        // The logo: both files as standard base64 without line breaks, and the new version from the answer.
+        val large = ByteArray(300) { (it % 251).toByte() }
+        val small = ByteArray(77) { (255 - it).toByte() }
+        server.enqueue(json(200, JSONObject().put("logo", JSONObject().put("version", 4))))
+        assertEquals(4, client.putLogo("t-1", large, small))
+        server.takeRequest().let { request ->
+            assertEquals("PUT /v1/teams/t-1/logo", "${request.method} ${request.path}")
+            val sent = body(request)
+            assertEquals(setOf("large", "small"), sent.keys().asSequence().toSet())
+            assertFalse(sent.getString("large").contains('\n'))
+            assertTrue(large.contentEquals(java.util.Base64.getDecoder().decode(sent.getString("large"))))
+            assertTrue(small.contentEquals(java.util.Base64.getDecoder().decode(sent.getString("small"))))
+        }
+        server.enqueue(MockResponse().setResponseCode(204))
+        client.deleteLogo("t-1")
+        server.takeRequest().let { assertEquals("DELETE /v1/teams/t-1/logo", "${it.method} ${it.path}") }
+
+        // The refusals of these routes.
+        server.enqueue(error(409, "JERSEY_TAKEN", JSONObject().put("jersey", 12)))
+        assertEquals(TeamProblem.JerseyTaken(12), TeamProblem.of(runCatching { client.setJersey("t-1", "u-1", 12) }.exceptionOrNull()!!))
+        server.enqueue(error(409, "CAPTAIN_MUST_TRANSFER"))
+        assertEquals(TeamProblem.MustTransfer, TeamProblem.of(runCatching { client.removeMember("t-1", "u-1") }.exceptionOrNull()!!))
+        server.enqueue(error(422, "LOGO_INVALID", JSONObject().put("image", "small")))
+        assertEquals(TeamProblem.LogoInvalid("small"), TeamProblem.of(runCatching { client.putLogo("t-1", large, small) }.exceptionOrNull()!!))
+        server.enqueue(error(409, "TEAM_LIMIT_REACHED", JSONObject().put("scope", "CAPTAIN").put("limit", 3).put("userId", "u-2")))
+        assertEquals(TeamProblem.Limit(TeamLimitScope.CAPTAIN, 3, "u-2"), TeamProblem.of(runCatching { client.transferCaptain("t-1", "u-2") }.exceptionOrNull()!!))
+        // The app's own steps with a picture are no lost answer.
+        assertEquals(TeamProblem.LogoUnreadable, TeamProblem.of(LogoCodec.Unreadable(java.io.FileNotFoundException("gone"))))
+        assertEquals(TeamProblem.LogoTooLarge, TeamProblem.of(LogoCodec.TooLarge()))
+    }
+
+    @Test fun theLogoIsReadAsBytesWithTheSession() {
+        val bytes = ByteArray(1234) { (it * 7).toByte() }
+        server.enqueue(MockResponse().setResponseCode(200).setHeader("Content-Type", "image/webp").setHeader("ETag", "\"3\"").setBody(okio.Buffer().write(bytes)))
+        assertTrue(bytes.contentEquals(client.logo("t-1", "large")))
+        server.takeRequest().let { request ->
+            assertEquals("GET /v1/teams/t-1/logo?size=large", "${request.method} ${request.path}")
+            assertEquals("Bearer session-1", request.getHeader("Authorization"))
+        }
+        // An answer larger than any logo of this API is no logo: the app stops reading.
+        server.enqueue(MockResponse().setResponseCode(200).setHeader("Content-Type", "image/webp").setBody(okio.Buffer().write(ByteArray(ApiClient.LOGO_READ_LIMIT + 10))))
+        assertEquals("UNEXPECTED_ANSWER", (runCatching { client.logo("t-1", "small") }.exceptionOrNull() as ApiException).code)
+        // A 401 to the logo ends the session as every other call does.
+        val ended = mutableListOf<String>()
+        server.enqueue(error(401, "AUTH_REQUIRED").setHeader("WWW-Authenticate", "Bearer"))
+        val withSession = ApiClient(server.url("/v1").toString(), token = "session-1", onAuthRequired = { ended += it })
+        assertEquals("AUTH_REQUIRED", (runCatching { withSession.logo("t-1", "large") }.exceptionOrNull() as ApiException).code)
+        assertEquals(listOf("session-1"), ended)
+    }
+
+    @Test fun aMissingLogoReadsAsNone() {
+        server.enqueue(error(404, "LOGO_NOT_FOUND"))
+        assertNull(client.logo("t-1", "small"))
+        assertEquals("/v1/teams/t-1/logo?size=small", server.takeRequest().path)
+        // A team that is gone is no missing logo.
+        server.enqueue(error(404, "TEAM_NOT_FOUND"))
+        assertEquals(TeamProblem.Gone, TeamProblem.of(runCatching { client.logo("t-1", "small") }.exceptionOrNull()!!))
+    }
 }

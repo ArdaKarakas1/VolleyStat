@@ -345,6 +345,7 @@ fun ProfileScreen(
                 PrivacyLine(stringResource(R.string.privacy_accounts), R.drawable.ic_lock)
                 PrivacyLine(stringResource(R.string.privacy_matches), R.drawable.ic_shield)
                 PrivacyLine(stringResource(R.string.privacy_phone_accounts), R.drawable.ic_person)
+                PrivacyLine(stringResource(R.string.privacy_teams), R.drawable.ic_groups)
                 PrivacyLine(stringResource(R.string.privacy_session), R.drawable.ic_shield)
                 PrivacyLine(stringResource(R.string.privacy_retention), R.drawable.ic_schedule)
                 PrivacyLine(stringResource(R.string.privacy_delete), R.drawable.ic_delete)

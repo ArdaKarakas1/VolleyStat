@@ -23,6 +23,9 @@ data class SeatCounts(val starter: SeatCount, val substitute: SeatCount)
 /** One member of a team, as the server lists the members: in the order they joined. */
 data class TeamMember(val userId: String, val displayName: String, val jersey: Int?, val role: TeamRole, val seat: Seat, val joinedAt: String)
 
+/** An account the captain removed from the team, which the server blocks in the team's seat pool (Çıkarılanlar). */
+data class BlockedMember(val userId: String, val displayName: String, val blockedAt: String)
+
 /**
  * A team as the server shows it to the signed-in account (design 9.3, B4 form). [newJoins] and [waiting] are the
  * captain's only and null for every other member. [logoVersion] is null while the team has no logo.

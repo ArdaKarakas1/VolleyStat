@@ -82,7 +82,7 @@ jobs:
           VOLLEYSTAT_E2E_VIDEO: ${{ runner.temp }}/clip.mp4
         run: ./gradlew --no-daemon :app:testDebugUnitTest --tests '*E2eTest*'
       - name: The end-to-end tests must have run, not skipped
-        run: python tools/require_tests_ran.py android/app/build/test-results/testDebugUnitTest 23
+        run: python tools/require_tests_ran.py android/app/build/test-results/testDebugUnitTest 24
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -136,7 +136,7 @@ jobs:
           working-directory: android
           script: ./gradlew --no-daemon :app:connectedDebugAndroidTest
       - name: The device tests must have run, not skipped
-        run: python tools/require_tests_ran.py android/app/build/outputs/androidTest-results 2
+        run: python tools/require_tests_ran.py android/app/build/outputs/androidTest-results 3
       # A failed device run is diagnosed from this log: every request the app made and its status.
       - name: Backend log
         if: always()
@@ -145,6 +145,62 @@ jobs:
         if: always()
         with:
           name: device-reports
+          path: |
+            android/app/build/reports/androidTests/
+            android/app/build/outputs/androidTest-results/
+            ${{ runner.temp }}/backend.log
+          if-no-files-found: warn
+
+  device-api26:
+    # Design 10.5: on API 26 to 29 the app encodes the logo with CompressFormat.WEBP instead of WEBP_LOSSY. This job runs
+    # only LogoDeviceTest on an API 26 emulator, which sends the app's logo to the backend (plan U21).
+    name: The team logo on an API 26 emulator
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ffmpeg (the backend probes every upload with ffprobe)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - run: pip install -r backend/requirements.txt
+      - name: Start the backend
+        working-directory: backend
+        run: |
+          df -h "$RUNNER_TEMP"
+          VOLLEYSTAT_SIGNUP=open VOLLEYSTAT_DISK_FLOOR_GIB=1 VOLLEYSTAT_STORAGE="$RUNNER_TEMP/storage" nohup python -m app --port 8000 --analyzer demo > "$RUNNER_TEMP/backend.log" 2>&1 &
+          for attempt in $(seq 1 30); do curl -sf http://127.0.0.1:8000/v1/health > /dev/null && break; sleep 1; done
+          curl -sf http://127.0.0.1:8000/v1/health
+      - name: Let the emulator use hardware acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: The logo test on API 26
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 26
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          working-directory: android
+          script: ./gradlew --no-daemon :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.voleybolveveleybol.volleystat.LogoDeviceTest
+      - name: The logo test must have run, not skipped
+        run: python tools/require_tests_ran.py android/app/build/outputs/androidTest-results 1
+      - name: Backend log
+        if: always()
+        run: tail -n 60 "$RUNNER_TEMP/backend.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: device-api26-reports
           path: |
             android/app/build/reports/androidTests/
             android/app/build/outputs/androidTest-results/
