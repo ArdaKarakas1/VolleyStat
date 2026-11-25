@@ -1360,12 +1360,21 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private var teamReads = 0L
     /** A screen asked for the teams. Only from then on does another address read them again (as [signupWanted] does). */
     @Volatile private var teamsWanted = false
+    /** Counts the reads of the list and of one team in the order they leave (on the main thread). */
+    private var readsSent = 0L
+    /**
+     * For each team, the read of that one team whose answer the list shows: a read of the list that left before it carries
+     * the team as it was before, and its answer keeps the newer team (a list read on the Teams tab and the team screen's
+     * read race when the user opens a team at once).
+     */
+    private val newerTeamReads = HashMap<String, Long>()
 
     private fun cancelTeamCalls() {
         teamCalls.cancel()
         teamCalls = SupervisorJob(viewModelScope.coroutineContext[Job])
         listJob = null
         pendingCreation = null
+        newerTeamReads.clear()
     }
 
     private fun resetTeams() {
@@ -1417,13 +1426,21 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         teamsWanted = true
         val token = session?.token ?: return
         listJob?.cancel()
+        val sent = ++readsSent
         teamState(token) { it.copy(loading = true) }
         listJob = teamCall(token, { it.teams() }) { outcome ->
             outcome.getOrNull()?.let(::noteShown)
             // The team screen's read keeps its own outcome: a list that answers clears only the list's problem (P6-C1).
             teamState(token) { ui ->
                 outcome.fold(
-                    onSuccess = { ui.copy(teams = it, loading = false, loadProblem = null) },
+                    onSuccess = { answer ->
+                        // A team that a later read of its own already brought up to date keeps that read's answer.
+                        val listed = answer.map { team ->
+                            val newer = (newerTeamReads[team.id] ?: 0L) > sent
+                            if (newer) ui.teams?.firstOrNull { it.id == team.id } ?: ui.opened?.team?.takeIf { it.id == team.id } ?: team else team
+                        }
+                        ui.copy(teams = listed, loading = false, loadProblem = null)
+                    },
                     onFailure = { ui.copy(loading = false, loadProblem = TeamProblem.of(it)) },
                 )
             }
@@ -1444,12 +1461,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun openTeam(id: String, screen: String = id) {
         val token = session?.token ?: return
         val number = ++teamReads
+        val sent = ++readsSent
         teamState(token) { ui ->
             val same = ui.opened?.takeIf { it.screen == screen && it.id == id }
             ui.copy(opened = same?.copy(number = number, problem = null) ?: TeamRead(screen, id, number, team = ui.teamOf(id)))
         }
         teamCall(token, { it.team(id) }) { outcome ->
             val team = outcome.getOrNull()
+            if (team != null) newerTeamReads[id] = maxOf(newerTeamReads[id] ?: 0L, sent)
             var markUpTo: String? = null
             teamState(token) { ui ->
                 markUpTo = null

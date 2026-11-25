@@ -27,6 +27,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
 import androidx.test.core.app.ApplicationProvider
 import com.voleybolveveleybol.volleystat.R
 import com.voleybolveveleybol.volleystat.TeamsUi
@@ -162,6 +163,40 @@ class TeamScreensTest {
         compose.onNodeWithText("3").performScrollTo().performClick()
         create.performClick()
         assertEquals(TeamDraft("Kuzey Spor", 3, Seat.STARTER, com.voleybolveveleybol.volleystat.model.Schedule(2, "20:30"), 7), sent.last())
+    }
+
+    /**
+     * A day without a valid time is no schedule the server takes (it answers 422 VALIDATION_ERROR), so Takım Kur stays
+     * off until the time is complete and valid, or until the day goes back to Yok (P6 checker, M7).
+     */
+    @Test fun takimKurStaysOffWhileADayHasNoValidTime() {
+        val sent = mutableListOf<TeamDraft>()
+        show { TeamCreateScreen(busy = false, problem = null, onCreate = { sent += it }, onEdit = {}, onBack = {}) }
+        val create = compose.onNode(hasClickAction() and hasText(text(R.string.action_create_team)))
+        compose.onNode(hasSetTextAction() and hasText(text(R.string.field_team_name))).performTextInput("Kuzey Spor")
+        create.assertIsEnabled()
+        // A day and no time.
+        compose.onNodeWithText(dayName(3)).performScrollTo().performClick()
+        create.assertIsNotEnabled()
+        val time = compose.onNode(hasSetTextAction() and hasText(text(R.string.field_schedule_time)))
+        // A time not yet complete, then a complete one outside 00:00 to 23:59.
+        time.performScrollTo().performTextInput("19")
+        create.assertIsNotEnabled()
+        time.performTextReplacement("2500")
+        create.assertIsNotEnabled()
+        assertTrue(shown(text(R.string.team_time_invalid)))
+        create.performClick()
+        assertTrue("nothing goes to the server", sent.isEmpty())
+        // A valid time turns it on and goes with the day.
+        time.performTextReplacement("1930")
+        create.assertIsEnabled().performClick()
+        assertEquals(com.voleybolveveleybol.volleystat.model.Schedule(3, "19:30"), sent.single().schedule)
+        // Back to Yok with a broken time: no schedule goes, and the button is on.
+        time.performTextReplacement("2500")
+        create.assertIsNotEnabled()
+        compose.onNodeWithText(text(R.string.team_schedule_none)).performScrollTo().performClick()
+        create.assertIsEnabled().performClick()
+        assertEquals(null, sent.last().schedule)
     }
 
     private fun dayName(weekday: Int) = java.time.DayOfWeek.of(weekday).getDisplayName(java.time.format.TextStyle.SHORT, java.util.Locale.forLanguageTag("tr-TR"))

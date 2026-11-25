@@ -9,6 +9,7 @@ import com.voleybolveveleybol.volleystat.data.TeamProblem
 import com.voleybolveveleybol.volleystat.model.Schedule
 import com.voleybolveveleybol.volleystat.model.Seat
 import com.voleybolveveleybol.volleystat.model.TeamDraft
+import com.voleybolveveleybol.volleystat.model.TeamRules
 import com.voleybolveveleybol.volleystat.ui.screens.resolve
 import com.voleybolveveleybol.volleystat.ui.screens.seatsHint
 import com.voleybolveveleybol.volleystat.ui.screens.teamProblemText
@@ -164,6 +165,71 @@ class AppViewModelTeamsTest {
         settle()
         assertTrue("a phone without a session asks the server nothing: ${seen.map { it.key }}", seen.isEmpty())
         assertEquals(TeamsUi(), vm.state.value.serverTeams)
+    }
+
+    /**
+     * A read of the list replaces the one on its way (P6 checker, M6): a slow read that answers after a newer one has
+     * answered must not put its older list back.
+     */
+    @Test fun aSlowReadOfTheListThatAnswersAfterANewerOneIsDropped() {
+        TestAccounts.seed(context)
+        val held = CountDownLatch(1)
+        val first = AtomicBoolean(true)
+        val slowAnswered = AtomicBoolean(false)
+        on("GET /teams") {
+            if (first.getAndSet(false)) {
+                held.await(15, TimeUnit.SECONDS)
+                slowAnswered.set(true)
+                teams(team("t-old", name = "Eski Liste"))
+            } else {
+                teams(team("t-new", name = "Yeni Liste"))
+            }
+        }
+        val vm = viewModel()
+        vm.loadTeams()
+        await("the slow read at the server") { seen.count { it.key == "GET /teams" } == 1 }
+        vm.loadTeams()
+        await("the newer list") { vm.state.value.serverTeams.teams?.map { it.id } == listOf("t-new") }
+        held.countDown()
+        await("the slow answer") { slowAnswered.get() }
+        repeat(3) { settle() }
+        assertEquals("the newer list stays", listOf("t-new"), vm.state.value.serverTeams.teams?.map { it.id })
+        assertFalse(vm.state.value.serverTeams.loading)
+    }
+
+    /**
+     * A read of the list that left before a team screen's read answered carries the team as it was before that read:
+     * its late answer must not put the older team back (found by TeamFlowTest, whose list read on the Teams tab raced the
+     * team screen's read).
+     */
+    @Test fun aListReadThatLeftBeforeATeamReadKeepsTheNewerTeam() {
+        TestAccounts.seed(context)
+        val held = CountDownLatch(1)
+        val reads = java.util.concurrent.atomic.AtomicInteger()
+        val slowAnswered = AtomicBoolean(false)
+        on("GET /teams") {
+            if (reads.incrementAndGet() == 2) {
+                held.await(15, TimeUnit.SECONDS)
+                slowAnswered.set(true)
+            }
+            teams(team("t1"))
+        }
+        val ece = member("u-2", "Ece Yeni", Seat.STARTER, "2026-11-25T10:00:00Z")
+        on("GET /teams/t1") { ok(team("t1", members = listOf(captainRow, ece))) }
+        val vm = viewModel().loaded()
+        vm.loadTeams()
+        await("the slow read at the server") { reads.get() == 2 }
+        vm.openTeam("t1", "screen-1")
+        await("the team read") { vm.state.value.serverTeams.opened?.team?.members?.size == 2 }
+        assertEquals(2, vm.state.value.serverTeams.teamOf("t1")!!.members.size)
+        held.countDown()
+        await("the slow answer") { slowAnswered.get() }
+        await("the list answered") { !vm.state.value.serverTeams.loading }
+        repeat(3) { settle() }
+        assertEquals("the team screen shows the newer read", listOf("Deniz Kaptan", "Ece Yeni"), vm.state.value.serverTeams.teamOf("t1")!!.members.map { it.displayName })
+        // A list read that leaves after the team read takes the server's word again.
+        vm.loaded()
+        assertEquals(1, vm.state.value.serverTeams.teamOf("t1")!!.members.size)
     }
 
     @Test fun anotherAddressReadsTheTeamsAgainOnceAScreenAskedForThem() {
@@ -422,6 +488,17 @@ class AppViewModelTeamsTest {
         assertEquals(string(R.string.seats_below_substitute, 3, 2), teamProblemText(TeamProblem.SeatsBelowHolders(Seat.SUBSTITUTE, 3, 2)).resolve(context))
         assertEquals(string(R.string.seats_invalid), teamProblemText(TeamProblem.SeatsInvalid(SeatsInvalidReason.SUBSTITUTES_RANGE)).resolve(context))
         assertEquals(string(R.string.seats_invalid_captain), teamProblemText(TeamProblem.SeatsInvalid(SeatsInvalidReason.CAPTAIN_SEAT)).resolve(context))
+    }
+
+    /**
+     * S8's bound itself (P6 checker, M4): 6 substitutes after the change still fit the 6 substitute seats a team can have,
+     * so a higher count still helps; 7 do not.
+     */
+    @Test fun theSeatHintAtExactlySixSubstitutesStillOffersAHigherCount() {
+        val atTheBound = TeamProblem.SeatsBelowHolders(Seat.SUBSTITUTE, TeamRules.SUBSTITUTES_MAX, TeamRules.SUBSTITUTES_MAX - 1, movedStarterDown = true)
+        assertEquals(R.string.seats_raise_or_swap_hint, seatsHint(atTheBound))
+        val aboveTheBound = TeamProblem.SeatsBelowHolders(Seat.SUBSTITUTE, TeamRules.SUBSTITUTES_MAX + 1, TeamRules.SUBSTITUTES_MAX, movedStarterDown = true)
+        assertEquals(R.string.seats_swap_hint, seatsHint(aboveTheBound))
     }
 
     @Test fun theSettingsGoToTheServerAndTheListFollows() {
