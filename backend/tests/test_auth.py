@@ -302,15 +302,28 @@ def test_a_signup_code_printed_before_this_version_still_opens_a_registration(st
     assert rows(storage, "SELECT COUNT(*) FROM operator_codes") == [(0,)]
 
 
+@pytest.mark.parametrize("signup", [None, "open", "link"])
 @pytest.mark.parametrize("value", ["operator", "open", "herkes", ""])
-def test_the_server_starts_with_volleystat_teams_set_and_logs_that_it_ignores_it(storage, monkeypatch, caplog, value):
-    monkeypatch.delenv("VOLLEYSTAT_SIGNUP", raising=False)
+def test_the_server_starts_with_volleystat_teams_set_and_logs_that_it_ignores_it(storage, monkeypatch, caplog, value,
+                                                                                 signup):
+    # Every start script that still sets VOLLEYSTAT_TEAMS gets the warning, whatever it sets VOLLEYSTAT_SIGNUP to:
+    # CI writes VOLLEYSTAT_SIGNUP=open out, and an operator who closed open sign-up writes link.
+    if signup is None:
+        monkeypatch.delenv("VOLLEYSTAT_SIGNUP", raising=False)
+    else:
+        monkeypatch.setenv("VOLLEYSTAT_SIGNUP", signup)
     monkeypatch.setenv("VOLLEYSTAT_TEAMS", value)
     with caplog.at_level(logging.WARNING, logger="app.accounts"):
         app = create_app(storage, analyzer="none")
     with TestClient(app) as client:
-        assert client.get("/v1/health").json()["accounts"] == {"signup": "OPEN"}
-        assert register(client).status_code == 201
+        if signup == "link":
+            assert client.get("/v1/health").json()["accounts"] == {"signup": "LINK"}
+            refused = register(client)
+            assert (refused.status_code, error(refused)["code"], error(refused)["details"]) == (
+                403, "SIGNUP_CLOSED", {"reason": "NO_LINK"})
+        else:
+            assert client.get("/v1/health").json()["accounts"] == {"signup": "OPEN"}
+            assert register(client).status_code == 201
     named = [record for record in caplog.records if "VOLLEYSTAT_TEAMS" in record.getMessage()]
     assert [record.levelno for record in named] == [logging.WARNING]
 

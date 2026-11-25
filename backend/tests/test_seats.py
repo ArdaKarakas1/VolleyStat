@@ -291,13 +291,22 @@ def test_the_captain_may_move_themselves(client, storage):
 
 def test_a_seat_change_writes_only_the_seats_and_the_count(client, storage):
     team, starting, waiting = team_with(client, storage, starters=2, substitutes=1)
+    # Both moved members also belong to another account's team, on the seat each of them leaves here.
+    other = create_team(as_account(client, storage, "test.baska.kaptan"), name="Güney Spor")
+    seed_member(storage, other["id"], "test.as0", seat="STARTER")
+    seed_member(storage, other["id"], "test.yedek0", seat="SUBSTITUTE")
     tables = ("teams", "memberships", "seat_pools", "users", "matches")
     before = {table: rows(storage, f"SELECT * FROM {table} ORDER BY rowid") for table in tables}
     assert seats_of(client, team["id"], 5, [(starting[0], "SUBSTITUTE"), (waiting[0], "STARTER")]).status_code == 200
     after = {table: rows(storage, f"SELECT * FROM {table} ORDER BY rowid") for table in tables}
-    expected_seats = {starting[0]: "SUBSTITUTE", waiting[0]: "STARTER"}
-    assert after["memberships"] == [{**row, "seat": expected_seats.get(row["user_id"], row["seat"])}
-                                    for row in before["memberships"]]
-    assert after["seat_pools"] == [{**row, "substitute_seats": 5} for row in before["seat_pools"]]
+    expected_seats = {(team["id"], starting[0]): "SUBSTITUTE", (team["id"], waiting[0]): "STARTER"}
+    assert after["memberships"] == [
+        {**row, "seat": expected_seats.get((row["team_id"], row["user_id"]), row["seat"])}
+        for row in before["memberships"]]
+    # The other team keeps its seats and its count: the move and the count write this team's rows only.
+    assert holders(storage, other["id"]) == {other["members"][0]["userId"]: "STARTER", starting[0]: "STARTER",
+                                             waiting[0]: "SUBSTITUTE"}
+    assert after["seat_pools"] == [{**row, "substitute_seats": 5 if row["team_id"] == team["id"] else 2}
+                                   for row in before["seat_pools"]]
     for table in ("teams", "users", "matches"):
         assert after[table] == before[table], table

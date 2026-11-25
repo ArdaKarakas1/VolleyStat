@@ -8,6 +8,7 @@ import sqlite3
 import threading
 import time
 import uuid
+from contextlib import closing
 
 import pytest
 
@@ -187,6 +188,21 @@ def test_a_twenty_first_membership_answers_team_limit_reached_member(client, sto
     assert snapshot(storage) == before
 
 
+def test_the_member_limit_answers_before_the_captain_limit(client, storage):
+    # The caller captains 3 teams and is a member of 17 more: both limits and the daily count are full.
+    for index in range(3):
+        create_team(client, name=f"Kendi Takımı {index + 1}")
+    for index in range(17):
+        other = as_account(client, storage, f"test.kaptan{index}")
+        seed_member(storage, create_team(other, name=f"Takım {index + 1}")["id"], OWNER)
+    assert (captaincies(storage), len(rows(storage, "SELECT 1 FROM memberships WHERE user_id=?",
+                                           user_id_of(storage, OWNER)))) == (3, 20)
+    before = snapshot(storage)
+    error = refused_as(put_team(client, {"name": "Yirmi Birinci"}), 409, "TEAM_LIMIT_REACHED")
+    assert error["details"] == {"scope": "MEMBER", "limit": 20}
+    assert snapshot(storage) == before
+
+
 def test_a_fourth_creation_in_a_day_answers_429_teams(client, storage, clock):
     created = [create_team(client, name=f"Takım {index + 1}") for index in range(3)]
     # The route that deletes a team comes with the members part. Until then the rows go straight from SQLite.
@@ -244,6 +260,57 @@ def test_a_creation_that_fails_after_its_reservation_gives_its_place_back(client
     assert snapshot(storage) == before
     # Neither failed creation kept its place of the day: three creations still pass.
     monkeypatch.setattr(teams, "_random_tag", real_draw)
+    for index in range(3):
+        create_team(client, name=f"Takım {index + 1}")
+
+
+def test_a_failed_creation_gives_its_place_back_while_it_still_holds_the_write_lock(client, storage, monkeypatch):
+    # Another creation of the same account waits for the write lock. If the place came back only after the
+    # rollback freed the lock, that creation could take the lock first, still count the failed creation's
+    # place and answer 429 although the account used fewer places.
+    def broken_draw():
+        raise RuntimeError("the draw of the tag broke")
+
+    real_release = accounts.Limiter.release
+    lock_held = []
+
+    def release(self, name, at):
+        with closing(sqlite3.connect(storage / "volleystat.sqlite3", timeout=0, isolation_level=None)) as probe:
+            try:
+                probe.execute("BEGIN IMMEDIATE")
+                probe.execute("ROLLBACK")
+                lock_held.append(False)
+            except sqlite3.OperationalError as refused:
+                assert "locked" in str(refused)
+                lock_held.append(True)
+        real_release(self, name, at)
+
+    monkeypatch.setattr(teams, "_random_tag", broken_draw)
+    monkeypatch.setattr(accounts.Limiter, "release", release)
+    with pytest.raises(RuntimeError):
+        put_team(client, {"name": "Yarım Kalan"})
+    # One release, made before the failed creation let the write lock go.
+    assert lock_held == [True]
+
+
+def test_a_creation_that_fails_at_its_commit_gives_its_place_back(client, storage, monkeypatch):
+    # The COMMIT itself fails here: a foreign key that SQLite checks only at COMMIT is broken inside the
+    # creating transaction. The rollback has already freed the lock when the route gives the place back.
+    real_draw_tag = teams.draw_tag
+
+    def draw_tag_that_breaks_the_commit(db):
+        db.execute("PRAGMA defer_foreign_keys=ON")
+        db.execute("INSERT INTO pool_blocks(pool_id, user_id, created_at) VALUES('yok', 'yok', 'yok')")
+        return real_draw_tag(db)
+
+    monkeypatch.setattr(teams, "draw_tag", draw_tag_that_breaks_the_commit)
+    before = snapshot(storage)
+    for _ in range(2):
+        with pytest.raises(sqlite3.IntegrityError):
+            put_team(client, {"name": "Yarım Kalan"})
+    assert snapshot(storage) == before
+    # Neither failed creation kept its place of the day: three creations still pass.
+    monkeypatch.setattr(teams, "draw_tag", real_draw_tag)
     for index in range(3):
         create_team(client, name=f"Takım {index + 1}")
 

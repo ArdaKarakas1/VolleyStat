@@ -237,22 +237,31 @@ def router(connect, db_path: Path, current_user: Callable[..., accounts.Caller],
                 if wait is not None:
                     accounts.too_many(wait)
                 reserved_at = at
-                created = accounts.iso(moment)
-                schedule = payload.schedule
-                db.execute("INSERT INTO teams(id, name, tag, match_weekday, match_time, created_at)"
-                           " VALUES(?,?,?,?,?,?)", (team_id, name, draw_tag(db), schedule.weekday if schedule else None,
-                                                    schedule.time if schedule else None, created))
-                db.execute("INSERT INTO seat_pools(id, kind, team_id, starter_seats, substitute_seats, created_at)"
-                           " VALUES(?,?,?,?,?,?)",
-                           (new_id(), "TEAM", team_id, STARTERS, payload.substituteSeats, created))
-                # The captain has seen every join so far: nobody else has joined.
-                db.execute("INSERT INTO memberships(team_id, user_id, role, seat, jersey, joined_at, joins_seen_at)"
-                           " VALUES(?,?,?,?,?,?,?)",
-                           (team_id, caller.id, "CAPTAIN", payload.captainSeat, payload.jersey, created, created))
-                response.status_code = 201
-                return team_payload(db, team_id, caller.id)
+                try:
+                    created = accounts.iso(moment)
+                    schedule = payload.schedule
+                    db.execute("INSERT INTO teams(id, name, tag, match_weekday, match_time, created_at)"
+                               " VALUES(?,?,?,?,?,?)", (team_id, name, draw_tag(db),
+                                                        schedule.weekday if schedule else None,
+                                                        schedule.time if schedule else None, created))
+                    db.execute("INSERT INTO seat_pools(id, kind, team_id, starter_seats, substitute_seats, created_at)"
+                               " VALUES(?,?,?,?,?,?)",
+                               (new_id(), "TEAM", team_id, STARTERS, payload.substituteSeats, created))
+                    # The captain has seen every join so far: nobody else has joined.
+                    db.execute("INSERT INTO memberships(team_id, user_id, role, seat, jersey, joined_at,"
+                               " joins_seen_at) VALUES(?,?,?,?,?,?,?)",
+                               (team_id, caller.id, "CAPTAIN", payload.captainSeat, payload.jersey, created, created))
+                    response.status_code = 201
+                    return team_payload(db, team_id, caller.id)
+                except BaseException:
+                    # The place goes back while this transaction still holds the write lock. A creation of the
+                    # same account that waits for the lock then counts only the places of creations that count.
+                    limiter.release(key, reserved_at)
+                    reserved_at = None
+                    raise
         except BaseException:
-            # A creation that ended without a team gives its place of the day back.
+            # Only a failed COMMIT reaches this with a place still taken. Its rollback has already freed the lock,
+            # so the place goes back a moment later than above.
             if reserved_at is not None:
                 limiter.release(key, reserved_at)
             raise
