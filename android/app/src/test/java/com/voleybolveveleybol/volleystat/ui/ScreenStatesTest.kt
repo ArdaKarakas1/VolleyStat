@@ -1247,6 +1247,23 @@ class ScreenStatesTest {
         compose.onNodeWithText(text(R.string.action_retry)).assertIsDisplayed()
     }
 
+    /**
+     * Checker finding P2: the server refuses a new upload at the floor also for the bytes that other unfinished
+     * uploads still owe, so a video that fits alone can meet the floor. A chunk meets half the floor. The text holds
+     * in both states: it names this upload together with the other uploads in progress, if there are any, and says
+     * neither that other uploads exist nor that this video alone takes the space.
+     */
+    @Test fun theFullDiskTextHoldsWithOtherUploadsInProgressAndAtAChunk() {
+        val said = context.getString(R.string.upload_storage_full, "10,7${nb}GB")
+        assertEquals(
+            "Bu videonun yüklemesi ve varsa süren öteki yüklemeler bitince sunucunun diskindeki boş yer 10,7${nb}GB " +
+                "sınırının altına inerdi. Sunucu bu yüzden yüklemeyi durdurdu. Video telefonunda kalır. " +
+                "Yüklemeyi sonra yeniden deneyebilirsin.",
+            said,
+        )
+        assertFalse(said, said.contains("Bu video sunucunun diskindeki boş yeri"))
+    }
+
     @Test fun theReportAndThePlayersTableSayTheServerDoesNotShowTheMatchAndDoNotSpin() {
         var statusOpened = 0
         var players by mutableStateOf(false)

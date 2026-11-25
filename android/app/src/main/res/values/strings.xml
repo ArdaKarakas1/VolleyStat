@@ -233,7 +233,7 @@
     <!-- Slice B3: the server's limits, worded with the numbers the server sent (docs/API_V1.md, Depolama sınırları). -->
     <string name="upload_quota_personal">Sunucu bu hesabın kişisel maç videolarına %1$s yer ayırdı. Sunucu bu hesaba en çok %2$s yer ayırır. Yeni video için önce eski bir maçı silebilirsin.</string>
     <string name="upload_quota_server">Sunucu bütün hesapların kişisel maç videolarına en çok %1$s yer ayırır. Bu video kalan yere sığmadı. Video telefonunda kalır. Yüklemeyi sonra yeniden deneyebilirsin.</string>
-    <string name="upload_storage_full">Bu video sunucunun diskindeki boş yeri %1$s sınırının altına indirirdi. Sunucu bu yüzden yüklemeyi durdurdu. Video telefonunda kalır. Yüklemeyi sonra yeniden deneyebilirsin.</string>
+    <string name="upload_storage_full">Bu videonun yüklemesi ve varsa süren öteki yüklemeler bitince sunucunun diskindeki boş yer %1$s sınırının altına inerdi. Sunucu bu yüzden yüklemeyi durdurdu. Video telefonunda kalır. Yüklemeyi sonra yeniden deneyebilirsin.</string>
     <string name="upload_error_checksum">Sunucuya ulaşan dosya telefondaki dosyayla iki kez uyuşmadı.</string>
     <string name="upload_busy">Uygulama aynı anda tek video yükler. Öteki yükleme bitince bu yüklemeyi başlat.</string>
     <string name="upload_blocked">Uygulama bu videoyu yükleyemez. Yüklemeyi iptal et ve başka bir videoyla yeni maç başlat.</string>
