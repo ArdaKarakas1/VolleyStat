@@ -41,16 +41,18 @@ CREATE TABLE IF NOT EXISTS uploads (
   next_offset INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'UPLOADING',
   video_id TEXT UNIQUE, created_at TEXT NOT NULL DEFAULT (datetime('now')),
   client_sha256 TEXT, finalize_started_at REAL,
-  -- A random token that complete writes with its FINALIZING mark. The request owns the verification while
-  -- the row holds its token: a takeover after 15 minutes writes a new one
+  -- A random token that complete writes with its FINALIZING mark. It starts with the mark of the server's run.
+  -- The request owns the verification while the row holds its token: a takeover after 15 minutes writes a new
+  -- one and the start of the next run clears it. A FINALIZING row without a token is abandoned
   finalize_token TEXT,
-  -- The wall clock moment of the last initiate or stored chunk. Information only: no decision reads it
+  -- The wall clock moment of the last initiate or stored chunk. Information only: no decision reads its value
+  -- and only an empty touch (this and touched_uptime NULL) marks a row stored before server 0.9
   touched_at REAL,
   -- The server's uptime (server_clock) at the last initiate or stored chunk. The sweep aborts an upload
   -- once the uptime is 24 h past it
   touched_uptime REAL,
   -- The server's uptime when complete wrote its FINALIZING mark. The sweep closes the verification 24 h
-  -- of uptime later and complete may take it over 15 minutes of uptime later
+  -- of uptime later. complete may take it over 15 minutes of uptime later and at once when it has no token
   finalize_started_uptime REAL,
   -- The account that started the upload or NULL once that account is deleted
   started_by TEXT

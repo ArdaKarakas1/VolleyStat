@@ -5,7 +5,6 @@ import hashlib
 import json
 import os
 import re
-import secrets
 import time
 from contextlib import asynccontextmanager
 from datetime import date
@@ -441,8 +440,9 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
     @app.post("/v1/uploads/{upload_id}/complete")
     def complete_upload(upload_id: str, caller: accounts.Caller = Depends(current_user)):
         part = upload_path(upload_id)
-        # This request owns the verification while the row holds this token (still_ours below).
-        token = secrets.token_hex(16)
+        # This request owns the verification while the row holds this token (still_ours below). The token carries
+        # the mark of this run of the server, so the start of a later run frees it (sweep.Sweeper.resume).
+        token = app.state.sweeper.token()
         resume_from = None
         with connect(write=True) as db:
             access.session_user(db, caller)
@@ -475,8 +475,10 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
             fail("UPLOAD_INCOMPLETE", "Stored bytes were shorter than recorded; resume the upload", 409, expectedSize=record["expected_size"], nextOffset=resume_from)
 
         def still_ours(db) -> bool:
-            # Only a takeover ends the ownership: a later complete that found this verification 15 minutes of
-            # uptime old wrote its own token. Every write below checks the token inside its own write transaction.
+            # Two things end the ownership: a takeover (a later complete that found this verification 15 minutes of
+            # uptime old wrote its own token), and the start of the next server after a forced stop let the storage
+            # lock go while this request ran (the start cleared the token). Every write below checks the token
+            # inside its own write transaction.
             row = db.execute("SELECT status, finalize_token FROM uploads WHERE id=?", (upload_id,)).fetchone()
             return bool(row) and row["status"] == "FINALIZING" and row["finalize_token"] == token
 
@@ -493,12 +495,13 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
             if record["client_sha256"] and record["client_sha256"] != digest:
                 with connect(write=True) as db:
                     if not still_ours(db):
-                        # The request that took over checks the same file now: its bytes and the row are its own.
+                        # Another request took over and may check the same file now, or the next server freed the
+                        # verification: the bytes and the row are no longer this request's.
                         fail("UPLOAD_FINALIZING", "Another request took over verification of this upload", 409)
                     # Reset the row and empty the file while this transaction holds the write lock, so no
-                    # takeover comes between. A stop between the truncate and the commit leaves the row
-                    # FINALIZING over fewer bytes than recorded: the complete that takes it over 15 minutes
-                    # later reopens the upload at the bytes the disk holds.
+                    # takeover comes between. A crash between the truncate and the commit leaves the row
+                    # FINALIZING over fewer bytes than recorded: the next start frees it, and the complete that
+                    # takes it over reopens the upload at the bytes the disk holds.
                     db.execute("UPDATE uploads SET status='UPLOADING', next_offset=0, finalize_started_at=NULL,"
                                " finalize_started_uptime=NULL, finalize_token=NULL, touched_at=?, touched_uptime=?"
                                " WHERE id=?", (time.time(), uptime(db), upload_id))

@@ -90,7 +90,8 @@ def test_a_match_whose_upload_is_being_verified_is_not_deleted_midway(client, st
     match_id = create_match(client)
     upload_id = create_upload(client, match_id, size=5).json()["uploadId"]
     client.put(f"/v1/uploads/{upload_id}/chunks?offset=0", content=b"abcde")
-    set_upload(storage, upload_id, status="FINALIZING", finalize_started_uptime=uptime(client))
+    # A request of this server checks the file: the row holds its token.
+    set_upload(storage, upload_id, status="FINALIZING", finalize_started_uptime=uptime(client), finalize_token="running")
 
     refused = client.delete(f"/v1/matches/{match_id}")
     assert refused.status_code == 409 and refused.json()["error"]["code"] == "UPLOAD_FINALIZING"
@@ -281,7 +282,8 @@ def test_deleting_the_account_while_an_upload_is_being_verified_answers_409_and_
         match_id = create_match(client)
         upload_id = create_upload(client, match_id, size=5).json()["uploadId"]
         client.put(f"/v1/uploads/{upload_id}/chunks?offset=0", content=b"abcde")
-        set_upload(storage, upload_id, status="FINALIZING", finalize_started_uptime=uptime(client))
+        set_upload(storage, upload_id, status="FINALIZING", finalize_started_uptime=uptime(client),
+                   finalize_token="running")
         before = database_bytes(storage)
         refused = delete_account(client)
         assert (refused.status_code, refused.json()["error"]["code"]) == (409, "UPLOAD_FINALIZING")
@@ -293,6 +295,25 @@ def test_deleting_the_account_while_an_upload_is_being_verified_answers_409_and_
         set_upload(storage, upload_id, finalize_started_uptime=uptime(client) - 3600, finalize_started_at=time.time())
         assert delete_account(client).status_code == 204
         assert media_files(storage) == [] and rows(storage, "SELECT 1 FROM matches") == []
+
+
+def test_deleting_the_account_right_after_a_restart_deletes_an_upload_whose_verification_the_stop_cut(
+        storage, cheap_hashing):
+    """The server stopped while it verified an upload of the account. When the server starts again no other process
+    can run a verification in its storage folder, so the start frees that verification, and the account deletion
+    right after the start deletes everything."""
+    with deleting_account(storage) as (client, user_id):
+        match_id = create_match(client)
+        upload_id = create_upload(client, match_id, size=5).json()["uploadId"]
+        client.put(f"/v1/uploads/{upload_id}/chunks?offset=0", content=b"abcde")
+        set_upload(storage, upload_id, status="FINALIZING", finalize_started_uptime=uptime(client),
+                   finalize_token="cut")
+        refused = delete_account(client)
+        assert (refused.status_code, refused.json()["error"]["code"]) == (409, "UPLOAD_FINALIZING")
+    with deleting_account(storage, start_worker=True) as (client, user_id):
+        assert delete_account(client).status_code == 204
+        assert media_files(storage) == [] and rows(storage, "SELECT 1 FROM matches") == []
+        assert rows(storage, "SELECT COUNT(*) AS n FROM users") == [{"n": 0}]
 
 
 def test_a_changed_password_during_the_deletion_deletes_no_byte(storage, make_clip, cheap_hashing, monkeypatch):

@@ -200,10 +200,12 @@ def test_the_new_indexes_are_created_after_the_columns_on_older_storage(storage)
         assert rows(storage, "SELECT status, owner_user_id FROM matches") == [{"status": "LEGACY", "owner_user_id": None}]
 
 
-def test_a_verification_left_by_0_8_counts_from_the_first_start_of_0_9(storage, capsys):
-    """Server 0.8 kept no uptime. A verification it left unfinished a month ago by the wall clock counts as
-    started at the uptime of the first start: legacy --delete refuses its match until the server has run 15
-    minutes, and the sweep closes another such verification a day of uptime after the first start."""
+def test_a_verification_left_by_0_8_is_abandoned_at_once_and_closes_a_day_of_uptime_after_the_first_start_of_0_9(
+        storage, capsys):
+    """Server 0.8 kept no uptime and wrote no token. A verification it left unfinished a month ago by the wall
+    clock counts as started at the uptime of the first start, and without a token it is abandoned at once:
+    legacy --delete deletes its match right after that start. The sweep closes another such verification a day
+    of uptime after the first start."""
     with serve(storage, None) as client:
         held, closed = full_upload(client), full_upload(client)
     month_ago = time.time() - 30 * DAY
@@ -212,17 +214,14 @@ def test_a_verification_left_by_0_8_counts_from_the_first_start_of_0_9(storage, 
     held_match = rows(storage, "SELECT match_id FROM uploads WHERE id=?", held)[0]["match_id"]
     back_to_before_accounts(storage)
     with serve(storage, None) as client:
-        assert rows(storage, "SELECT touched_uptime, finalize_started_uptime FROM uploads") == [
-            {"touched_uptime": None, "finalize_started_uptime": 0.0}] * 2
+        assert rows(storage, "SELECT touched_uptime, finalize_started_uptime, finalize_token FROM uploads") == [
+            {"touched_uptime": None, "finalize_started_uptime": 0.0, "finalize_token": None}] * 2
         capsys.readouterr()
-        assert legacy(storage, "--delete", "--match", held_match) == 1
-        assert capsys.readouterr().err.strip() == f"Match {held_match} has an upload that is being verified."
-        swept = Sweep(client)
-        assert swept.run(STALE - 1) == 0
-        assert legacy(storage, "--delete", "--match", held_match) == 1
-        assert swept.run(1) == 0
         assert legacy(storage, "--delete", "--match", held_match) == 0
-        assert swept.run(DAY - STALE - 1) == 0
+        assert capsys.readouterr().out.strip() == "Komut 1 maçı sildi."
+        assert rows(storage, "SELECT id FROM uploads") == [{"id": closed}]
+        swept = Sweep(client)
+        assert swept.run(DAY - 1) == 0
         assert rows(storage, "SELECT status FROM uploads WHERE id=?", closed) == [{"status": "FINALIZING"}]
         assert swept.run(1) == 1
         assert rows(storage, "SELECT status FROM uploads WHERE id=?", closed) == [{"status": "ABORTED"}]
@@ -232,8 +231,9 @@ def test_storage_of_an_earlier_b3_build_opens_and_its_unfinished_uploads_count_f
     """The builds of B3 before the uptime counter measured uptime with the wall clock. The start drops their
     clock tables and the index on the wall clock touch, and leaves the two upload columns of the kept moment
     unused. Every unfinished upload counts as touched, and every verification as started, at the uptime of the
-    first start: each gets a full day, and a dead verification 15 minutes, of uptime from there. An upload
-    stored before server 0.9 still goes at the first pass. A second start changes nothing."""
+    first start: each gets a full day of uptime from there. The start frees every verification, so the first
+    complete takes one over at once. An upload stored before server 0.9 still goes at the first pass. A second
+    start changes nothing."""
     with serve(storage, None) as client:
         waiting, taken, left = full_upload(client), full_upload(client), full_upload(client)
         before_accounts = create_upload(client, create_match(client), size=10).json()["uploadId"]
@@ -258,14 +258,12 @@ def test_storage_of_an_earlier_b3_build_opens_and_its_unfinished_uploads_count_f
             storage, "SELECT id, touched_uptime, finalize_started_uptime FROM uploads")} == {
             waiting: (0.0, None), taken: (0.0, 0.0), left: (0.0, 0.0), before_accounts: (None, None)}
         swept = Sweep(client)
+        assert rows(storage, "SELECT finalize_token FROM uploads WHERE id IN (?, ?)", taken, left) == [
+            {"finalize_token": None}] * 2
         assert swept.swept.run_once() == {"uploads": 1}
         assert rows(storage, "SELECT status FROM uploads WHERE id=?", before_accounts) == [{"status": "ABORTED"}]
-        assert swept.run(STALE - 1) == 0
-        busy = client.post(f"/v1/uploads/{taken}/complete")
-        assert (busy.status_code, busy.json()["error"]["code"]) == (409, "UPLOAD_FINALIZING")
-        assert swept.run(1) == 0
         assert client.post(f"/v1/uploads/{taken}/complete").status_code == 200
-        assert swept.run(DAY - STALE - 1) == 0
+        assert swept.run(DAY - 1) == 0
         assert {row["status"] for row in rows(storage, "SELECT status FROM uploads WHERE id IN (?, ?)", waiting, left)} == {
             "UPLOADING", "FINALIZING"}
         assert swept.run(1) == 2
@@ -460,7 +458,9 @@ def test_legacy_delete_refuses_a_match_whose_upload_is_being_verified(client, st
     client.put(f"/v1/uploads/{upload_id}/chunks?offset=0", content=b"abcde")
     # The command reads the uptime the server stored: 3 hours.
     write_uptime(storage, 3 * 3600)
-    set_upload(storage, upload_id, status="FINALIZING", finalize_started_uptime=3 * 3600 - STALE + 1)
+    # A request of the running server checks the file: the row holds its token.
+    set_upload(storage, upload_id, status="FINALIZING", finalize_started_uptime=3 * 3600 - STALE + 1,
+               finalize_token="running")
     make_legacy(storage, match_id)
     before = dump(storage)
     capsys.readouterr()

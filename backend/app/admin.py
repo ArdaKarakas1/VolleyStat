@@ -102,7 +102,8 @@ def legacy_delete(db_path: Path, storage: Path, wanted: list[str] | None) -> int
     with connector(db_path)(write=True) as db:
         chosen = _legacy_ids(db, wanted)
         # The uptime the server stored at its last pass or stop. A running server has run on since its last
-        # pass, so a verification looks younger here than it is, never older.
+        # pass, so a verification looks younger here than it is, never older. A verification without a token
+        # is abandoned at once (deletion.finalizing): server 0.8 wrote none.
         at = sweep.stored_uptime(db)
         for match_id in chosen:
             if deletion.finalizing(db, match_id, at):

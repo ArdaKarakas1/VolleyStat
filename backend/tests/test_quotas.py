@@ -581,7 +581,7 @@ class RouteClock:
 @pytest.fixture
 def route_clock(monkeypatch):
     """The wall clock as the upload routes read it. They write touched_at and finalize_started_at with it, as
-    information only: no decision reads those two columns. The sessions keep the real clock."""
+    information only: no decision reads the value of those two columns. The sessions keep the real clock."""
     clock = RouteClock()
     monkeypatch.setattr(main_module, "time", clock)
     return clock
@@ -940,33 +940,59 @@ def test_a_verification_counts_only_the_uptime_after_it_started(client, storage,
 
 
 @pytest.mark.parametrize("end", ["stop", "crash"])
-def test_a_dead_verification_is_taken_over_after_15_minutes_of_uptime_also_across_a_restart(
-        client, storage, computer, end):
-    """A verification starts, a minute and 40 seconds of uptime pass, and the server stops (or crashes 40
-    seconds after its last pass) and stays off for 19 minutes. The wall clock then reads 21 minutes after the
-    start of the verification, but only uptime counts. complete, DELETE of the upload and DELETE of the match
-    answer 409 UPLOAD_FINALIZING until the verification is 15 minutes of uptime old; then complete takes it
-    over and writes the video, and the two deletions go through. A crash loses the 40 seconds after the last
-    pass, so the takeover comes 40 seconds of uptime later, never earlier."""
+def test_a_start_frees_at_once_the_verifications_its_stop_or_crash_cut(client, storage, computer, end):
+    """Three verifications start 50 seconds after a pass, and the server stops (or crashes) 5 seconds later and
+    stays off for 10 minutes. A crash leaves their start ahead of the stored uptime. The storage lock means that
+    no other process runs a verification in this folder when the server starts, so the start takes the token of
+    each and leaves their start as it was. Right after the start, complete takes one over and writes the video,
+    and DELETE of the upload and DELETE of the match go through."""
     taken, aborted, deleted = (full_upload(client) for _ in range(3))
     computer.boot()
+    computer.run(120)
+    computer.go(50)
     for upload_id in (taken, aborted, deleted):
-        verifying(storage, upload_id, computer, "dead")
-    started = computer.ran
-    computer.run(60)
-    computer.go(40)
+        verifying(storage, upload_id, computer, "cut")
+    started = computer.uptime()
+    computer.go(5)
     if end == "stop":
         computer.stop()
     else:
         computer.crash()
-    computer.off(19 * 60)
+    assert stored_uptime(storage) == (175 if end == "stop" else 120)
+    computer.off(600)
     computer.boot()
+    assert rows(storage, "SELECT status, finalize_started_uptime, finalize_token FROM uploads") == [
+        {"status": "FINALIZING", "finalize_started_uptime": started, "finalize_token": None}] * 3
     deleted_match = rows(storage, "SELECT match_id FROM uploads WHERE id=?", deleted)[0]["match_id"]
-    free_at = started + STALE + (40 if end == "crash" else 0)
-    computer.run_to(free_at - 1, every=60)
+    assert client.post(f"/v1/uploads/{taken}/complete").status_code == 200
+    assert client.delete(f"/v1/uploads/{aborted}").status_code == 204
+    assert client.delete(f"/v1/matches/{deleted_match}").status_code == 204
+    assert {row["id"]: (row["status"], row["finalize_token"])
+            for row in rows(storage, "SELECT id, status, finalize_token FROM uploads")} == {
+        taken: ("COMPLETED", None), aborted: ("ABORTED", None)}
+
+
+def test_a_verification_whose_request_hangs_holds_its_upload_and_its_match_for_15_minutes_of_uptime(
+        client, storage, computer):
+    """The server runs on, but three requests hang while they check their files: this process still holds the
+    token of each verification. complete, DELETE of the upload and DELETE of the match answer 409
+    UPLOAD_FINALIZING until the verifications are 15 minutes of uptime old. Then complete takes one over and
+    writes the video, and the two deletions go through. An 8-hour sleep in between adds nothing."""
+    taken, aborted, deleted = (full_upload(client) for _ in range(3))
+    computer.boot()
+    computer.run(60)
+    computer.go(40)
+    for upload_id in (taken, aborted, deleted):
+        verifying(storage, upload_id, computer, "hung")
+    started = computer.ran
+    computer.run(5 * 60, every=60)
+    computer.sleep(8 * HOUR)
+    deleted_match = rows(storage, "SELECT match_id FROM uploads WHERE id=?", deleted)[0]["match_id"]
+    computer.run_to(started + STALE - 1, every=60)
     for answer in (client.post(f"/v1/uploads/{taken}/complete"), client.delete(f"/v1/uploads/{aborted}"),
                    client.delete(f"/v1/matches/{deleted_match}")):
         assert (answer.status_code, answer.json()["error"]["code"]) == (409, "UPLOAD_FINALIZING")
+    assert rows(storage, "SELECT finalize_token FROM uploads") == [{"finalize_token": "hung"}] * 3
     computer.run(1)
     assert client.post(f"/v1/uploads/{taken}/complete").status_code == 200
     assert client.delete(f"/v1/uploads/{aborted}").status_code == 204
@@ -1108,6 +1134,41 @@ def test_a_nap_shorter_than_the_longest_pass_gap_counts_as_uptime_where_the_mono
     goes_at(computer, [upload_id], touched + DAY - 100)
 
 
+def test_short_naps_add_up_and_the_upload_goes_early_by_their_sum(client, storage, computer):
+    """The checker's probe: the computer naps twice for 110 seconds, each time 10 seconds after a pass, and its
+    monotonic clock counts the naps. Each gap is 120 seconds, not longer than MAX_PASS_GAP_SECONDS, so the server
+    counts both naps as uptime. The upload goes 220 seconds early, the sum of the two naps, and not earlier."""
+    computer.sleep_counts = True
+    upload_id = new_upload(client)
+    computer.boot()
+    chunk(client, upload_id)
+    touched = computer.ran
+    for _ in range(2):
+        computer.run(60)
+        computer.go(10)
+        computer.sleep(110)
+        assert computer.sweep_pass() == 0
+    goes_at(computer, [upload_id], touched + DAY - 220)
+
+
+def test_a_slow_pass_that_still_counts_closes_an_upload_up_to_three_minutes_of_uptime_after_its_day(
+        client, storage, computer):
+    """The checker's probe: the last pass before an upload's day ends comes 10 seconds of uptime before the end.
+    The next pass waits for the database and comes 170 seconds later. A gap of at most MAX_PASS_GAP_SECONDS
+    counts in full, so that pass counts the 170 seconds and closes the upload 160 seconds of uptime after its
+    day: later than the minute of a pass, and never later than three minutes."""
+    upload_id = new_upload(client)
+    computer.boot()
+    chunk(client, upload_id)
+    touched = computer.ran
+    assert computer.run_to(touched + DAY - 10) == 0
+    assert upload_status(storage, upload_id) == "UPLOADING"
+    computer.go(170)
+    assert computer.sweep_pass() == 1
+    assert upload_status(storage, upload_id) == "ABORTED"
+    assert computer.ran - (touched + DAY) == 160 <= sweep.MAX_PASS_GAP_SECONDS
+
+
 def test_a_pass_that_comes_after_more_than_three_minutes_counts_the_whole_gap_as_no_uptime(client, storage, computer):
     """A pass waits for the database and comes 250 seconds after the last one while the server runs. The server
     can not tell that gap from a sleep, so it counts no uptime for it: an upload touched before it goes 250
@@ -1176,12 +1237,14 @@ def test_a_wall_clock_that_steps_while_the_server_runs_moves_no_upload(client, s
 def test_a_wall_clock_wrong_at_the_start_moves_no_upload_and_no_verification(
         client, storage, computer, wrong, corrected):
     """An hour of uptime, a 2-hour sleep, an hour of uptime, a stop and an 8-hour night. The server starts with
-    its wall clock `wrong` seconds off. In the wrong minute one phone sends its last chunk and two phones call
-    complete; their requests die with a restart 5 minutes later. The wall clock is put right a minute after the
-    start, or never. complete takes one verification over 15 minutes of uptime after it started, the sweep
-    closes the other a day of uptime after it started, and each upload goes a day of uptime after its last
-    chunk."""
-    first, wrong_minute, taken, left = new_upload(client), new_upload(client), full_upload(client), full_upload(client)
+    its wall clock `wrong` seconds off, and so does its restart 5 minutes later. The wall clock is put right a
+    minute after each start, or never. In the first wrong minute one phone sends its last chunk and two phones
+    call complete; the restart cuts their requests. The first complete after the restart takes one verification
+    over at once, and the sweep closes the other a day of uptime after it started. In the second wrong minute a
+    third phone calls complete and its request hangs while the server runs on: complete takes that verification
+    over 15 minutes of uptime after it started. Each upload goes a day of uptime after its last chunk."""
+    first, wrong_minute = new_upload(client), new_upload(client)
+    cut, left, hung = (full_upload(client) for _ in range(3))
     computer.boot()
     chunk(client, first)
     touched_first = computer.ran
@@ -1194,7 +1257,7 @@ def test_a_wall_clock_wrong_at_the_start_moves_no_upload_and_no_verification(
     assert computer.boot(wrong=wrong) == 0
     computer.go(10)
     chunk(client, wrong_minute)
-    verifying(storage, taken, computer, "dead")
+    verifying(storage, cut, computer, "dead")
     verifying(storage, left, computer, "dead")
     started = computer.ran
     computer.go(50)
@@ -1204,17 +1267,25 @@ def test_a_wall_clock_wrong_at_the_start_moves_no_upload_and_no_verification(
     computer.run(4 * 60)
     computer.stop()
     computer.off(60)
-    computer.boot()
-    computer.run_to(started + STALE - 1, every=60)
-    answer = client.post(f"/v1/uploads/{taken}/complete")
+    assert computer.boot(wrong=wrong) == 0
+    assert client.post(f"/v1/uploads/{cut}/complete").status_code == 200
+    computer.go(10)
+    verifying(storage, hung, computer, "hung")
+    hung_started = computer.ran
+    computer.go(50)
+    if corrected:
+        computer.set_wall(0)
+    assert computer.sweep_pass() == 0
+    computer.run_to(hung_started + STALE - 1, every=60)
+    answer = client.post(f"/v1/uploads/{hung}/complete")
     assert (answer.status_code, answer.json()["error"]["code"]) == (409, "UPLOAD_FINALIZING")
     computer.run(1)
-    assert client.post(f"/v1/uploads/{taken}/complete").status_code == 200
+    assert client.post(f"/v1/uploads/{hung}/complete").status_code == 200
     computer.run(HOUR)
     computer.sleep(8 * HOUR)
     goes_at(computer, [first], touched_first + DAY)
     goes_at(computer, [wrong_minute, left], started + DAY)
-    assert upload_status(storage, taken) == "COMPLETED"
+    assert {upload_status(storage, each) for each in (cut, hung)} == {"COMPLETED"}
 
 
 @pytest.mark.parametrize("hours", [20, 2])
@@ -1431,6 +1502,102 @@ def test_a_checksum_mismatch_after_a_takeover_leaves_the_file_and_the_row_to_the
     assert part.read_bytes() == b""
     assert rows(storage, "SELECT status, next_offset, finalize_started_uptime, finalize_token FROM uploads") == [
         {"status": "UPLOADING", "next_offset": 0, "finalize_started_uptime": None, "finalize_token": None}]
+
+
+def test_the_start_frees_the_cut_verifications_before_the_server_answers_a_request(storage, monkeypatch):
+    """The lifespan starts the sweep before the server answers anything, and the start reads the stored uptime and
+    frees the verifications of the process before it there and then, not on the sweep thread. The first request
+    finds them free even when the thread never ran a pass."""
+    with serve(storage, None) as client:
+        upload_id = full_upload(client)
+    write_uptime(storage, 5 * HOUR)
+    set_upload(storage, upload_id, status="FINALIZING", finalize_started_uptime=5 * HOUR, finalize_token="cut")
+    loops = []
+    monkeypatch.setattr(sweep.Sweeper, "_loop", lambda self: loops.append(self))
+    with serve(storage, None, start_worker=True) as client:
+        assert rows(storage, "SELECT status, finalize_token FROM uploads") == [
+            {"status": "FINALIZING", "finalize_token": None}]
+        assert client.post(f"/v1/uploads/{upload_id}/complete").status_code == 200
+    assert len(loops) == 1
+
+
+def test_a_late_read_of_the_uptime_frees_only_the_verifications_of_the_process_before(
+        client, storage, computer, monkeypatch):
+    """The server crashed while it verified an upload. Its next start could not read the stored uptime (the
+    database was busy), so the sweep thread reads it later. Until then the cut verification holds its upload. A
+    phone calls complete on another upload, and the late read comes while that request checks the file. The read
+    frees the verification the crash cut but not the one this process runs: the request writes its video, and
+    the next complete takes the cut verification over at once."""
+    cut, running = full_upload(client), full_upload(client)
+    computer.boot()
+    computer.run(HOUR)
+    verifying(storage, cut, computer, "cut")
+    computer.crash()
+    computer.off(60)
+    computer.ticks = Ticks(5.0)
+    reborn = sweep.Sweeper(computer._connect, computer._files, monotonic=computer.ticks)
+    client.app.state.sweeper = computer.swept = reborn
+    held = client.post(f"/v1/uploads/{cut}/complete")
+    assert (held.status_code, held.json()["error"]["code"]) == (409, "UPLOAD_FINALIZING")
+    probe, during = main_module.media.probe_video, []
+
+    def read_late(*arguments):
+        reborn.resume()
+        during.extend(rows(storage, "SELECT id, status, finalize_token FROM uploads ORDER BY rowid"))
+        return probe(*arguments)
+
+    monkeypatch.setattr(main_module.media, "probe_video", read_late)
+    done = client.post(f"/v1/uploads/{running}/complete")
+    assert done.status_code == 200, done.text
+    assert [(row["id"], row["status"], row["finalize_token"] is None) for row in during] == [
+        (cut, "FINALIZING", True), (running, "FINALIZING", False)]
+    monkeypatch.setattr(main_module.media, "probe_video", probe)
+    assert client.post(f"/v1/uploads/{cut}/complete").status_code == 200
+    assert {row["status"] for row in rows(storage, "SELECT status FROM uploads")} == {"COMPLETED"}
+
+
+def test_a_request_that_outlives_its_server_writes_nothing_once_the_next_server_freed_its_verification(
+        storage, monkeypatch):
+    """A forced stop ends the lifespan of the server, which lets the storage folder go, while a complete still
+    checks its file. The next server takes the folder and frees the verification at its start, and its first
+    complete takes the verification over and writes the video. The request of the old server then finds its
+    token gone: it answers 409 UPLOAD_FINALIZING and writes nothing."""
+    marked, release, answers = threading.Event(), threading.Event(), []
+    probe = main_module.media.probe_video
+
+    def hangs_once(*arguments):
+        if not marked.is_set():
+            marked.set()
+            assert release.wait(10)
+        return probe(*arguments)
+
+    monkeypatch.setattr(main_module.media, "probe_video", hangs_once)
+    with serve(storage, None) as old:
+        upload_id = full_upload(old)
+        old.app.state.storage_lock.acquire()
+        request = threading.Thread(target=lambda: answers.append(old.post(f"/v1/uploads/{upload_id}/complete")))
+        request.start()
+        try:
+            assert marked.wait(10)
+            with pytest.raises(storagelock.StorageInUse):
+                with TestClient(create_app(storage, analyzer="none")):
+                    pass
+            # The forced stop: the old lifespan lets the folder go, and the request runs on.
+            old.app.state.storage_lock.release()
+            with serve(storage, None, start_worker=True) as new:
+                assert rows(storage, "SELECT status, finalize_token FROM uploads") == [
+                    {"status": "FINALIZING", "finalize_token": None}]
+                taken = new.post(f"/v1/uploads/{upload_id}/complete")
+                assert taken.status_code == 200, taken.text
+        finally:
+            release.set()
+            request.join(10)
+    stale, = answers
+    assert (stale.status_code, stale.json()["error"]["code"]) == (409, "UPLOAD_FINALIZING")
+    video_id = taken.json()["videoId"]
+    assert rows(storage, "SELECT id FROM videos") == [{"id": video_id}]
+    assert rows(storage, "SELECT status, video_id, finalize_token FROM uploads") == [
+        {"status": "COMPLETED", "video_id": video_id, "finalize_token": None}]
 
 
 def test_a_pass_writes_the_uptime_it_reads_once_it_holds_the_write_lock_and_moves_no_touch(

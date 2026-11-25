@@ -10,9 +10,10 @@ from pathlib import Path
 
 from .jobs import ACTIVE_STATES
 
-# A verification that started this many seconds of server uptime ago (sweep.py) is treated as abandoned
-# (crashed process) and may be taken over by the next complete call. A younger one holds its match
-# against deletion.
+# A verification that started this many seconds of server uptime ago (sweep.py) is treated as abandoned (its
+# request hangs) and may be taken over by the next complete call. A younger one holds its match against deletion.
+# A verification without a token is abandoned at once: the start of the server frees every verification that an
+# earlier process left (sweep.Sweeper.resume), and server 0.8 wrote no token.
 FINALIZE_STALE_SECONDS = 15 * 60
 
 
@@ -48,17 +49,20 @@ class Removed:
 
 
 def still_verifying(upload, uptime: float) -> bool:
-    """True while the FINALIZING upload's verification started less than FINALIZE_STALE_SECONDS of server uptime
-    before `uptime`. A row without the uptime of its start (stored before server 0.9) is abandoned."""
+    """True while the FINALIZING upload's verification holds a token and started less than FINALIZE_STALE_SECONDS
+    of server uptime before `uptime`. A row without a token, or without the uptime of its start (stored before
+    server 0.9), is abandoned."""
     started = upload["finalize_started_uptime"]
-    return started is not None and uptime - started < FINALIZE_STALE_SECONDS
+    return (upload["finalize_token"] is not None and started is not None
+            and uptime - started < FINALIZE_STALE_SECONDS)
 
 
 def finalizing(db, match_id: str, uptime: float) -> bool:
-    """True while a verification that started less than FINALIZE_STALE_SECONDS of server uptime before `uptime`
-    is turning an upload of the match into a video."""
+    """True while a verification that holds a token and started less than FINALIZE_STALE_SECONDS of server uptime
+    before `uptime` is turning an upload of the match into a video (still_verifying, in SQL)."""
     return db.execute(
-        "SELECT 1 FROM uploads WHERE match_id=? AND status='FINALIZING' AND ? - finalize_started_uptime < ?",
+        "SELECT 1 FROM uploads WHERE match_id=? AND status='FINALIZING' AND finalize_token IS NOT NULL"
+        " AND ? - finalize_started_uptime < ?",
         (match_id, uptime, FINALIZE_STALE_SECONDS)).fetchone() is not None
 
 
