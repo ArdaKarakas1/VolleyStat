@@ -2203,6 +2203,166 @@
           }
         }
       }
+    },
+    "/v1/teams/{team_id}/logo": {
+      "put": {
+        "summary": "Put Logo",
+        "description": "Set both images of the team's logo (captain).\n\nEach image is a simple lossy WebP: at most 256 px and 36 KiB for members, at most 128 px and 8 KiB for link\nviews. The first image that breaks the rule is named in 422 LOGO_INVALID, and nothing is written. A change\nmoves the logo's version; the same bytes again change nothing. A replaced logo leaves no bytes behind: the\nrows are overwritten with zeros (secure_delete) and the write-ahead log is emptied after the commit.",
+        "operationId": "put_logo_v1_teams__team_id__logo_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Team Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LogoInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Logo",
+        "description": "Remove both images of the team's logo (captain) and move its version. Without a logo nothing changes.",
+        "operationId": "delete_logo_v1_teams__team_id__logo_delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Team Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "Get Logo",
+        "description": "One image of the team's logo (member). The ETag is the logo's version, so a phone that holds it gets 304.",
+        "operationId": "get_logo_v1_teams__team_id__logo_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Team Id"
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "enum": [
+                "large",
+                "small"
+              ],
+              "type": "string",
+              "title": "Size"
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "If-None-Match"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The image of the logo",
+            "content": {
+              "image/webp": {}
+            }
+          },
+          "304": {
+            "description": "If-None-Match names the logo's current version"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2409,6 +2569,28 @@
           "password"
         ],
         "title": "LoginInput"
+      },
+      "LogoInput": {
+        "properties": {
+          "large": {
+            "type": "string",
+            "maxLength": 50000,
+            "title": "Large"
+          },
+          "small": {
+            "type": "string",
+            "maxLength": 11000,
+            "title": "Small"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "large",
+          "small"
+        ],
+        "title": "LogoInput",
+        "description": "Both images of a logo in base64: at most 256 px for members and at most 128 px for link views (design 4.2)."
       },
       "MatchInput": {
         "properties": {
