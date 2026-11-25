@@ -205,8 +205,8 @@ def test_the_member_limit_answers_before_the_captain_limit(client, storage):
 
 def test_a_fourth_creation_in_a_day_answers_429_teams(client, storage, clock):
     created = [create_team(client, name=f"Takım {index + 1}") for index in range(3)]
-    # The route that deletes a team comes with the members part. Until then the rows go straight from SQLite.
-    delete_team_rows(storage, created[0]["id"])
+    # The deletion frees a captaincy, not the place of the day.
+    assert client.delete(f"/v1/teams/{created[0]['id']}").status_code == 204
     # The caller captains 2 teams, so the captain limit (3) can not answer first.
     assert captaincies(storage) == 2
     before = snapshot(storage)

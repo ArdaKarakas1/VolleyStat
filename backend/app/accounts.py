@@ -848,9 +848,11 @@ def router(connect, db_path: Path, signup_mode: str, limiter: Limiter, pool: Has
     @routes.post("/v1/me/delete", status_code=204)
     async def delete_account(payload: PasswordInput, caller: Caller = Depends(current_user)):
         """Delete the account with its personal matches: their uploads, videos, analyses and bytes,
-        then the user row, its sessions and its phones. Nothing of it stays in the file.
+        then the user row, its sessions, its phones, its memberships and its blocks. Nothing of it stays in
+        the file.
 
-        Matches that belong to no account (LEGACY) stay; the operator deletes them.
+        Every team the account captains passes to its earliest-joined other member, or goes when nobody else
+        is in it. Matches that belong to no account (LEGACY) stay; the operator deletes them.
         """
         moment = now()
         user = caller.user
@@ -871,6 +873,8 @@ def router(connect, db_path: Path, signup_mode: str, limiter: Limiter, pool: Has
                 # matches: the same refusal as DELETE /v1/matches/{id}, before any row or file goes.
                 if any(deletion.finalizing(db, match_id, at) for match_id in owned):
                     fail("UPLOAD_FINALIZING", "An upload of this account is being verified", 409)
+                # A captaincy passes on past the captain limit, so no team stays without a captain (design 3.7).
+                deletion.hand_over_or_delete_teams(db, user["id"], iso(now()))
                 removed = [deletion.delete_match_rows(db, files, match_id) for match_id in owned]
                 # No row names the deleted account afterwards (design 3.7, step 5).
                 db.execute("UPDATE uploads SET started_by=NULL WHERE started_by=?", (user["id"],))

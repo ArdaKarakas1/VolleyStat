@@ -1,4 +1,4 @@
-"""Where the bytes of uploads and videos live, and what deleting a match removes.
+"""Where the bytes of uploads and videos live, and what deleting a match or a team removes.
 
 The routes, the analysis worker, the upload sweep, account deletion and the operator's legacy
 command share these, so every deletion removes the same rows and the same files.
@@ -86,3 +86,45 @@ def delete_match_rows(db, files: MediaFiles, match_id: str) -> Removed:
     for upload in uploads:
         paths += [files.upload(upload["id"]), files.old_part(upload["id"])]
     return Removed(paths, pending)
+
+
+def delete_team_rows(db, team_id: str) -> None:
+    """Delete a team in the caller's write transaction (design 4.6, step 4).
+
+    The team row goes; its seat pool, its memberships and the pool's blocks go by cascade, so the caller's
+    connection has foreign keys on (db.connector). The logo lives in the team row and goes with it. The caller
+    empties the write-ahead log after its commit. B7 adds the team's match records (steps 1-3) here.
+    """
+    db.execute("DELETE FROM teams WHERE id=?", (team_id,))
+
+
+def move_captaincy(db, team_id: str, old_captain: str, new_captain: str, moment: str) -> None:
+    """Make `new_captain`, a member of the team, its captain in the caller's write transaction.
+
+    The old captain becomes a member first, because the schema allows one captain per team. Nobody's seat or
+    jersey moves. The new captain's mark for the new-member badge is `moment`: the members who joined before it
+    are not new to them.
+    """
+    db.execute("UPDATE memberships SET role='MEMBER' WHERE team_id=? AND user_id=?", (team_id, old_captain))
+    db.execute("UPDATE memberships SET role='CAPTAIN', joins_seen_at=? WHERE team_id=? AND user_id=?",
+               (moment, team_id, new_captain))
+
+
+def hand_over_or_delete_teams(db, user_id: str, moment: str) -> None:
+    """The team step of an account deletion, in its write transaction (design 3.7, step 2).
+
+    Every team the account captains goes to its earliest-joined other member (joined_at, then the order of the
+    rows), even when that member already captains as many teams as the captain limit allows (design 4.1): a team
+    never stays without a captain. A team without another member is deleted. The account's memberships and blocks
+    go by cascade with its user row afterwards. B7 adds the refusal CAPTAIN_MUST_TRANSFER and the rule for team
+    videos here.
+    """
+    captained = [row["team_id"] for row in db.execute(
+        "SELECT team_id FROM memberships WHERE user_id=? AND role='CAPTAIN' ORDER BY joined_at, rowid", (user_id,))]
+    for team_id in captained:
+        heir = db.execute("SELECT user_id FROM memberships WHERE team_id=? AND user_id<>? ORDER BY joined_at, rowid"
+                          " LIMIT 1", (team_id, user_id)).fetchone()
+        if heir is None:
+            delete_team_rows(db, team_id)
+        else:
+            move_captaincy(db, team_id, user_id, heir["user_id"], moment)

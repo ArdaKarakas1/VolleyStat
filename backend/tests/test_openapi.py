@@ -44,6 +44,13 @@ CONTRACT_ROUTES = [
     ("/v1/teams/{team_id}", "get"),
     ("/v1/teams/{team_id}/settings", "put"),
     ("/v1/teams/{team_id}/seats", "put"),
+    ("/v1/teams/{team_id}/members/{user_id}/jersey", "put"),
+    ("/v1/teams/{team_id}/members/{user_id}", "delete"),
+    ("/v1/teams/{team_id}/blocks", "get"),
+    ("/v1/teams/{team_id}/blocks/{user_id}", "delete"),
+    ("/v1/teams/{team_id}/joins-seen", "post"),
+    ("/v1/teams/{team_id}/captain", "post"),
+    ("/v1/teams/{team_id}", "delete"),
 ]
 
 

@@ -35,6 +35,9 @@ TEAM_BODY = {"name": "Erişim Takımı"}
 MEMBER, CAPTAIN = "MEMBER", "CAPTAIN"
 # The seeded member of the world's team (a substitute), whose session the captain-only walk uses.
 TEAM_MEMBER = "test.takim.uyesi"
+# The jersey of the world's captain, and an account id that is no member of the world's team.
+CAPTAINS_JERSEY = 7
+NO_MEMBER = str(uuid.UUID(int=7))
 
 
 @dataclass(frozen=True)
@@ -116,6 +119,18 @@ WALK: dict[tuple[str, str], Any] = {
                                                    bad=WRONG_SHAPE),
     # Stale: 0 substitute seats while the world's team has a substitute, so the captain gets SEATS_BELOW_HOLDERS.
     ("PUT", "/v1/teams/{team_id}/seats"): Route("team", CAPTAIN, json={"substituteSeats": 0}, bad=WRONG_SHAPE),
+    # A member sets their own jersey and leaves by themselves, so these two are member routes. Stale: the captain
+    # wears the jersey the body asks for, so the captain gets JERSEY_TAKEN.
+    ("PUT", "/v1/teams/{team_id}/members/{user_id}/jersey"): Route("team", MEMBER, json={"jersey": CAPTAINS_JERSEY},
+                                                                   bad=WRONG_SHAPE),
+    ("DELETE", "/v1/teams/{team_id}/members/{user_id}"): Route("team", MEMBER),
+    ("GET", "/v1/teams/{team_id}/blocks"): Route("team", CAPTAIN),
+    ("DELETE", "/v1/teams/{team_id}/blocks/{user_id}"): Route("team", CAPTAIN),
+    ("POST", "/v1/teams/{team_id}/joins-seen"): Route("team", CAPTAIN, json={"upTo": "2026-11-25T18:00:00Z"},
+                                                      bad=WRONG_SHAPE),
+    # Stale: an account that is no member of the world's team, so the captain gets NOT_A_TEAM_MEMBER.
+    ("POST", "/v1/teams/{team_id}/captain"): Route("team", CAPTAIN, json={"userId": NO_MEMBER}, bad=WRONG_SHAPE),
+    ("DELETE", "/v1/teams/{team_id}"): Route("team", CAPTAIN),
 }
 NOT_FOUND = {"match": "MATCH_NOT_FOUND", "upload": "UPLOAD_NOT_FOUND", "video": "VIDEO_NOT_FOUND",
              "job": "ANALYSIS_NOT_FOUND", "card": "CARD_NOT_FOUND", "rally": "RALLY_NOT_FOUND",
@@ -174,8 +189,8 @@ class World:
 @pytest.fixture
 def world(storage, make_clip):
     """The owner's personal match with a READY video, a NEEDS_REVIEW job, its cards and rallies, and an
-    unfinished upload. The owner also captains a team with a member on a substitute seat. The stranger owns a
-    personal match and a team of its own."""
+    unfinished upload. The owner also captains a team with a member on a substitute seat and a removed account
+    in its blocks. The stranger owns a personal match and a team of its own."""
     with serve(storage, ScriptedAnalyzer()) as owner:
         video = ready_video(owner, make_clip)
         job = request_job(owner, video["id"])
@@ -185,8 +200,11 @@ def world(storage, make_clip):
         assert upload.status_code == 201, upload.text
         ids = {"match_id": video["matchId"], "upload_id": upload.json()["uploadId"], "video_id": video["id"],
                "job_id": job["id"], "card_id": card_of(owner, job["id"], 2)["id"], "rally_id": rallies[1]["id"]}
-        team = create_team(owner, name="Sahibin Takımı")
+        team = create_team(owner, name="Sahibin Takımı", jersey=CAPTAINS_JERSEY)
         ids.update(team_id=team["id"], user_id=seed_member(storage, team["id"], TEAM_MEMBER, seat="SUBSTITUTE"))
+        # The captain removed somebody, so the team has a block.
+        removed = seed_member(storage, team["id"], "test.cikarilan")
+        assert owner.delete(f"/v1/teams/{team['id']}/members/{removed}").status_code == 204
         stranger = as_account(owner, storage, STRANGER)
         assert stranger.post("/v1/matches", json=MATCH_BODY).status_code == 201
         create_team(stranger, name="Yabancının Takımı")
@@ -224,7 +242,7 @@ def test_the_walk_lists_every_route_of_the_app(storage):
         assert {operation for operation, route in WALK.items() if route is PUBLIC} == access.PUBLIC
         assert {(method.upper(), path) for path, operations in app.openapi()["paths"].items()
                 for method in operations} == set(WALK)
-    assert len(WALK) == 42
+    assert len(WALK) == 49
 
 
 @pytest.mark.parametrize("extra", ["mount", "websocket", "sub-app"])
@@ -304,7 +322,11 @@ def test_a_missing_object_answers_404_with_its_own_code(world):
 
 def test_every_captain_route_answers_a_member_403_captain_only_and_changes_nothing(world):
     captain_routes = {operation: route for operation, route in OBJECT_ROUTES.items() if route.role == CAPTAIN}
-    assert set(captain_routes) == {("PUT", "/v1/teams/{team_id}/settings"), ("PUT", "/v1/teams/{team_id}/seats")}
+    assert set(captain_routes) == {
+        ("PUT", "/v1/teams/{team_id}/settings"), ("PUT", "/v1/teams/{team_id}/seats"),
+        ("GET", "/v1/teams/{team_id}/blocks"), ("DELETE", "/v1/teams/{team_id}/blocks/{user_id}"),
+        ("POST", "/v1/teams/{team_id}/joins-seen"), ("POST", "/v1/teams/{team_id}/captain"),
+        ("DELETE", "/v1/teams/{team_id}")}
     before = snapshot(world.storage)
     for (method, path), route in captain_routes.items():
         error = refused_as(world.member.request(method, world.url(path), **route.valid()), 403, "CAPTAIN_ONLY")
@@ -321,6 +343,16 @@ def test_the_captain_gets_the_answer_a_stale_seats_body_hides_from_others(world)
     refused = world.owner.put(world.url("/v1/teams/{team_id}/seats"), json={"substituteSeats": 0})
     error = refused_as(refused, 409, "SEATS_BELOW_HOLDERS")
     assert error["details"] == {"seat": "SUBSTITUTE", "holders": 1, "seats": 0}
+
+
+def test_the_captain_gets_the_answers_the_stale_jersey_and_transfer_bodies_hide_from_others(world):
+    # As with the seats body above: only access stands between the member or the stranger and these answers.
+    route = WALK[("PUT", "/v1/teams/{team_id}/members/{user_id}/jersey")]
+    refused = world.owner.put(world.url("/v1/teams/{team_id}/members/{user_id}/jersey"), **route.valid())
+    assert refused_as(refused, 409, "JERSEY_TAKEN")["details"] == {"jersey": CAPTAINS_JERSEY}
+    route = WALK[("POST", "/v1/teams/{team_id}/captain")]
+    refused = world.owner.post(world.url("/v1/teams/{team_id}/captain"), **route.valid())
+    assert refused_as(refused, 422, "NOT_A_TEAM_MEMBER")["details"] == {"userId": NO_MEMBER}
 
 
 def test_put_of_another_accounts_team_id_answers_409_team_id_taken_and_creates_nothing(world):

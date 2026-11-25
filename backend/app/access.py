@@ -101,11 +101,17 @@ def require_member(db, caller: Caller, team_id: str) -> tuple[sqlite3.Row, sqlit
     return team, membership
 
 
+def refuse_unless_captain(membership: sqlite3.Row) -> None:
+    """403 CAPTAIN_ONLY (no details) unless the caller's membership is the team's captaincy. A route that serves
+    a member for their own row (a jersey, a leave) calls it once it knows the row is somebody else's."""
+    if membership["role"] != "CAPTAIN":
+        fail("CAPTAIN_ONLY", "Only the captain of this team can do this", 403)
+
+
 def require_captain(db, caller: Caller, team_id: str) -> tuple[sqlite3.Row, sqlite3.Row]:
     """require_member, then 403 CAPTAIN_ONLY (no details) for a member who is not the captain."""
     team, membership = require_member(db, caller, team_id)
-    if membership["role"] != "CAPTAIN":
-        fail("CAPTAIN_ONLY", "Only the captain of this team can do this", 403)
+    refuse_unless_captain(membership)
     return team, membership
 
 
