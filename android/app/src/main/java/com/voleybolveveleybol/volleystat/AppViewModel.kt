@@ -26,6 +26,7 @@ import com.voleybolveveleybol.volleystat.data.SessionStore
 import com.voleybolveveleybol.volleystat.data.SignedIn
 import com.voleybolveveleybol.volleystat.data.StoredState
 import com.voleybolveveleybol.volleystat.data.UnansweredRegistrationStore
+import com.voleybolveveleybol.volleystat.data.UnknownOutcome
 import com.voleybolveveleybol.volleystat.data.sha256Hex
 import com.voleybolveveleybol.volleystat.data.UploadCancelled
 import com.voleybolveveleybol.volleystat.data.UploadEngine
@@ -80,7 +81,14 @@ data class UploadProgress(
     val serverCode: String? = null,
 )
 
-enum class ServerTest { IDLE, TESTING, OK, OK_NO_PROBE, UNREACHABLE }
+/**
+ * The outcome of the server test on the login, registration and profile screens. OK and OK_NO_PROBE come only with the
+ * API's own answer to GET /health ([com.voleybolveveleybol.volleystat.data.Health.fromApi]). UNREACHABLE: the request
+ * never left the phone. NO_ANSWER: it went out and no answer came. SERVER_ERROR: the API's own 5xx or SERVER_BUSY.
+ * ERROR_ON_THE_WAY: a 5xx without the API's envelope, or a 511. UNREADABLE: any other answer, which is not the API's
+ * answer to GET /health, so a gateway, a captive portal or another service at the address may have sent it.
+ */
+enum class ServerTest { IDLE, TESTING, OK, OK_NO_PROBE, UNREACHABLE, NO_ANSWER, SERVER_ERROR, ERROR_ON_THE_WAY, UNREADABLE }
 
 enum class SourceProblem { CAMERA_MISSING, CAMERA_EMPTY, UNREADABLE }
 
@@ -89,9 +97,11 @@ data class RecordingFile(val name: String, val path: String, val sizeBytes: Long
 /**
  * Why the server did not confirm the removal of a match. UNCONFIRMED: no answer came, so the app
  * does not know what the server holds. VERIFYING: the server is still checking the match's upload.
- * REFUSED: the server answered and deleted nothing.
+ * REFUSED: the server answered with the API's own envelope on a 4xx, or with SERVER_BUSY, and deleted nothing.
+ * SERVER_ERROR, ERROR_ON_THE_WAY and UNREADABLE: an answer came after which the app does not know whether the
+ * server deleted the match, by [UnknownOutcome].
  */
-enum class RemovalFailure { UNCONFIRMED, VERIFYING, REFUSED }
+enum class RemovalFailure { UNCONFIRMED, VERIFYING, REFUSED, SERVER_ERROR, ERROR_ON_THE_WAY, UNREADABLE }
 
 data class RemovalProblem(val matchId: String, val failure: RemovalFailure)
 
@@ -241,9 +251,12 @@ enum class RalliesLoad { LOADING, READY, UNREACHABLE, OUTDATED }
  * has no winner. DEMO: the list of a demo analysis can not be confirmed. UNREACHABLE: no answer
  * came, and the list that was read afterwards does not show the correction or could not be read.
  * The server may hold the correction all the same; the next attempt finds out. REFUSED: the
- * server answered and changed nothing.
+ * server answered with the API's own envelope on a 4xx, or with SERVER_BUSY, and changed nothing.
+ * SERVER_ERROR, ERROR_ON_THE_WAY and UNREADABLE: an answer came after which the app does not know
+ * whether the server made the change, by [UnknownOutcome], and the list read afterwards does not show it or could
+ * not be read.
  */
-enum class CorrectionProblem { STALE, OVERLAP, OUTSIDE, NOT_READY, DEMO, UNREACHABLE, REFUSED }
+enum class CorrectionProblem { STALE, OVERLAP, OUTSIDE, NOT_READY, DEMO, UNREACHABLE, REFUSED, SERVER_ERROR, ERROR_ON_THE_WAY, UNREADABLE }
 
 /** Analysis, review and report state of the one match that is open on screen. */
 data class AnalysisUi(
@@ -583,11 +596,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     null
                 } catch (error: ApiException) {
                     when (error.code) {
-                        // Only the server's own "no such match" means the match is already gone. Any
-                        // other answer, a 404 from a wrong address included, deleted nothing.
+                        // Only the server's own "no such match" means the match is already gone.
                         "MATCH_NOT_FOUND" -> null
                         "UPLOAD_FINALIZING" -> RemovalFailure.VERIFYING
-                        else -> RemovalFailure.REFUSED
+                        // Only the API's own refusal says that the server deleted nothing. After any other answer, a
+                        // gateway's 404 page included, the app does not know what the server did (ADR-0119).
+                        else -> when (UnknownOutcome.of(error)) {
+                            null -> RemovalFailure.REFUSED
+                            UnknownOutcome.SERVER_ERROR -> RemovalFailure.SERVER_ERROR
+                            UnknownOutcome.ERROR_ON_THE_WAY -> RemovalFailure.ERROR_ON_THE_WAY
+                            UnknownOutcome.UNREADABLE -> RemovalFailure.UNREADABLE
+                        }
                     }
                 } catch (error: IOException) {
                     // No answer: the server may be off, or it deleted the match and the answer was lost.
@@ -629,6 +648,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun setServerTarget(target: ServerTarget) = synchronized(accountLock) {
         if (session != null || _state.value.account.busy) return@synchronized
         changeDevice { it.copy(serverTarget = target) }
+        // A test still on its way asked the server chosen before: its answer says nothing about this one.
+        serverTestRun.incrementAndGet()
         _state.update { it.copy(serverTest = ServerTest.IDLE, serverConfigured = baseUrl(target).isNotBlank()) }
     }
 
@@ -918,7 +939,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
      * A list version that moved on would not tell: a winner decision that was still on its way
      * moves it too. The app looks the same way when the server says that the list has moved on:
      * that is the answer to a second attempt whose first attempt got through unseen, and telling
-     * the user to redo the correction would apply it to another rally.
+     * the user to redo the correction would apply it to another rally. It looks too after an answer
+     * that leaves open whether the server made the change ([UnknownOutcome]): a gateway may have
+     * answered after the server made it.
      */
     private fun correct(
         onDone: () -> Unit,
@@ -947,13 +970,22 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val wait = api().correctionTimeoutMs
             val reloaded = withContext(Dispatchers.IO) { runCatching { api().rallies(jobId, wait) }.getOrNull() }
             val error = sent.exceptionOrNull()
-            val refusal = (error as? ApiException)?.code
+            // An answer that leaves open whether the server made the change: the API's envelope is missing, the status is a
+            // 3xx or a 5xx other than SERVER_BUSY, or the app can not read the answer (ADR-0119). The list read below tells.
+            val unknown = (error as? ApiException)?.let(UnknownOutcome::of) ?: UnknownOutcome.UNREADABLE.takeIf { error is JSONException }
+            // The server's own refusal: an answer after which the server changed nothing.
+            val refusal = (error as? ApiException)?.code?.takeIf { unknown == null }
             // The list, or the rule it was counted with, moved on since the screen read it.
             val stale = refusal == "RALLY_LIST_STALE" || refusal == "MATCH_RULES_STALE"
             val onList = if (sent.isFailure && (refusal == null || stale)) reloaded?.let(found) else null
             val applied = sent.isSuccess || onList != null
             val problem = when {
                 applied -> null
+                unknown != null -> when (unknown) {
+                    UnknownOutcome.SERVER_ERROR -> CorrectionProblem.SERVER_ERROR
+                    UnknownOutcome.ERROR_ON_THE_WAY -> CorrectionProblem.ERROR_ON_THE_WAY
+                    UnknownOutcome.UNREADABLE -> CorrectionProblem.UNREADABLE
+                }
                 refusal == null -> CorrectionProblem.UNREACHABLE
                 // The list moved on and the list of now did not arrive: there is nothing to redo the correction on.
                 stale && reloaded == null -> CorrectionProblem.UNREACHABLE
@@ -1065,17 +1097,40 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         state.copy(teams = state.teams.map { team -> if (team.id == teamId) team.copy(players = team.players.filterNot { it.id == playerId }) else team })
     }
 
+    /** Counts the server tests and the server choices. Only the newest test, sent to the server still chosen, writes its result. */
+    private val serverTestRun = java.util.concurrent.atomic.AtomicInteger()
+
     fun testServer() {
+        val run = serverTestRun.incrementAndGet()
         _state.update { it.copy(serverTest = ServerTest.TESTING) }
         viewModelScope.launch {
             val result = withContext(Dispatchers.IO) {
                 try {
-                    if (api().health().probeAvailable) ServerTest.OK else ServerTest.OK_NO_PROBE
-                } catch (error: IOException) {
+                    val health = api().health()
+                    when {
+                        // Only the API's own health answer says that the server answered (ADR-0119).
+                        !health.fromApi -> ServerTest.UNREADABLE
+                        health.probeAvailable -> ServerTest.OK
+                        else -> ServerTest.OK_NO_PROBE
+                    }
+                } catch (error: ApiException) {
+                    // An answer came, and the API answers this route with nothing but its health answer. An error answer is
+                    // worded as the account forms word it (ADR-0119); any other answer is one the app can not read.
+                    when (UnknownOutcome.of(error)) {
+                        UnknownOutcome.SERVER_ERROR -> ServerTest.SERVER_ERROR
+                        UnknownOutcome.ERROR_ON_THE_WAY -> ServerTest.ERROR_ON_THE_WAY
+                        UnknownOutcome.UNREADABLE -> ServerTest.UNREADABLE
+                        // The API's envelope on a 4xx, which it never sends on this route, or SERVER_BUSY, an error the server reported.
+                        null -> if (error.code == "SERVER_BUSY") ServerTest.SERVER_ERROR else ServerTest.UNREADABLE
+                    }
+                } catch (error: RequestNotSent) {
                     ServerTest.UNREACHABLE
+                } catch (error: IOException) {
+                    // The request went out and no answer came: the app does not know whether it reached the server.
+                    ServerTest.NO_ANSWER
                 }
             }
-            _state.update { it.copy(serverTest = result) }
+            if (serverTestRun.get() == run) _state.update { it.copy(serverTest = result) }
         }
     }
 

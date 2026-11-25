@@ -136,6 +136,10 @@ fun correctionProblemText(analysis: AnalysisUi, confirmation: Boolean = false): 
     CorrectionProblem.DEMO -> stringResource(R.string.correction_demo)
     CorrectionProblem.UNREACHABLE -> stringResource(R.string.correction_unreachable)
     CorrectionProblem.REFUSED -> stringResource(if (confirmation) R.string.rallies_confirm_refused else R.string.correction_refused)
+    // The app does not know whether the server made the change: the account changes' own texts (ADR-0119).
+    CorrectionProblem.SERVER_ERROR -> stringResource(R.string.account_outcome_unknown)
+    CorrectionProblem.ERROR_ON_THE_WAY -> stringResource(R.string.account_outcome_unknown_on_the_way)
+    CorrectionProblem.UNREADABLE -> stringResource(R.string.account_unexpected_change_signed_in)
 }
 
 @Composable

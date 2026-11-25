@@ -475,7 +475,14 @@ fun ServerSection(state: AppUiState, onServerTarget: (ServerTarget) -> Unit, onT
                 }
                 ServerTest.OK -> Notice(stringResource(R.string.server_ok), Tone.POSITIVE, Modifier.padding(top = 12.dp))
                 ServerTest.OK_NO_PROBE -> Notice(stringResource(R.string.server_ok_no_probe), Tone.CAUTION, Modifier.padding(top = 12.dp))
+                // Only a request that never left the phone did not reach the server. The other answers are worded as the account forms word them.
                 ServerTest.UNREACHABLE -> Notice(stringResource(R.string.server_unreachable), Tone.NEGATIVE, Modifier.padding(top = 12.dp))
+                ServerTest.NO_ANSWER -> Notice(stringResource(R.string.net_no_answer), Tone.NEGATIVE, Modifier.padding(top = 12.dp))
+                ServerTest.SERVER_ERROR -> Notice(stringResource(R.string.server_error), Tone.NEGATIVE, Modifier.padding(top = 12.dp))
+                ServerTest.ERROR_ON_THE_WAY -> Notice(stringResource(R.string.server_error_on_the_way), Tone.NEGATIVE, Modifier.padding(top = 12.dp))
+                // Signed out (login and registration) the server choice is open, and checking it is the advice. On the
+                // profile a session is open and the app locks the choice, so the text gives no advice about it (ADR-0119).
+                ServerTest.UNREADABLE -> Notice(stringResource(if (signedIn) R.string.server_unreadable else R.string.account_unexpected), Tone.NEGATIVE, Modifier.padding(top = 12.dp))
             }
         }
     }

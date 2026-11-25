@@ -317,6 +317,31 @@ class RallyScreensTest {
         assertFalse(shown(text(R.string.rallies_confirm_refused)))
     }
 
+    @Test fun anAnswerThatLeavesTheChangeOpenIsWordedTheSameOnTheListAndInTheEditor() {
+        // Only the API's own refusal says that the server changed nothing. After the other answers the app does not know
+        // whether the server made the confirmation or the correction, and both screens say so (ADR-0119).
+        val sentences = listOf(
+            CorrectionProblem.SERVER_ERROR to R.string.account_outcome_unknown,
+            CorrectionProblem.ERROR_ON_THE_WAY to R.string.account_outcome_unknown_on_the_way,
+            CorrectionProblem.UNREADABLE to R.string.account_unexpected_change_signed_in,
+        )
+        var problem by mutableStateOf(CorrectionProblem.SERVER_ERROR)
+        var editor by mutableStateOf(false)
+        show {
+            if (editor) RallyEditorScreen(rallyTarget(four, "r2")!!, state(four, problem = problem), FakeControl(20_000).video, { _, _ -> }, {}, {}, { _, _ -> }, onBack = {})
+            else RalliesScreen(match, state(decided, problem = problem), onOpenRally = {}, onOpenGap = {}, onConfirm = {}, onOpenReview = {}, onRetry = {}, onBack = {})
+        }
+        listOf(false, true).forEach { inEditor ->
+            editor = inEditor
+            sentences.forEach { (shownProblem, sentence) ->
+                problem = shownProblem
+                compose.waitForIdle()
+                compose.onNodeWithText(text(sentence)).assertIsDisplayed().assert(announced)
+                listOf(R.string.rallies_confirm_refused, R.string.correction_refused, R.string.correction_unreachable).forEach { assertFalse(shown(text(it))) }
+            }
+        }
+    }
+
     @Test fun theListSaysWhatBecameOfTheConfirmationNextToItsButtonAndReportsItToAScreenReader() {
         val announcements = Announcements(compose)
         var correcting by mutableStateOf(false)

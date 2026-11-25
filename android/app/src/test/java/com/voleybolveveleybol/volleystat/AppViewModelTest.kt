@@ -331,14 +331,17 @@ class AppViewModelTest {
         val vm = viewModel(StoredState(matches = listOf(accepted("A"))))
         val html = { MockResponse().setResponseCode(200).setHeader("Content-Type", "text/html").setBody("<html>another service</html>") }
         // None of these answers is the match route saying "deleted": a server that is still verifying
-        // the upload, an older server without the route, an address that answers 404 to everything,
-        // and another service on the port that answers 200 with a page or with nothing at all.
+        // the upload, a server whose API has no such route (405, or its own NOT_FOUND), a server too busy
+        // to start, and another service on the port that answers 200 with a page or with nothing at all.
+        // Only the API's own envelope says that the server deleted nothing. The app can not read the other
+        // answers, and something on the way may have sent them, so the app does not know what the server did.
         val answers = listOf(
             { refuse(409, "UPLOAD_FINALIZING") } to RemovalFailure.VERIFYING,
             { refuse(405, "METHOD_NOT_ALLOWED") } to RemovalFailure.REFUSED,
             { refuse(404, "NOT_FOUND") } to RemovalFailure.REFUSED,
-            html to RemovalFailure.REFUSED,
-            { MockResponse().setResponseCode(200) } to RemovalFailure.REFUSED,
+            { refuse(503, "SERVER_BUSY") } to RemovalFailure.REFUSED,
+            html to RemovalFailure.UNREADABLE,
+            { MockResponse().setResponseCode(200) } to RemovalFailure.UNREADABLE,
         )
         answers.forEach { (answer, failure) ->
             on("DELETE /matches/server-A") { answer() }
@@ -349,6 +352,33 @@ class AppViewModelTest {
             vm.clearRemovalFailure()
         }
         assertEquals(List(answers.size) { "DELETE /matches/server-A" }, requests.toList())
+    }
+
+    /** The page of a gateway, a proxy or a hotel's Wi-Fi login: no API envelope. */
+    private fun page(status: Int) = MockResponse().setResponseCode(status).setHeader("Content-Type", "text/html").setBody("<html>a gateway</html>")
+    private fun portal() = MockResponse().setResponseCode(302).setHeader("Location", "http://portal.example/login")
+
+    @Test fun aRemovalWhoseAnswerMayNotBeTheServersDoesNotSayThatTheServerDeletedNothing() {
+        val vm = viewModel(StoredState(matches = listOf(accepted("A"))))
+        val answers = listOf(
+            // A 4xx or a 3xx without the API's envelope: a proxy, a gateway or a captive portal may have sent it.
+            { page(404) } to RemovalFailure.UNREADABLE,
+            { page(403) } to RemovalFailure.UNREADABLE,
+            { portal() } to RemovalFailure.UNREADABLE,
+            // A 5xx without the envelope, or a 511: the server or something on the way failed while it had the request.
+            { page(502) } to RemovalFailure.ERROR_ON_THE_WAY,
+            { refuse(511, "NETWORK_AUTHENTICATION_REQUIRED") } to RemovalFailure.ERROR_ON_THE_WAY,
+            // The API's own 5xx: the server reported the error, and it may have deleted the match before it failed.
+            { refuse(500, "INTERNAL_ERROR") } to RemovalFailure.SERVER_ERROR,
+        )
+        answers.forEach { (answer, failure) ->
+            on("DELETE /matches/server-A") { answer() }
+            vm.removeMatch("A") { fail("the app forgot a match without the server's word") }
+            await("the outcome") { vm.state.value.removalProblem != null }
+            assertEquals(RemovalProblem("A", failure), vm.state.value.removalProblem)
+            assertEquals(listOf("A"), vm.state.value.matches.map { it.localId })
+            vm.clearRemovalFailure()
+        }
     }
 
     @Test fun aMatchStaysOnThePhoneWhenTheServerCanNotBeReached() {
@@ -1188,7 +1218,7 @@ class AppViewModelTest {
             bodies += JSONObject(request.body.readUtf8())
             rules = MatchRules(2, 21, 15)
             version = 4
-            ok(JSONObject().put("id", "server-A"))
+            ok(JSONObject().put("id", "server-A").put("rules", rulesJson(rules)))
         }
         var done = 0
         vm.changeMatchRules(MatchRules(2, 21, 15)) { done++ }
@@ -1259,7 +1289,7 @@ class AppViewModelTest {
             bodies += JSONObject(request.body.readUtf8())
             rules = MatchRules(2, 21, 15)
             version = 5
-            ok(JSONObject().put("id", "server-A"))
+            ok(JSONObject().put("id", "server-A").put("rules", rulesJson(rules)))
         }
         var done = false
         vm.changeMatchRules(MatchRules(2, 21, 15)) { done = true }
@@ -1309,7 +1339,7 @@ class AppViewModelTest {
         on("PUT /matches/server-A/rules") {
             release.await(5, TimeUnit.SECONDS)
             rules = MatchRules(2, 21, 15)
-            ok(JSONObject())
+            ok(JSONObject().put("id", "server-A").put("rules", rulesJson(rules)))
         }
         vm.changeMatchRules(MatchRules(2, 21, 15)) {}
         await("the rule on its way") { vm.analysis.value.correcting }
@@ -1330,7 +1360,8 @@ class AppViewModelTest {
         assertEquals(CorrectionProblem.UNREACHABLE, vm.analysis.value.correctionProblem)
     }
 
-    @Test fun aRuleChangeAnswerWithoutABodyCountsAsApplied() {
+    @Test fun aRuleChangeAnswerWithoutABodyIsJudgedByTheList() {
+        // The API answers with the match and its rule. A blank 2xx is not its answer, so the list read next tells whether the rule changed.
         var rules = MatchRules.FIVB
         val vm = withRallyList { rallies(3, rally("r1", 1, 2_000, 9_000), rules = rules) }
         on("PUT /matches/server-A/rules") { rules = MatchRules(2, 21, 15); MockResponse().setResponseCode(200) }
@@ -1338,5 +1369,153 @@ class AppViewModelTest {
         vm.changeMatchRules(MatchRules(2, 21, 15)) { done = true }
         await("the change") { done }
         assertNull(vm.analysis.value.correctionProblem)
+    }
+
+    // ----- Answers that may not be the API's (ADR-0119): only its envelope says that the server changed nothing -----
+
+    @Test fun aRuleChangeWhoseAnswerMayNotBeTheServersDoesNotSayThatTheServerKeptTheOldRule() {
+        val vm = withRallyList { rallies(3, rally("r1", 1, 2_000, 9_000)) }
+        val answers = listOf(
+            { page(403) } to CorrectionProblem.UNREADABLE,
+            { page(404) } to CorrectionProblem.UNREADABLE,
+            { portal() } to CorrectionProblem.UNREADABLE,
+            // A 2xx page: something answered that is not the API, and the rule route answers JSON or nothing.
+            { page(200) } to CorrectionProblem.UNREADABLE,
+            { page(502) } to CorrectionProblem.ERROR_ON_THE_WAY,
+            { refuse(500, "INTERNAL_ERROR") } to CorrectionProblem.SERVER_ERROR,
+        )
+        answers.forEach { (answer, problem) ->
+            on("PUT /matches/server-A/rules") { answer() }
+            vm.changeMatchRules(MatchRules(2, 21, 15)) { fail("the list still names the old rule") }
+            await("the outcome") { vm.analysis.value.correctionProblem != null }
+            assertEquals(problem, vm.analysis.value.correctionProblem)
+            assertEquals(MatchRules.FIVB, vm.analysis.value.rallies!!.rules)
+            assertFalse(vm.analysis.value.correcting)
+            vm.clearCorrectionProblem()
+        }
+        assertEquals("the app never sends the rule a second time by itself", answers.size, requests.count { it == "PUT /matches/server-A/rules" })
+    }
+
+    @Test fun aRuleChangeAnsweredWithA2xxThatIsNotTheApisIsNotTakenForSaved() {
+        val vm = withRallyList { rallies(3, rally("r1", 1, 2_000, 9_000)) }
+        // A blank 2xx, the JSON of something else, and a match that names another rule than the one sent:
+        // none of them is the API saying that it counts with the new rule, and the list still names the old one.
+        val answers = listOf(
+            { MockResponse().setResponseCode(200) },
+            { ok(JSONObject().put("status", "ok")) },
+            { ok(JSONObject().put("id", "server-A").put("rules", rulesJson(MatchRules.FIVB))) },
+        )
+        answers.forEach { answer ->
+            on("PUT /matches/server-A/rules") { answer() }
+            vm.changeMatchRules(MatchRules(2, 21, 15)) { fail("the server did not save the rule") }
+            await("the outcome") { vm.analysis.value.correctionProblem != null }
+            assertEquals(CorrectionProblem.UNREADABLE, vm.analysis.value.correctionProblem)
+            assertFalse(vm.analysis.value.correcting)
+            vm.clearCorrectionProblem()
+        }
+    }
+
+    @Test fun aRuleChangeThatTheServerMadeBeforeAGatewayAnsweredIsFoundOnTheList() {
+        var rules = MatchRules.FIVB
+        val vm = withRallyList { rallies(3, rally("r1", 1, 2_000, 9_000), rules = rules) }
+        // The server saved the rule. The gateway in front of it gave up waiting and sent its own page.
+        on("PUT /matches/server-A/rules") { rules = MatchRules(2, 21, 15); page(504) }
+        var done = false
+        vm.changeMatchRules(MatchRules(2, 21, 15)) { done = true }
+        await("the change") { done }
+        assertNull(vm.analysis.value.correctionProblem)
+        assertEquals(MatchRules(2, 21, 15), vm.analysis.value.rallies!!.rules)
+        assertEquals(1, requests.count { it == "PUT /matches/server-A/rules" })
+    }
+
+    @Test fun aConfirmationAndACorrectionThatAGatewayAnsweredAfterTheServerMadeThemAreFoundOnTheList() {
+        var confirmed = false
+        val vm = withRallyList { rallies(7, rally("r1", 1, 2_000, 9_000, "VERIFIED"), confirmed = confirmed) }
+        on("POST /analyses/J/rally-list/confirm") { confirmed = true; page(504) }
+        var done = false
+        vm.confirmRallyList { done = true }
+        await("the confirmation") { done }
+        assertNull(vm.analysis.value.correctionProblem)
+        assertTrue(vm.analysis.value.rallies!!.confirmed)
+
+        var moved = false
+        val editor = withRallyList { rallies(if (moved) 8 else 7, rally("r1", 1, 2_000, if (moved) 10_000 else 9_000)) }
+        on("POST /rallies/r1/move") { moved = true; page(502) }
+        var corrected = false
+        editor.moveRally("r1", 2_000, 10_000) { corrected = true }
+        await("the move") { corrected }
+        assertNull(editor.analysis.value.correctionProblem)
+        assertEquals(1, requests.count { it == "POST /rallies/r1/move" })
+    }
+
+    @Test fun aCorrectionWhoseAnswerMayNotBeTheServersDoesNotSayThatTheServerRefusedItOrCouldNotBeReached() {
+        val vm = withRallyList { rallies(3, rally("r1", 1, 2_000, 9_000), rally("r2", 2, 15_000, 24_000)) }
+        val answers = listOf(
+            { page(403) } to CorrectionProblem.UNREADABLE,
+            // A 2xx that is JSON but not a correction: an answer came, so "the app could not reach the server" would be false.
+            { ok(JSONObject().put("hello", "world")) } to CorrectionProblem.UNREADABLE,
+            { page(502) } to CorrectionProblem.ERROR_ON_THE_WAY,
+            { refuse(500, "INTERNAL_ERROR") } to CorrectionProblem.SERVER_ERROR,
+        )
+        answers.forEach { (answer, problem) ->
+            on("POST /rallies/r1/move") { answer() }
+            vm.moveRally("r1", 2_000, 10_000) { fail("the list does not show the move") }
+            await("the outcome") { vm.analysis.value.correctionProblem != null }
+            assertEquals(problem, vm.analysis.value.correctionProblem)
+            assertFalse(vm.analysis.value.correcting)
+            vm.clearCorrectionProblem()
+        }
+    }
+
+    @Test fun aNotFoundPageOfAGatewayIsNotTakenForAMatchWithoutAReport() {
+        fun load(answer: () -> MockResponse): ReportLoad {
+            on("GET /matches/server-A/report") { answer() }
+            val vm = viewModel(StoredState(matches = listOf(accepted("A"))))
+            vm.loadReport("A")
+            await("the answer") { vm.analysis.value.reportLoad != ReportLoad.LOADING }
+            return vm.analysis.value.reportLoad
+        }
+        // "The app could not get the report from the server", with a way to try again.
+        assertEquals(ReportLoad.UNREACHABLE, load { page(404) })
+        assertEquals("a route the server does not have says nothing about the match", ReportLoad.UNREACHABLE, load { refuse(404, "NOT_FOUND") })
+        // Only the API's own answers say that there is no report: no analysis produced rallies, or the server holds no such match.
+        assertEquals(ReportLoad.NONE, load { refuse(404, "REPORT_NOT_AVAILABLE") })
+        assertEquals(ReportLoad.NONE, load { refuse(404, "MATCH_NOT_FOUND") })
+    }
+
+    @Test fun theServerTestSaysThatTheServerAnsweredOnlyAfterTheApisOwnHealthAnswer() {
+        val vm = viewModel(StoredState())
+        fun test(answer: () -> MockResponse): ServerTest {
+            on("GET /health") { answer() }
+            vm.testServer()
+            await("the test") { vm.state.value.serverTest != ServerTest.TESTING }
+            return vm.state.value.serverTest
+        }
+        val health = JSONObject().put("status", "ok").put("mediaProbe", "available").put("maxVideoBytes", 1_000)
+        assertEquals(ServerTest.OK, test { ok(health) })
+        assertEquals(ServerTest.OK_NO_PROBE, test { ok(JSONObject(health.toString()).put("mediaProbe", "unavailable")) })
+        // The request went out and no answer came: the app does not know whether it reached the server.
+        assertEquals("no answer", ServerTest.NO_ANSWER, test(lost))
+        // An error answer, worded as the account forms word it: the API's own 5xx, or a 5xx without its envelope or a 511.
+        assertEquals("the API's 5xx", ServerTest.SERVER_ERROR, test { refuse(500, "INTERNAL_ERROR") })
+        assertEquals("the API's busy answer", ServerTest.SERVER_ERROR, test { refuse(503, "SERVER_BUSY") })
+        assertEquals("a gateway's 502", ServerTest.ERROR_ON_THE_WAY, test { page(502) })
+        assertEquals("a captive portal's 511", ServerTest.ERROR_ON_THE_WAY, test { page(511) })
+        // Something answered, and not with the API's health answer. The app does not say that the server answered,
+        // nor that the app could not reach it.
+        val others = listOf(
+            "a blank 200" to { MockResponse().setResponseCode(200) },
+            "another service's JSON" to { ok(JSONObject().put("status", "ok")) },
+            "a 200 page" to { page(200) },
+            "a 404 page" to { page(404) },
+            "a captive portal" to { portal() },
+            "a route the server does not have" to { refuse(404, "NOT_FOUND") },
+        )
+        others.forEach { (what, answer) -> assertEquals(what, ServerTest.UNREADABLE, test(answer)) }
+        // Only a request that never left the phone says that the app could not reach the server.
+        vm.baseUrlOverride = "http://127.0.0.1:1/v1"  // nothing listens there
+        vm.testServer()
+        await("the test") { vm.state.value.serverTest != ServerTest.TESTING }
+        assertEquals(ServerTest.UNREACHABLE, vm.state.value.serverTest)
     }
 }

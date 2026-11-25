@@ -275,6 +275,23 @@ class MatchRulesScreenTest {
         }
     }
 
+    @Test fun anAnswerThatLeavesTheRuleOpenDoesNotSayThatTheServerKeptTheOldRule() {
+        // Only the API's own refusal says that the server did not save the rule. After the other answers the app does not
+        // know, and the screen says so with the texts of the account changes (ADR-0119).
+        var problem by mutableStateOf(CorrectionProblem.SERVER_ERROR)
+        show { MatchRulesScreen(MatchRules.FIVB, onSave = {}, onBack = {}, onList = true, problem = problem, initial = MatchRules(2, 21, 15)) }
+        listOf(
+            CorrectionProblem.SERVER_ERROR to R.string.account_outcome_unknown,
+            CorrectionProblem.ERROR_ON_THE_WAY to R.string.account_outcome_unknown_on_the_way,
+            CorrectionProblem.UNREADABLE to R.string.account_unexpected_change_signed_in,
+        ).forEach { (shownProblem, sentence) ->
+            problem = shownProblem
+            compose.waitForIdle()
+            compose.onNodeWithText(text(sentence)).assertIsDisplayed().assert(announced)
+            assertFalse(shown(text(R.string.rule_refused)))
+        }
+    }
+
     @Test fun aRuleThatChangedOnTheServerMeanwhileSaysSoAndLeavesTheChoiceToSave() {
         // The list of now came back with the rule of now. The user's choice is still on screen.
         show { MatchRulesScreen(MatchRules(2, 25, 25), onSave = {}, onBack = {}, onList = true, problem = CorrectionProblem.STALE, initial = MatchRules(2, 21, 15)) }

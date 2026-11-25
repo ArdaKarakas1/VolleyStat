@@ -190,7 +190,8 @@ class RallyListFlowTest {
                                 rules = MatchRules(body.getInt("setsToWin"), body.getInt("setTarget"), body.getInt("decidingSetTarget"))
                                 version++
                                 confirmed = false
-                                ok(JSONObject().put("id", "server-1"))
+                                ok(JSONObject().put("id", "server-1").put("rules", JSONObject().put("setsToWin", rules.setsToWin)
+                                    .put("setTarget", rules.setTarget).put("decidingSetTarget", rules.decidingSetTarget)))
                             }
                         }
                         "POST /analyses/j1/rally-list/confirm" -> {

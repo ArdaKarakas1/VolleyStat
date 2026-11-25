@@ -113,7 +113,7 @@ Sunucu aldığı veriyi bir silme çağrısı gelene kadar saklar. Sunucuda sür
 - Sunucu maçın bir yüklemesini doğruluyorsa `409 UPLOAD_FINALIZING` döner ve hiçbir şeyi silmez. İstemci doğrulama bitince yeniden dener. Sunucu 15 dakikadan eski bir doğrulamayı terk edilmiş sayar ve o durumda maçı siler.
 - Sunucu çalışan analiz işini durdurur. Sunucu iş satırını sildiği için iş hiçbir şey yazamaz.
 - Silinen maç için `GET /matches/{id}` ve ikinci bir `DELETE /matches/{id}` çağrısı `404 MATCH_NOT_FOUND` döner.
-- Android uygulaması "Maçı sil" ve "Yüklemeyi iptal et" işlerinde yalnız bu ucu çağırır. Uygulama maçı telefondan yalnız `204` ya da `404 MATCH_NOT_FOUND` yanıtından sonra kaldırır. Uygulama başka her yanıtı ve yanıtsız kalan çağrıyı silinmemiş sayar ve nedenini ekrana yazar.
+- Android uygulaması "Maçı sil" ve "Yüklemeyi iptal et" işlerinde yalnız bu ucu çağırır. Uygulama maçı telefondan yalnız `204` ya da `404 MATCH_NOT_FOUND` yanıtından sonra kaldırır. Uygulama başka her yanıttan ve yanıtsız kalan çağrıdan sonra maçı telefonda tutar. Ekran nedenini ya da uygulamanın sunucunun maçı silip silmediğini bilmediğini yazar.
 - Sunucu 0.2 önizlemesinin eski dosya düzenindeki baytları da siler (`videos/<id>.bin` ve `uploads/<id>.part`).
 
 ## Analiz

@@ -300,6 +300,11 @@ fun StatusScreen(
                     RemovalFailure.UNCONFIRMED -> R.string.removal_unconfirmed
                     RemovalFailure.VERIFYING -> R.string.removal_verifying
                     RemovalFailure.REFUSED -> R.string.removal_refused
+                    // The app does not know whether the server deleted the match (ADR-0119). The notice stays next to the
+                    // upload's notices, so each text names the match.
+                    RemovalFailure.SERVER_ERROR -> R.string.removal_outcome_unknown
+                    RemovalFailure.ERROR_ON_THE_WAY -> R.string.removal_outcome_unknown_on_the_way
+                    RemovalFailure.UNREADABLE -> R.string.removal_unreadable
                 }),
                 if (removalFailure == RemovalFailure.VERIFYING) Tone.CAUTION else Tone.NEGATIVE,
             )

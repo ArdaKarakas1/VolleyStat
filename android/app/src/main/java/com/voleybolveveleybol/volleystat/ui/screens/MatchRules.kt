@@ -111,7 +111,11 @@ fun MatchRulesScreen(
                         // The app has read the list again, so [current] is the rule the server has now. The notice
                         // names the whole of it: the next Save is made on that rule, and the user has not seen it yet.
                         CorrectionProblem.STALE -> stringResource(R.string.rule_stale, ruleDetail(current))
-                        // The server accepts every rule the app offers, so the words never blame the rule.
+                        // The app does not know whether the server saved the rule: the account changes' own texts (ADR-0119).
+                        CorrectionProblem.SERVER_ERROR -> stringResource(R.string.account_outcome_unknown)
+                        CorrectionProblem.ERROR_ON_THE_WAY -> stringResource(R.string.account_outcome_unknown_on_the_way)
+                        CorrectionProblem.UNREADABLE -> stringResource(R.string.account_unexpected_change_signed_in)
+                        // Only the API's own refusal: the server accepts every rule the app offers, so the words never blame the rule.
                         else -> stringResource(R.string.rule_refused)
                     },
                     // After STALE the app has read the list again: the user only saves once more.
