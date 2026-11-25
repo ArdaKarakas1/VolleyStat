@@ -28,8 +28,9 @@ abandoned once the uptime now is 15 minutes past its start (deletion.FINALIZE_ST
 its row holds no token. A start frees every verification an earlier server process left: the storage lock
 (storagelock.py) is taken before the start, so no other process can still run a verification in this folder,
 and resume() clears their tokens in its write transaction. start() calls resume() before the lifespan lets the
-server answer a request. A request of the earlier process that still runs (a forced stop lets the lock go
-while a request checks its file) finds its token gone and writes nothing (main.py, still_ours). The tokens of
+server answer a request. python -m app lets the lock go only after its requests ended, or the operating
+system lets it go with the process. Under a runner that lets the lock go earlier, a request of the earlier
+process that still checks its file finds its token gone and writes nothing (main.py, still_ours). The tokens of
 this process start with its mark (Sweeper.token), so a start that reads the stored uptime late, on the thread,
 never frees a verification of its own. The wall clock moments touched_at and finalize_started_at stay in the
 rows as information: no decision reads their value, and only an empty touch or start (both columns of it NULL)

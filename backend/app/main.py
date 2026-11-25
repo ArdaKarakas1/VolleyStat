@@ -476,9 +476,9 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
 
         def still_ours(db) -> bool:
             # Two things end the ownership: a takeover (a later complete that found this verification 15 minutes of
-            # uptime old wrote its own token), and the start of the next server after a forced stop let the storage
-            # lock go while this request ran (the start cleared the token). Every write below checks the token
-            # inside its own write transaction.
+            # uptime old wrote its own token), and the start of the next server after a runner let the storage lock go
+            # while this request ran (the start cleared the token; python -m app keeps the lock until its requests
+            # end or its process ends). Every write below checks the token inside its own write transaction.
             row = db.execute("SELECT status, finalize_token FROM uploads WHERE id=?", (upload_id,)).fetchone()
             return bool(row) and row["status"] == "FINALIZING" and row["finalize_token"] == token
 

@@ -301,8 +301,9 @@ EARLIER_CLOCK = (
 )
 
 # An unfinished upload of an earlier build has a wall clock touch but no uptime. It counts as touched, and its
-# verification as started, at the stored uptime of the first start of this build: a full day (and 15 minutes
-# for a dead verification) from there, late and never early. A row without any touch was stored before
+# verification as started, at the stored uptime of the first start of this build: a full day from there, late
+# and never early. Such a verification holds no token of this run (0.8 wrote none, and the start frees an
+# earlier build's), so the first complete may take it over at once. A row without any touch was stored before
 # server 0.9, and the first pass of the sweep aborts it.
 FIRST_UPTIME = (
     "UPDATE uploads SET touched_uptime = (SELECT COALESCE(MAX(uptime), 0) FROM server_clock)"
