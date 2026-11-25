@@ -494,15 +494,19 @@ fun VolleyStatApp(
             }
             composable(Routes.TEAM) { entry ->
                 val id = entry.arguments?.getString("id").orEmpty()
+                // The screen's own read of the team, bound to its back stack entry: a rotation and a return from As ve Yedek
+                // Yerleri keep it, another visit reads afresh. A read of the list and an earlier screen's answer leave it
+                // alone (P6-C1, P6-C2).
+                val screen = entry.id
                 val team = state.serverTeams.teamOf(id)
-                // The new members the screen opened with: the mark the screen sends right after does not take the line away.
-                var opened by rememberSaveable(id) { mutableStateOf<Int?>(null) }
-                LaunchedEffect(id) { viewModel.openTeam(id) }
-                LaunchedEffect(team != null) { if (opened == null && team != null) opened = team.newJoins ?: 0 }
+                val read = state.serverTeams.opened?.takeIf { it.screen == screen && it.id == id }
+                LaunchedEffect(id) { viewModel.openTeam(id, screen) }
                 TeamScreen(
-                    team, loading = team == null && state.serverTeams.loadProblem == null, problem = state.serverTeams.loadProblem,
-                    onSeats = { viewModel.clearTeamProblem(); go(Routes.teamSeats(id)) }, onRetry = { viewModel.openTeam(id) },
-                    onBack = { nav.popBackStack() }, recentJoins = opened ?: team?.newJoins,
+                    team, loading = team == null && read?.problem == null, problem = read?.problem,
+                    onSeats = { viewModel.clearTeamProblem(); go(Routes.teamSeats(id)) }, onRetry = { viewModel.openTeam(id, screen) },
+                    onBack = { nav.popBackStack() },
+                    // The new members of the screen's first answer, which the app marks seen; the mark keeps the line (P6-C3).
+                    recentJoins = read?.recentJoins,
                 )
             }
             composable(Routes.TEAM_SEATS) { entry ->

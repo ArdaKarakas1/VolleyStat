@@ -267,10 +267,10 @@ data class TeamsUi(
     val teams: List<TeamInfo>? = null,
     /** A read of the list is on its way. */
     val loading: Boolean = false,
-    /** Why the last read of the list or of one team failed. The next read clears it. */
+    /** Why the last read of the list failed. The next read of the list clears it; a read of one team leaves it alone. */
     val loadProblem: TeamProblem? = null,
-    /** The team the team screen read last, also while the list is unread. */
-    val opened: TeamInfo? = null,
+    /** The team screen's own read of one team, also while the list is unread. A read of the list leaves it alone (P6-C1). */
+    val opened: TeamRead? = null,
     /** A team action is on its way (Takım Kur, a seat change, the settings). Its screen waits and takes no second tap. */
     val busy: Boolean = false,
     /** Why the last team action failed. The next action and clearTeamProblem() clear it. */
@@ -280,8 +280,32 @@ data class TeamsUi(
     val badge: Int get() = teams.orEmpty().sumOf { it.newJoins ?: 0 }
 
     /** The team [id] as the app knows it: from the list, else as the team screen read it. */
-    fun teamOf(id: String): TeamInfo? = teams?.firstOrNull { it.id == id } ?: opened?.takeIf { it.id == id }
+    fun teamOf(id: String): TeamInfo? = teams?.firstOrNull { it.id == id } ?: opened?.team?.takeIf { it.id == id }
 }
+
+/**
+ * The read of one team that a team screen asked for (plan P6). Only that screen's next read changes its outcome: a read of
+ * the list never does (P6-C1), and the answer of an earlier screen, or of an earlier read, never reaches it (P6-C2).
+ */
+data class TeamRead(
+    /**
+     * The team screen that asked: its back stack entry, which stays the same across a rotation and a return from As ve
+     * Yedek Yerleri. Null for the team Takım Kur just made, before its screen opened.
+     */
+    val screen: String?,
+    val id: String,
+    /** The read on its way, or answered last. The view model counts the reads; 0 for Takım Kur's answer. */
+    val number: Long,
+    /** The team as this read answered, or as the app knew it when the screen opened. Null after NOT_A_MEMBER or TEAM_NOT_FOUND. */
+    val team: TeamInfo? = null,
+    /** Why this read failed. Only the screen's next read clears it. */
+    val problem: TeamProblem? = null,
+    /**
+     * The new members this screen's first answer named: the screen's Son katılanlar line. The app marks seen only these,
+     * up to the newest join of the same answer (P6-C3). Null until that answer came.
+     */
+    val recentJoins: Int? = null,
+)
 
 data class AppUiState(
     val matches: List<MatchRecord> = emptyList(),
@@ -1322,11 +1346,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     /** The read of the list on its way. A new read replaces it. */
     @Volatile private var listJob: Job? = null
     /**
-     * The id this phone chose for the Takım Kur whose answer it has not had yet. A repeat after a lost answer sends the
-     * same id, so the server answers 200 with the team the lost request created (design 9.6). A process that ends loses
-     * it (plan U39). The server's 201 or 200 spends it.
+     * The Takım Kur whose answer this phone has not had yet: the id it chose and the draft it sent. A repeat after a lost
+     * answer sends the same id, so the server answers 200 with the team the lost request created (design 9.6). A process
+     * that ends loses it (plan U39). The server's 201 or 200 spends it, and so does TEAM_ID_TAKEN. Once a read of the list
+     * shows the team under this id, only the same draft repeats the id; another draft is another team and takes a new id
+     * (P6-C4).
      */
-    @Volatile private var pendingTeamId: String? = null
+    @Volatile private var pendingCreation: PendingCreation? = null
+
+    private data class PendingCreation(val id: String, val draft: TeamDraft, val shown: Boolean = false)
+
+    /** Counts the team screen's reads, so that the answer of a read another one replaced reaches no screen (P6-C2). */
+    private var teamReads = 0L
     /** A screen asked for the teams. Only from then on does another address read them again (as [signupWanted] does). */
     @Volatile private var teamsWanted = false
 
@@ -1334,7 +1365,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         teamCalls.cancel()
         teamCalls = SupervisorJob(viewModelScope.coroutineContext[Job])
         listJob = null
-        pendingTeamId = null
+        pendingCreation = null
     }
 
     private fun resetTeams() {
@@ -1360,14 +1391,23 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** The list without the team [id], which the server no longer shows to this account. */
-    private fun TeamsUi.without(id: String) = copy(teams = teams?.filterNot { it.id == id }, opened = opened?.takeUnless { it.id == id })
+    /** The list without the team [id], which the server no longer shows to this account. A screen's read of it keeps its outcome. */
+    private fun TeamsUi.without(id: String) = copy(teams = teams?.filterNot { it.id == id }, opened = opened?.let { if (it.id == id) it.copy(team = null) else it })
 
     /** The list with [team] as the server just sent it, in its place. A list that is unread stays unread. */
-    private fun TeamsUi.with(team: TeamInfo, add: Boolean = false) = copy(
+    private fun TeamsUi.listing(team: TeamInfo, add: Boolean = false) = copy(
         teams = teams?.let { list -> if (list.any { it.id == team.id }) list.map { if (it.id == team.id) team else it } else if (add) list + team else list },
-        opened = if (opened?.id == team.id) team else opened,
     )
+
+    /** The list and the team screen's read with [team] as a team action's answer sent it. */
+    private fun TeamsUi.with(team: TeamInfo, add: Boolean = false) =
+        listing(team, add).copy(opened = opened?.let { if (it.id == team.id) it.copy(team = team) else it })
+
+    /** The list showed these teams: a lost Takım Kur whose id is among them made its team (P6-C4). */
+    private fun noteShown(teams: List<TeamInfo>) {
+        val pending = pendingCreation ?: return
+        if (teams.any { it.id == pending.id }) pendingCreation = pending.copy(shown = true)
+    }
 
     /**
      * Reads the teams of the signed-in account: on Home's opening, on the Teams tab's opening, on every resume, after every
@@ -1379,9 +1419,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         listJob?.cancel()
         teamState(token) { it.copy(loading = true) }
         listJob = teamCall(token, { it.teams() }) { outcome ->
+            outcome.getOrNull()?.let(::noteShown)
+            // The team screen's read keeps its own outcome: a list that answers clears only the list's problem (P6-C1).
             teamState(token) { ui ->
                 outcome.fold(
-                    onSuccess = { ui.copy(teams = it, loading = false, loadProblem = null, opened = ui.opened?.let { open -> it.firstOrNull { team -> team.id == open.id } ?: open }) },
+                    onSuccess = { ui.copy(teams = it, loading = false, loadProblem = null) },
                     onFailure = { ui.copy(loading = false, loadProblem = TeamProblem.of(it)) },
                 )
             }
@@ -1389,25 +1431,46 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Reads the team [id] for the team screen. A captain whose team has members who joined after the captain's mark marks
-     * them seen up to the newest join of this answer (plan D4); a member sends nothing, because the route answers a member
-     * 403 CAPTAIN_ONLY. A team the server no longer shows to this account, or no longer holds, leaves the list.
+     * Reads the team [id] for the team screen [screen] (its back stack entry). The screen's read keeps its outcome until
+     * the screen reads again, and only the answer of the screen's latest read reaches it (P6-C1, P6-C2). A team the server
+     * no longer shows to this account, or no longer holds, leaves the list, whichever read learned it.
+     *
+     * The first answer of a screen sets its Son katılanlar count. A captain whose team has members who joined after the
+     * captain's mark marks them seen up to the newest join of that same answer, so the app marks only the members the
+     * screen counts (plan D4, P6-C3). A later answer of the same screen, after a rotation or a return from As ve Yedek
+     * Yerleri, marks nothing: a member who joined meanwhile stays new for the badge and the next visit. A member sends
+     * nothing, because the route answers a member 403 CAPTAIN_ONLY.
      */
-    fun openTeam(id: String) {
+    fun openTeam(id: String, screen: String = id) {
         val token = session?.token ?: return
-        teamState(token) { it.copy(loadProblem = null, opened = it.teamOf(id)) }
+        val number = ++teamReads
+        teamState(token) { ui ->
+            val same = ui.opened?.takeIf { it.screen == screen && it.id == id }
+            ui.copy(opened = same?.copy(number = number, problem = null) ?: TeamRead(screen, id, number, team = ui.teamOf(id)))
+        }
         teamCall(token, { it.team(id) }) { outcome ->
             val team = outcome.getOrNull()
-            if (team == null) {
-                val problem = TeamProblem.of(outcome.exceptionOrNull()!!)
-                teamState(token) { ui -> (if (problem == TeamProblem.NoAccess || problem == TeamProblem.Gone) ui.without(id) else ui).copy(loadProblem = problem) }
-                return@teamCall
+            var markUpTo: String? = null
+            teamState(token) { ui ->
+                markUpTo = null
+                // The answer of the screen's latest read, or null when another read replaced this one.
+                val read = ui.opened?.takeIf { it.number == number }
+                if (team == null) {
+                    val problem = TeamProblem.of(outcome.exceptionOrNull()!!)
+                    val left = if (problem == TeamProblem.NoAccess || problem == TeamProblem.Gone) ui.without(id) else ui
+                    if (read == null) left else left.copy(opened = left.opened?.copy(problem = problem))
+                } else if (read == null) {
+                    // An earlier screen's answer still brings its team's list entry up to date, unless a later read of
+                    // the same team is on its way or answered.
+                    if (ui.opened?.id == id) ui else ui.listing(team)
+                } else {
+                    val joins = if (team.captain) team.newJoins ?: 0 else 0
+                    if (read.recentJoins == null && joins > 0) markUpTo = team.members.maxOfOrNull { it.joinedAt }
+                    ui.listing(team).copy(opened = read.copy(team = team, problem = null, recentJoins = read.recentJoins ?: joins))
+                }
             }
-            teamState(token) { it.with(team).copy(opened = team) }
-            val newest = team.members.maxOfOrNull { it.joinedAt }
-            if (team.captain && (team.newJoins ?: 0) > 0 && newest != null) {
-                teamCall(token, { it.joinsSeen(id, newest) }) { loadTeams() }
-            }
+            val upTo = markUpTo
+            if (upTo != null && session?.token == token) teamCall(token, { it.joinsSeen(id, upTo) }) { loadTeams() }
         }
     }
 
@@ -1422,15 +1485,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
      */
     private fun <T> teamAction(
         teamId: String?, call: (ApiClient) -> T, onRefused: (TeamProblem) -> TeamProblem = { it }, apply: (TeamsUi, T) -> TeamsUi, then: (T) -> Unit,
-    ) {
-        val token = session?.token ?: return
+    ): Boolean {
+        val token = session?.token ?: return false
         var started = false
         _state.update {
+            started = false
             if (session?.token != token || it.serverTeams.busy) return@update it
             started = true
             it.copy(serverTeams = it.serverTeams.copy(busy = true, problem = null))
         }
-        if (!started) return
+        if (!started) return false
         teamCall(token, call) { outcome ->
             outcome.fold(
                 onSuccess = { answer ->
@@ -1447,28 +1511,42 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             )
             loadTeams()
         }
+        return true
     }
 
     /**
      * Takım Kur: creates the team under an id this phone chose and keeps it until the server answered 201 or 200, so a
-     * repeat after a lost answer creates no second team (design 9.6). [onCreated] gets the team's id.
+     * repeat after a lost answer creates no second team (design 9.6). While the list has not shown the team of a lost
+     * answer, every Takım Kur repeats its id: the server then answers with the team the lost request made, if it made one.
+     * Once the list has shown it, the same draft still repeats the id and gets that team, and another draft takes a new
+     * id, because the user sets up another team (P6-C4). [onCreated] gets the team's id.
      */
     fun createTeam(draft: TeamDraft, onCreated: (String) -> Unit) {
         if (session == null) return
-        val id = pendingTeamId ?: UUID.randomUUID().toString().also { pendingTeamId = it }
-        teamAction(
+        val sent = draft.copy(name = draft.name.trim())
+        val pending = pendingCreation
+        val creation = when {
+            pending == null -> PendingCreation(UUID.randomUUID().toString(), sent)
+            pending.shown && pending.draft == sent -> pending
+            pending.shown -> PendingCreation(UUID.randomUUID().toString(), sent)
+            else -> PendingCreation(pending.id, sent)
+        }
+        val id = creation.id
+        val started = teamAction(
             null,
-            { it.putTeam(id, draft.name.trim(), draft.substituteSeats, draft.captainSeat, draft.schedule, draft.jersey) },
+            { it.putTeam(id, sent.name, sent.substituteSeats, sent.captainSeat, sent.schedule, sent.jersey) },
             onRefused = { problem ->
                 // Another account's team has this id: the next try takes a new one.
-                if (problem == TeamProblem.IdTaken && pendingTeamId == id) pendingTeamId = null
+                if (problem == TeamProblem.IdTaken && pendingCreation?.id == id) pendingCreation = null
                 problem
             },
-            apply = { ui, (team, _) -> ui.with(team, add = true).copy(opened = team) },
+            apply = { ui, (team, _) -> ui.with(team, add = true).copy(opened = TeamRead(screen = null, id = team.id, number = 0, team = team)) },
         ) { (team, _) ->
-            if (pendingTeamId == id) pendingTeamId = null
+            if (pendingCreation?.id == id) pendingCreation = null
             onCreated(team.id)
         }
+        // A Takım Kur that did not start (another team action is on its way) leaves the pending one as it was.
+        if (started) pendingCreation = creation
     }
 
     /**

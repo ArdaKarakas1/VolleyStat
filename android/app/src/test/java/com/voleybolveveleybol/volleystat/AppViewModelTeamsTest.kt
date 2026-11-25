@@ -229,6 +229,101 @@ class AppViewModelTeamsTest {
         assertTrue("every creation ends with the list", seen.last().key == "GET /teams" || seen.any { it.key == "GET /teams" })
     }
 
+    /**
+     * A server that makes a team under each new id and answers a repeated id with the team it made first (design 9.6). The
+     * first creation's answer is lost after the server made the team. The list answers with every team it made.
+     */
+    private fun serverThatLosesTheFirstCreation(listFails: Boolean = false): ConcurrentHashMap<String, String> {
+        val made = ConcurrentHashMap<String, String>()
+        val lose = AtomicBoolean(true)
+        on("PUT /teams/{new}") { request ->
+            val path = request.requestUrl!!.encodedPath.removePrefix("/v1")
+            val id = path.substringAfterLast('/')
+            val first = made.putIfAbsent(id, JSONObject(seen.last { it.path == path }.body).getString("name")) == null
+            if (lose.getAndSet(false)) lost() else ok(team(id, name = made.getValue(id)), if (first) 201 else 200)
+        }
+        on("GET /teams") { if (listFails) refuse(500, "INTERNAL") else teams(*made.map { (id, name) -> team(id, name = name) }.toTypedArray()) }
+        return made
+    }
+
+    private fun AppViewModel.createAndLose(draft: TeamDraft) {
+        createTeam(draft) { error("the answer was lost") }
+        await("the lost answer") { !state.value.serverTeams.busy && state.value.serverTeams.problem == TeamProblem.Unreachable }
+        clearTeamProblem()
+    }
+
+    @Test fun anotherTeamAfterALostCreationTheListShowedTakesANewId() {
+        TestAccounts.seed(context)
+        val made = serverThatLosesTheFirstCreation()
+        val vm = viewModel()
+        vm.createAndLose(TeamDraft("Kuzey Spor"))
+        // The action's own read of the list shows the team the lost request made: the server confirmed it.
+        await("the list with the lost creation's team") { vm.state.value.serverTeams.teams?.map { it.name } == listOf("Kuzey Spor") }
+
+        val opened = CopyOnWriteArrayList<String>()
+        vm.createTeam(TeamDraft("Güney Spor")) { opened += it }
+        await("the second creation") { opened.isNotEmpty() || vm.state.value.serverTeams.problem != null }
+        val ids = creations()
+        assertEquals(2, ids.size)
+        assertNotEquals("another team never repeats the id of a team the server showed", ids[0], ids[1])
+        assertEquals(setOf("Kuzey Spor", "Güney Spor"), made.values.toSet())
+        assertEquals("the screen opens the new team", listOf(ids[1]), opened.toList())
+    }
+
+    @Test fun theLostDraftRepeatedAfterTheListShowedItsTeamGetsThatTeam() {
+        TestAccounts.seed(context)
+        val made = serverThatLosesTheFirstCreation()
+        val vm = viewModel()
+        vm.createAndLose(TeamDraft("Kuzey Spor"))
+        await("the list with the lost creation's team") { vm.state.value.serverTeams.teams?.map { it.name } == listOf("Kuzey Spor") }
+
+        // The user taps Takım Kur again on the same form; a space typed after the name changes nothing the server keeps.
+        val opened = CopyOnWriteArrayList<String>()
+        vm.createTeam(TeamDraft("Kuzey Spor ")) { opened += it }
+        await("the repeat") { opened.isNotEmpty() || vm.state.value.serverTeams.problem != null }
+        val ids = creations()
+        assertEquals("the repeat names the lost request's id (design 9.6)", ids[0], ids[1])
+        assertEquals(listOf("Kuzey Spor"), made.values.toList())
+        assertEquals(listOf(ids[0]), opened.toList())
+    }
+
+    @Test fun whileNoReadShowedTheLostCreationAnotherDraftRepeatsItsId() {
+        TestAccounts.seed(context)
+        val made = serverThatLosesTheFirstCreation(listFails = true)
+        val vm = viewModel()
+        vm.createAndLose(TeamDraft("Kuzey Spor"))
+        await("the failed read of the list") { vm.state.value.serverTeams.loadProblem != null && !vm.state.value.serverTeams.loading }
+
+        // The app does not know whether the lost request made a team. The id goes again, so the server answers with that
+        // team if it made one, and a second team never comes of it.
+        val opened = CopyOnWriteArrayList<String>()
+        vm.createTeam(TeamDraft("Kuzey Spor Kulübü")) { opened += it }
+        await("the repeat") { opened.isNotEmpty() || vm.state.value.serverTeams.problem != null }
+        val ids = creations()
+        assertEquals(ids[0], ids[1])
+        assertEquals(listOf("Kuzey Spor"), made.values.toList())
+        assertEquals(listOf(ids[0]), opened.toList())
+    }
+
+    @Test fun anIdAnotherTeamHoldsIsNotSentAgain() {
+        TestAccounts.seed(context)
+        val taken = AtomicBoolean(true)
+        on("PUT /teams/{new}") { request ->
+            if (taken.getAndSet(false)) refuse(409, "TEAM_ID_TAKEN") else ok(team(request.requestUrl!!.encodedPath.substringAfterLast('/')), 201)
+        }
+        on("GET /teams") { teams() }
+        val vm = viewModel()
+        vm.createTeam(TeamDraft("Kuzey Spor")) { error("refused") }
+        await("the refusal") { !vm.state.value.serverTeams.busy && vm.state.value.serverTeams.problem == TeamProblem.IdTaken }
+        vm.clearTeamProblem()
+        val opened = CopyOnWriteArrayList<String>()
+        vm.createTeam(TeamDraft("Kuzey Spor")) { opened += it }
+        await("the second try") { opened.isNotEmpty() }
+        val ids = creations()
+        assertNotEquals("the next try takes a new id", ids[0], ids[1])
+        assertEquals(listOf(ids[1]), opened.toList())
+    }
+
     @Test fun aCreationRefusedForTheCaptainLimitShowsTheLimitTheServerNamed() {
         TestAccounts.seed(context)
         var limit = 3
@@ -352,8 +447,10 @@ class AppViewModelTeamsTest {
         on("GET /teams/t1") { refuse(403, "NOT_A_MEMBER") }
         val vm = viewModel().loaded()
         vm.openTeam("t1")
-        await("the refusal") { vm.state.value.serverTeams.loadProblem != null }
-        assertEquals(TeamProblem.NoAccess, vm.state.value.serverTeams.loadProblem)
+        // The team screen's read keeps its own refusal; the list's problem is the list's (P6-C1).
+        await("the refusal") { vm.state.value.serverTeams.opened?.problem != null }
+        assertEquals(TeamProblem.NoAccess, vm.state.value.serverTeams.opened?.problem)
+        assertNull(vm.state.value.serverTeams.loadProblem)
         assertEquals(listOf("t2"), vm.state.value.serverTeams.teams!!.map { it.id })
         assertEquals(string(R.string.team_no_access), teamProblemText(TeamProblem.NoAccess).resolve(context))
     }
@@ -364,8 +461,9 @@ class AppViewModelTeamsTest {
         on("GET /teams/t1") { refuse(404, "TEAM_NOT_FOUND") }
         val vm = viewModel().loaded()
         vm.openTeam("t1")
-        await("the refusal") { vm.state.value.serverTeams.loadProblem != null }
-        assertEquals(TeamProblem.Gone, vm.state.value.serverTeams.loadProblem)
+        await("the refusal") { vm.state.value.serverTeams.opened?.problem != null }
+        assertEquals(TeamProblem.Gone, vm.state.value.serverTeams.opened?.problem)
+        assertNull(vm.state.value.serverTeams.loadProblem)
         assertEquals(listOf("t2"), vm.state.value.serverTeams.teams!!.map { it.id })
         assertEquals(string(R.string.team_gone), teamProblemText(TeamProblem.Gone).resolve(context))
 
@@ -416,6 +514,140 @@ class AppViewModelTeamsTest {
         assertTrue(seen.map { it.key }.toString(), seen.none { it.key.endsWith("/joins-seen") })
         assertNull(vm.state.value.serverTeams.problem)
         assertNull(vm.state.value.serverTeams.loadProblem)
+        assertNull(vm.state.value.serverTeams.opened?.problem)
+    }
+
+    @Test fun aRefusedTeamKeepsItsRefusalWhenTheListIsReadAgain() {
+        TestAccounts.seed(context)
+        on("GET /teams") { teams(team("t1"), team("t2", name = "Güney Spor")) }
+        on("GET /teams/t1") { refuse(404, "TEAM_NOT_FOUND") }
+        val vm = viewModel().loaded()
+        vm.openTeam("t1", "screen-1")
+        await("the refusal") { vm.state.value.serverTeams.opened?.problem != null }
+        // A resume reads the list, which answers without the team: the screen still knows why it shows none (P6-C1).
+        on("GET /teams") { teams(team("t2", name = "Güney Spor")) }
+        vm.loaded()
+        var ui = vm.state.value.serverTeams
+        assertNull(ui.loadProblem)
+        assertEquals(TeamProblem.Gone, ui.opened?.problem)
+        assertNull(ui.teamOf("t1"))
+        // A failed read of the list leaves it alone too.
+        on("GET /teams") { refuse(500, "INTERNAL") }
+        vm.loaded()
+        ui = vm.state.value.serverTeams
+        assertEquals(TeamProblem.Failed(500, "INTERNAL"), ui.loadProblem)
+        assertEquals(TeamProblem.Gone, ui.opened?.problem)
+        // Only the screen's own next read clears it.
+        vm.openTeam("t1", "screen-1")
+        assertNull(vm.state.value.serverTeams.opened?.problem)
+        await("the refusal again") { vm.state.value.serverTeams.opened?.problem != null }
+    }
+
+    @Test fun aLateRefusalOfAnEarlierTeamScreenStaysOffTheNextOne() {
+        TestAccounts.seed(context)
+        val heldA = CountDownLatch(1)
+        on("GET /teams") { teams(team("a", name = "Alfa Spor"), team("b", name = "Beta Spor")) }
+        on("GET /teams/a") { heldA.await(10, TimeUnit.SECONDS); refuse(404, "TEAM_NOT_FOUND") }
+        on("GET /teams/b") { ok(team("b", name = "Beta Spor")) }
+        val vm = viewModel().loaded()
+        vm.openTeam("a", "screen-a")
+        await("Alfa's request") { seen.any { it.key == "GET /teams/a" } }
+        // The user leaves Alfa's screen before the answer and opens Beta's, which answers at once.
+        vm.openTeam("b", "screen-b")
+        await("Beta's answer") { vm.state.value.serverTeams.opened?.recentJoins != null }
+        heldA.countDown()
+        // Alfa's refusal still takes Alfa off the list (P6-C2).
+        await("Alfa's answer") { vm.state.value.serverTeams.teams?.map { it.id } == listOf("b") }
+        val read = vm.state.value.serverTeams.opened!!
+        assertEquals("screen-b", read.screen)
+        assertNull("Beta's screen shows no refusal of Alfa", read.problem)
+        assertEquals("Beta Spor", vm.state.value.serverTeams.teamOf("b")?.name)
+    }
+
+    @Test fun aLateAnswerOfAnEarlierTeamScreenLeavesTheNextOnesTeam() {
+        TestAccounts.seed(context)
+        val heldA = CountDownLatch(1)
+        val answeredA = AtomicBoolean(false)
+        on("GET /teams/a") { heldA.await(10, TimeUnit.SECONDS); answeredA.set(true); ok(team("a", name = "Alfa Spor")) }
+        on("GET /teams/b") { ok(team("b", name = "Beta Spor")) }
+        // The list is unread: the screens have only their own reads.
+        val vm = viewModel()
+        vm.openTeam("a", "screen-a")
+        await("Alfa's request") { seen.any { it.key == "GET /teams/a" } }
+        vm.openTeam("b", "screen-b")
+        await("Beta's answer") { vm.state.value.serverTeams.teamOf("b") != null }
+        heldA.countDown()
+        await("Alfa's answer at the server") { answeredA.get() }
+        repeat(3) { settle() }
+        val ui = vm.state.value.serverTeams
+        assertEquals("screen-b", ui.opened?.screen)
+        assertEquals("Beta's screen keeps its team", "Beta Spor", ui.teamOf("b")?.name)
+        assertNull(ui.opened?.problem)
+    }
+
+    @Test fun anEarlierReadOfTheSameScreenThatAnswersLateChangesNothing() {
+        TestAccounts.seed(context)
+        val heldFirst = CountDownLatch(1)
+        val firstAnswered = AtomicBoolean(false)
+        val reads = java.util.concurrent.atomic.AtomicInteger()
+        on("GET /teams/t1") {
+            if (reads.incrementAndGet() > 1) {
+                ok(team("t1"))
+            } else {
+                heldFirst.await(10, TimeUnit.SECONDS)
+                firstAnswered.set(true)
+                refuse(500, "INTERNAL")
+            }
+        }
+        val vm = viewModel()
+        vm.openTeam("t1", "screen-1")
+        await("the first read at the server") { reads.get() == 1 }
+        // The same screen reads again (a rotation), and the second read answers first.
+        vm.openTeam("t1", "screen-1")
+        await("the second answer") { vm.state.value.serverTeams.opened?.team != null }
+        heldFirst.countDown()
+        await("the first answer at the server") { firstAnswered.get() }
+        repeat(3) { settle() }
+        assertNull("the screen shows no failure of a read the next one replaced", vm.state.value.serverTeams.opened?.problem)
+        assertEquals("Kuzey Spor", vm.state.value.serverTeams.teamOf("t1")?.name)
+    }
+
+    @Test fun theScreenCountsTheNewMembersItMarksSeenAndNoOthers() {
+        TestAccounts.seed(context)
+        val ece = member("u-2", "Ece", Seat.STARTER, "2026-11-21T12:00:00Z")
+        val fatma = member("u-3", "Fatma", Seat.SUBSTITUTE, "2026-11-22T12:00:00Z")
+        fun marks() = seen.filter { it.key == "POST /teams/t1/joins-seen" }
+        // The list the screen opens with names no new member. Ece joined after that read: the team's own read names her.
+        on("GET /teams") { teams(team("t1", newJoins = 0)) }
+        on("GET /teams/t1") { ok(team("t1", newJoins = 1, members = listOf(captainRow, ece))) }
+        on("POST /teams/t1/joins-seen") {
+            on("GET /teams") { teams(team("t1", newJoins = 0, members = listOf(captainRow, ece))) }
+            MockResponse().setResponseCode(204)
+        }
+        val vm = viewModel().loaded()
+        vm.openTeam("t1", "screen-1")
+        await("the mark and the list after it") {
+            marks().size == 1 && seen.indexOfLast { it.key == "GET /teams" } > seen.indexOf(marks().single()) && !vm.state.value.serverTeams.loading
+        }
+        assertEquals("the screen counts the member the app marks seen (P6-C3)", 1, vm.state.value.serverTeams.opened?.recentJoins)
+        assertEquals("2026-11-21T12:00:00Z", JSONObject(marks().single().body).getString("upTo"))
+        assertEquals(0, vm.state.value.serverTeams.badge)
+
+        // Fatma joins, and the same screen reads again (a rotation, a return from As ve Yedek Yerleri): the count it showed
+        // stays, and Fatma, whom it does not count, stays new.
+        on("GET /teams/t1") { ok(team("t1", newJoins = 1, members = listOf(captainRow, ece, fatma))) }
+        vm.openTeam("t1", "screen-1")
+        await("the second answer") { vm.state.value.serverTeams.opened?.team?.members?.size == 3 }
+        settle()
+        assertEquals(1, vm.state.value.serverTeams.opened?.recentJoins)
+        assertEquals("no mark for a member the screen did not count", 1, marks().size)
+
+        // Another visit of the team counts her and marks her seen.
+        vm.openTeam("t1", "screen-2")
+        await("the second mark") { marks().size == 2 }
+        assertEquals("2026-11-22T12:00:00Z", JSONObject(marks().last().body).getString("upTo"))
+        assertEquals("screen-2", vm.state.value.serverTeams.opened?.screen)
+        assertEquals(1, vm.state.value.serverTeams.opened?.recentJoins)
     }
 
     // ----- the session (D1) -----

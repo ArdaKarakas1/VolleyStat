@@ -341,8 +341,9 @@ fun TeamCreateScreen(busy: Boolean, problem: TeamProblem?, onCreate: (TeamDraft)
 
 /**
  * One team: its initials, name, tag and schedule; the account's role and seat; the members under Aslar and Yedekler.
- * The captain also sees the new members since the last look ([recentJoins], the count the screen opened with), the hint
- * about a free starter seat, and As ve Yedek Yerleri. [team] is null while the app reads it or after the read failed.
+ * The captain also sees the new members since the last look ([recentJoins]: the route passes the count of the screen's
+ * first answer, which the app marks seen), the hint about a free starter seat, and As ve Yedek Yerleri. [team] is null
+ * while the app reads it or after the read failed.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
