@@ -10,8 +10,9 @@ from pathlib import Path
 
 from .jobs import ACTIVE_STATES
 
-# A verification that has been running longer than this is treated as abandoned (crashed process)
-# and may be taken over by the next complete call. A younger one holds its match against deletion.
+# A verification that started this many seconds of server uptime ago (sweep.py) is treated as abandoned
+# (crashed process) and may be taken over by the next complete call. A younger one holds its match
+# against deletion.
 FINALIZE_STALE_SECONDS = 15 * 60
 
 
@@ -46,11 +47,19 @@ class Removed:
             path.unlink(missing_ok=True)
 
 
-def finalizing(db, match_id: str, now: float) -> bool:
-    """True while a verification younger than FINALIZE_STALE_SECONDS is turning an upload of the match into a video."""
+def still_verifying(upload, uptime: float) -> bool:
+    """True while the FINALIZING upload's verification started less than FINALIZE_STALE_SECONDS of server uptime
+    before `uptime`. A row without the uptime of its start (stored before server 0.9) is abandoned."""
+    started = upload["finalize_started_uptime"]
+    return started is not None and uptime - started < FINALIZE_STALE_SECONDS
+
+
+def finalizing(db, match_id: str, uptime: float) -> bool:
+    """True while a verification that started less than FINALIZE_STALE_SECONDS of server uptime before `uptime`
+    is turning an upload of the match into a video."""
     return db.execute(
-        "SELECT 1 FROM uploads WHERE match_id=? AND status='FINALIZING' AND ? - COALESCE(finalize_started_at, 0) < ?",
-        (match_id, now, FINALIZE_STALE_SECONDS)).fetchone() is not None
+        "SELECT 1 FROM uploads WHERE match_id=? AND status='FINALIZING' AND ? - finalize_started_uptime < ?",
+        (match_id, uptime, FINALIZE_STALE_SECONDS)).fetchone() is not None
 
 
 def delete_match_rows(db, files: MediaFiles, match_id: str) -> Removed:

@@ -9,7 +9,7 @@ from contextlib import closing
 
 import pytest
 
-from app import admin, main as main_module
+from app import admin, deletion, sweep
 from app.quotas import GIB
 from tests.helpers import (
     OWNER, STRANGER, ScriptedAnalyzer, card_of, decide, forget_sessions, ready_video, request_job, rows, run_pending,
@@ -17,15 +17,17 @@ from tests.helpers import (
 )
 from tests.test_api import create_match, create_upload, set_upload
 
-NEW_INDEXES = ("matches_owner", "matches_status", "uploads_touched", "uploads_started_by")
+NEW_INDEXES = ("matches_owner", "matches_status", "uploads_unfinished", "uploads_started_by")
 NEW_COLUMNS = (("matches", "status"), ("matches", "owner_user_id"), ("uploads", "touched_at"), ("uploads", "started_by"),
-               ("uploads", "finalize_token"), ("uploads", "kept_touched_at"), ("uploads", "kept_finalize_started_at"))
+               ("uploads", "finalize_token"), ("uploads", "touched_uptime"), ("uploads", "finalize_started_uptime"))
 ACCOUNT_TABLES = ("sessions", "login_devices", "operator_codes", "users")
+DAY = 24 * 3600
+STALE = deletion.FINALIZE_STALE_SECONDS
 
 
 @pytest.fixture
 def client(storage):
-    """The signed-in client without the background threads. The sweep thread writes its clock (server_clock)
+    """The signed-in client without the background threads. The sweep thread writes its uptime (server_clock)
     when it starts, and a test that compares two dumps of the storage would see that write if it came
     between them."""
     with serve(storage, None) as signed_in:
@@ -37,16 +39,77 @@ def database(storage):
 
 
 def back_to_before_accounts(storage):
-    """Turn the storage into what server 0.7 wrote (design 8.6): the indexes first, because SQLite
-    refuses to drop an indexed column, then the columns, then the account tables, sessions first."""
+    """Turn the storage into what server 0.7 and 0.8 wrote (design 8.6): the indexes first, because SQLite
+    refuses to drop an indexed column, then the columns, then the account tables, sessions first, and the
+    uptime of the sweep."""
     with database(storage) as db, db:
         for index in NEW_INDEXES:
             db.execute(f"DROP INDEX {index}")
         for table, column in NEW_COLUMNS:
             db.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
-        for table in ACCOUNT_TABLES:
+        for table in (*ACCOUNT_TABLES, "server_clock"):
             db.execute(f"DROP TABLE {table}")
     forget_sessions(storage)
+
+
+# What the builds of B3 before the uptime counter wrote (up to 57e13fe): the last moment the server was seen
+# running by the wall clock, the time off, what a step back of the clock kept, and no uptime columns.
+EARLIER_B3 = (
+    "CREATE TABLE server_clock (id INTEGER PRIMARY KEY CHECK (id = 1), last_alive REAL NOT NULL, kept_alive REAL,"
+    " went_back_to REAL, behind_from REAL)",
+    "CREATE TABLE server_downtimes (stopped_at REAL NOT NULL, started_at REAL NOT NULL)",
+    "CREATE TABLE server_downtimes_kept (stopped_at REAL NOT NULL, started_at REAL NOT NULL)",
+    "CREATE INDEX uploads_touched ON uploads(touched_at) WHERE status = 'UPLOADING'",
+    "ALTER TABLE uploads ADD COLUMN kept_touched_at REAL",
+    "ALTER TABLE uploads ADD COLUMN kept_finalize_started_at REAL",
+)
+
+
+def back_to_an_earlier_b3_build(storage, now):
+    with database(storage) as db, db:
+        db.execute("DROP INDEX uploads_unfinished")
+        for column in ("touched_uptime", "finalize_started_uptime"):
+            db.execute(f"ALTER TABLE uploads DROP COLUMN {column}")
+        db.execute("DROP TABLE server_clock")
+        for statement in EARLIER_B3:
+            db.execute(statement)
+        # The clock ran an hour ahead and went back, and a sleep and the time off of a night are recorded.
+        db.execute("INSERT INTO server_clock VALUES(1, ?, ?, ?, ?)", (now, now + 3600, now, now - 180))
+        db.execute("INSERT INTO server_downtimes VALUES(?, ?)", (now - 9 * 3600, now - 3600))
+        db.execute("INSERT INTO server_downtimes_kept VALUES(?, ?)", (now - 9 * 3600, now + 3600))
+        db.execute("UPDATE uploads SET kept_touched_at = ?", (now + 1800,))
+
+
+def full_upload(client, data=b"abc"):
+    upload_id = create_upload(client, create_match(client), size=len(data)).json()["uploadId"]
+    assert client.put(f"/v1/uploads/{upload_id}/chunks?offset=0", content=data).status_code == 200
+    return upload_id
+
+
+def write_uptime(storage, uptime):
+    with database(storage) as db, db:
+        db.execute("INSERT OR REPLACE INTO server_clock(id, uptime) VALUES(1, ?)", (uptime,))
+
+
+class Sweep:
+    """A sweeper over the app's storage whose monotonic clock the test moves, put where the routes find it."""
+
+    def __init__(self, client):
+        self.ticks = 5.0
+        original = client.app.state.sweeper
+        self.swept = sweep.Sweeper(original._connect, original._files, monotonic=lambda: self.ticks)
+        client.app.state.sweeper = self.swept
+        self.swept.resume()
+
+    def run(self, seconds):
+        """The server runs `seconds` with a pass every three minutes and one at the end; returns the closes."""
+        closed = 0
+        while seconds > 0:
+            step = min(sweep.MAX_PASS_GAP_SECONDS, seconds)
+            self.ticks += step
+            closed += self.swept.run_once()["uploads"]
+            seconds -= step
+        return closed
 
 
 def dump(storage):
@@ -93,12 +156,12 @@ def test_storage_from_before_accounts_gets_legacy_matches_and_the_new_columns(st
 
     with serve(storage, None) as client:
         assert rows(storage, "SELECT status, owner_user_id FROM matches") == [{"status": "LEGACY", "owner_user_id": None}]
-        assert {(row["touched_at"], row["started_by"], row["finalize_token"], row["kept_touched_at"],
-                 row["kept_finalize_started_at"]) for row in rows(storage, "SELECT * FROM uploads")} == {
+        assert {(row["touched_at"], row["started_by"], row["finalize_token"], row["touched_uptime"],
+                 row["finalize_started_uptime"]) for row in rows(storage, "SELECT * FROM uploads")} == {
             (None, None, None, None, None)}
         assert rows(storage, "SELECT status FROM uploads WHERE id=?", unfinished) == [{"status": "UPLOADING"}]
         assert indexes(storage, "matches") >= {"matches_owner", "matches_status"}
-        assert indexes(storage, "uploads") >= {"uploads_touched", "uploads_started_by"}
+        assert indexes(storage, "uploads") >= {"uploads_unfinished", "uploads_started_by"}
         with database(storage) as db:
             assert {name for (name,) in db.execute("SELECT name FROM sqlite_master WHERE type='table'")} >= set(ACCOUNT_TABLES)
         # Nobody sees the match, not even a fresh account of the same name.
@@ -133,22 +196,94 @@ def test_the_new_indexes_are_created_after_the_columns_on_older_storage(storage)
         db.execute("INSERT INTO matches(id, home_team, away_team) VALUES('m1', 'A Takımı', 'B Takımı')")
     with serve(storage, None):
         assert indexes(storage, "matches") >= {"matches_owner", "matches_status"}
-        assert indexes(storage, "uploads") >= {"uploads_touched", "uploads_started_by"}
+        assert indexes(storage, "uploads") >= {"uploads_unfinished", "uploads_started_by"}
         assert rows(storage, "SELECT status, owner_user_id FROM matches") == [{"status": "LEGACY", "owner_user_id": None}]
 
 
-def test_a_clock_written_by_an_earlier_build_of_b3_gets_the_columns_of_the_kept_moment(storage):
-    """Server 0.9 builds before the kept moment wrote server_clock with last_alive alone. The start adds the
-    columns, and a pass that finds the clock behind keeps the moment there."""
+def test_a_verification_left_by_0_8_counts_from_the_first_start_of_0_9(storage, capsys):
+    """Server 0.8 kept no uptime. A verification it left unfinished a month ago by the wall clock counts as
+    started at the uptime of the first start: legacy --delete refuses its match until the server has run 15
+    minutes, and the sweep closes another such verification a day of uptime after the first start."""
     with serve(storage, None) as client:
-        client.app.state.sweeper.run_once(now=2000.0)
-    with database(storage) as db, db:
-        for column in ("kept_alive", "went_back_to", "behind_from"):
-            db.execute(f"ALTER TABLE server_clock DROP COLUMN {column}")
+        held, closed = full_upload(client), full_upload(client)
+    month_ago = time.time() - 30 * DAY
+    for upload_id in (held, closed):
+        set_upload(storage, upload_id, status="FINALIZING", finalize_started_at=month_ago)
+    held_match = rows(storage, "SELECT match_id FROM uploads WHERE id=?", held)[0]["match_id"]
+    back_to_before_accounts(storage)
     with serve(storage, None) as client:
-        client.app.state.sweeper.run_once(now=1000.0)
-        assert rows(storage, "SELECT last_alive, kept_alive, went_back_to FROM server_clock") == [
-            {"last_alive": 1000.0, "kept_alive": 2000.0, "went_back_to": 1000.0}]
+        assert rows(storage, "SELECT touched_uptime, finalize_started_uptime FROM uploads") == [
+            {"touched_uptime": None, "finalize_started_uptime": 0.0}] * 2
+        capsys.readouterr()
+        assert legacy(storage, "--delete", "--match", held_match) == 1
+        assert capsys.readouterr().err.strip() == f"Match {held_match} has an upload that is being verified."
+        swept = Sweep(client)
+        assert swept.run(STALE - 1) == 0
+        assert legacy(storage, "--delete", "--match", held_match) == 1
+        assert swept.run(1) == 0
+        assert legacy(storage, "--delete", "--match", held_match) == 0
+        assert swept.run(DAY - STALE - 1) == 0
+        assert rows(storage, "SELECT status FROM uploads WHERE id=?", closed) == [{"status": "FINALIZING"}]
+        assert swept.run(1) == 1
+        assert rows(storage, "SELECT status FROM uploads WHERE id=?", closed) == [{"status": "ABORTED"}]
+
+
+def test_storage_of_an_earlier_b3_build_opens_and_its_unfinished_uploads_count_from_the_first_start(storage):
+    """The builds of B3 before the uptime counter measured uptime with the wall clock. The start drops their
+    clock tables and the index on the wall clock touch, and leaves the two upload columns of the kept moment
+    unused. Every unfinished upload counts as touched, and every verification as started, at the uptime of the
+    first start: each gets a full day, and a dead verification 15 minutes, of uptime from there. An upload
+    stored before server 0.9 still goes at the first pass. A second start changes nothing."""
+    with serve(storage, None) as client:
+        waiting, taken, left = full_upload(client), full_upload(client), full_upload(client)
+        before_accounts = create_upload(client, create_match(client), size=10).json()["uploadId"]
+    week_ago = time.time() - 7 * DAY
+    set_upload(storage, waiting, touched_at=week_ago)
+    for upload_id in (taken, left):
+        set_upload(storage, upload_id, status="FINALIZING", touched_at=week_ago, finalize_started_at=week_ago,
+                   finalize_token="earlier")
+    set_upload(storage, before_accounts, touched_at=None, touched_uptime=None)
+    back_to_an_earlier_b3_build(storage, time.time())
+
+    with serve(storage, None) as client:
+        with database(storage) as db:
+            tables = {name for (name,) in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            clock_columns = [row[1] for row in db.execute("PRAGMA table_info(server_clock)")]
+            upload_columns = {row[1] for row in db.execute("PRAGMA table_info(uploads)")}
+        assert not tables & {"server_downtimes", "server_downtimes_kept"}
+        assert clock_columns == ["id", "uptime"] and rows(storage, "SELECT * FROM server_clock") == []
+        assert upload_columns >= {"kept_touched_at", "kept_finalize_started_at", "touched_uptime", "finalize_started_uptime"}
+        assert "uploads_touched" not in indexes(storage, "uploads")
+        assert {row["id"]: (row["touched_uptime"], row["finalize_started_uptime"]) for row in rows(
+            storage, "SELECT id, touched_uptime, finalize_started_uptime FROM uploads")} == {
+            waiting: (0.0, None), taken: (0.0, 0.0), left: (0.0, 0.0), before_accounts: (None, None)}
+        swept = Sweep(client)
+        assert swept.swept.run_once() == {"uploads": 1}
+        assert rows(storage, "SELECT status FROM uploads WHERE id=?", before_accounts) == [{"status": "ABORTED"}]
+        assert swept.run(STALE - 1) == 0
+        busy = client.post(f"/v1/uploads/{taken}/complete")
+        assert (busy.status_code, busy.json()["error"]["code"]) == (409, "UPLOAD_FINALIZING")
+        assert swept.run(1) == 0
+        assert client.post(f"/v1/uploads/{taken}/complete").status_code == 200
+        assert swept.run(DAY - STALE - 1) == 0
+        assert {row["status"] for row in rows(storage, "SELECT status FROM uploads WHERE id IN (?, ?)", waiting, left)} == {
+            "UPLOADING", "FINALIZING"}
+        assert swept.run(1) == 2
+    first = dump(storage)
+    with serve(storage, None):
+        pass
+    assert dump(storage) == first, "a second start changed the storage"
+
+
+def test_an_unfinished_upload_without_an_uptime_counts_from_the_stored_uptime_of_the_start_that_finds_it(storage):
+    """A start that finds an unfinished upload with a wall clock touch but no uptime gives it the stored uptime of
+    that start, so the upload gets a full day of uptime from there, however long the server ran before."""
+    with serve(storage, None) as client:
+        upload_id = full_upload(client)
+    write_uptime(storage, 10 * DAY)
+    set_upload(storage, upload_id, touched_uptime=None, touched_at=time.time() - 7 * DAY)
+    with serve(storage, None):
+        assert rows(storage, "SELECT touched_uptime FROM uploads") == [{"touched_uptime": 10 * DAY}]
 
 
 # --- legacy --list ------------------------------------------------------------------------------------
@@ -323,15 +458,17 @@ def test_legacy_delete_refuses_a_match_whose_upload_is_being_verified(client, st
     match_id = create_match(client)
     upload_id = create_upload(client, match_id, size=5).json()["uploadId"]
     client.put(f"/v1/uploads/{upload_id}/chunks?offset=0", content=b"abcde")
-    set_upload(storage, upload_id, status="FINALIZING", finalize_started_at=time.time())
+    # The command reads the uptime the server stored: 3 hours.
+    write_uptime(storage, 3 * 3600)
+    set_upload(storage, upload_id, status="FINALIZING", finalize_started_uptime=3 * 3600 - STALE + 1)
     make_legacy(storage, match_id)
     before = dump(storage)
     capsys.readouterr()
     assert legacy(storage, "--delete") == 1
     assert capsys.readouterr().err.strip() == f"Match {match_id} has an upload that is being verified."
     assert dump(storage) == before and media_files(storage) == [f"{upload_id}.bin"]
-    # A verification that died long ago does not hold the match forever.
-    set_upload(storage, upload_id, finalize_started_at=time.time() - main_module.FINALIZE_STALE_SECONDS - 1)
+    # A verification that died 15 minutes of uptime ago does not hold the match forever. The wall clock is not read.
+    set_upload(storage, upload_id, finalize_started_uptime=3 * 3600 - STALE, finalize_started_at=time.time())
     assert legacy(storage, "--delete") == 0
     assert media_files(storage) == []
 

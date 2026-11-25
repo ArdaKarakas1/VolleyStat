@@ -7,6 +7,7 @@ import time
 import pytest
 
 import app.main as main_module
+from app import deletion
 from app.bodylimit import MAX_JSON_BODY_BYTES, BodyLimit
 from app.main import CHUNK_SIZE
 
@@ -27,6 +28,11 @@ def start_upload(c, size=5, **overrides):
     response = create_upload(c, create_match(c), size=size, **overrides)
     assert response.status_code == 201, response.text
     return response.json()["uploadId"]
+
+
+def uptime(c):
+    """The server's uptime now (sweep.py): what a route writes with a touch and with a verification's mark."""
+    return c.app.state.sweeper.uptime_now()
 
 
 def set_upload(storage, upload_id, **columns):
@@ -283,12 +289,13 @@ def test_a_finished_upload_can_not_be_aborted(client):
 def test_running_finalize_blocks_a_second_one_and_a_stale_one_is_taken_over(client, storage):
     uid = start_upload(client)
     client.put(f"/v1/uploads/{uid}/chunks?offset=0", content=b"abcde")
-    set_upload(storage, uid, status="FINALIZING", finalize_started_at=time.time())
+    set_upload(storage, uid, status="FINALIZING", finalize_started_uptime=uptime(client))
     busy = client.post(f"/v1/uploads/{uid}/complete")
     assert busy.status_code == 409 and busy.json()["error"]["code"] == "UPLOAD_FINALIZING"
     assert client.delete(f"/v1/uploads/{uid}").status_code == 409
-    # The process that started it crashed long ago.
-    set_upload(storage, uid, finalize_started_at=time.time() - main_module.FINALIZE_STALE_SECONDS - 1)
+    # The process that started it crashed 15 minutes of uptime ago. The wall clock moment is not read.
+    set_upload(storage, uid, finalize_started_uptime=uptime(client) - deletion.FINALIZE_STALE_SECONDS - 1,
+               finalize_started_at=time.time())
     done = client.post(f"/v1/uploads/{uid}/complete")
     assert done.status_code == 200
     assert client.get(f"/v1/uploads/{uid}").json()["status"] == "COMPLETED"
@@ -297,6 +304,6 @@ def test_running_finalize_blocks_a_second_one_and_a_stale_one_is_taken_over(clie
 def test_restarting_the_app_leaves_a_running_finalize_alone(client, storage):
     uid = start_upload(client)
     client.put(f"/v1/uploads/{uid}/chunks?offset=0", content=b"abcde")
-    set_upload(storage, uid, status="FINALIZING", finalize_started_at=time.time())
+    set_upload(storage, uid, status="FINALIZING", finalize_started_uptime=uptime(client))
     main_module.create_app(storage)  # a second process opening the same storage
     assert client.get(f"/v1/uploads/{uid}").json()["status"] == "FINALIZING"

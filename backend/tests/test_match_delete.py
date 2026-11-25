@@ -10,7 +10,7 @@ from tests.helpers import (
     BlockingAnalyzer, ScriptedAnalyzer, as_account, card_of, decide, ready_video, request_job, reviewed_job, rows,
     run_pending, serve, session_for, user_id_of, wait_for_state,
 )
-from tests.test_api import create_match, create_upload, set_upload
+from tests.test_api import create_match, create_upload, set_upload, uptime
 
 TABLES_BY_MATCH = ("matches", "uploads", "videos", "analysis_jobs")
 
@@ -90,7 +90,7 @@ def test_a_match_whose_upload_is_being_verified_is_not_deleted_midway(client, st
     match_id = create_match(client)
     upload_id = create_upload(client, match_id, size=5).json()["uploadId"]
     client.put(f"/v1/uploads/{upload_id}/chunks?offset=0", content=b"abcde")
-    set_upload(storage, upload_id, status="FINALIZING", finalize_started_at=time.time())
+    set_upload(storage, upload_id, status="FINALIZING", finalize_started_uptime=uptime(client))
 
     refused = client.delete(f"/v1/matches/{match_id}")
     assert refused.status_code == 409 and refused.json()["error"]["code"] == "UPLOAD_FINALIZING"
@@ -98,8 +98,8 @@ def test_a_match_whose_upload_is_being_verified_is_not_deleted_midway(client, st
     assert client.get(f"/v1/matches/{match_id}").status_code == 200
     assert media_files(storage) == [f"{upload_id}.bin"]
 
-    # A verification that died long ago does not hold the match forever.
-    set_upload(storage, upload_id, finalize_started_at=time.time() - 3600)
+    # A verification that died an hour of uptime ago does not hold the match forever. The wall clock is not read.
+    set_upload(storage, upload_id, finalize_started_uptime=uptime(client) - 3600, finalize_started_at=time.time())
     assert client.delete(f"/v1/matches/{match_id}").status_code == 204
     assert media_files(storage) == []
 
@@ -281,7 +281,7 @@ def test_deleting_the_account_while_an_upload_is_being_verified_answers_409_and_
         match_id = create_match(client)
         upload_id = create_upload(client, match_id, size=5).json()["uploadId"]
         client.put(f"/v1/uploads/{upload_id}/chunks?offset=0", content=b"abcde")
-        set_upload(storage, upload_id, status="FINALIZING", finalize_started_at=time.time())
+        set_upload(storage, upload_id, status="FINALIZING", finalize_started_uptime=uptime(client))
         before = database_bytes(storage)
         refused = delete_account(client)
         assert (refused.status_code, refused.json()["error"]["code"]) == (409, "UPLOAD_FINALIZING")
@@ -289,8 +289,8 @@ def test_deleting_the_account_while_an_upload_is_being_verified_answers_409_and_
         assert rows(storage, "SELECT COUNT(*) AS n FROM users") == [{"n": 1}]
         assert media_files(storage) == [f"{upload_id}.bin"]
         assert client.get("/v1/me").status_code == 200
-        # A verification that died long ago does not hold the account forever.
-        set_upload(storage, upload_id, finalize_started_at=time.time() - 3600)
+        # A verification that died an hour of uptime ago does not hold the account forever.
+        set_upload(storage, upload_id, finalize_started_uptime=uptime(client) - 3600, finalize_started_at=time.time())
         assert delete_account(client).status_code == 204
         assert media_files(storage) == [] and rows(storage, "SELECT 1 FROM matches") == []
 

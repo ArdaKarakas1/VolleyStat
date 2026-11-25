@@ -19,10 +19,9 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-import time
 from pathlib import Path
 
-from . import accounts, deletion
+from . import accounts, deletion, sweep
 from .db import connector, empty_write_ahead_log, migrate
 
 
@@ -102,7 +101,9 @@ def legacy_delete(db_path: Path, storage: Path, wanted: list[str] | None) -> int
     files = deletion.MediaFiles(storage)
     with connector(db_path)(write=True) as db:
         chosen = _legacy_ids(db, wanted)
-        at = time.time()
+        # The uptime the server stored at its last pass or stop. A running server has run on since its last
+        # pass, so a verification looks younger here than it is, never older.
+        at = sweep.stored_uptime(db)
         for match_id in chosen:
             if deletion.finalizing(db, match_id, at):
                 raise _Refused(f"Match {match_id} has an upload that is being verified.")

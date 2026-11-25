@@ -17,8 +17,8 @@ from app import access, accounts, media
 from app.access import READ, REVIEW
 from app.bodylimit import MAX_JSON_BODY_BYTES
 from tests.helpers import (
-    NO_SESSION, OWNER, STRANGER, As, ScriptedAnalyzer, as_account, bearer, card_of, decide, ready_video, request_job,
-    rows, run_pending, serve, session_for, user_id_of,
+    NO_SESSION, OWNER, STRANGER, As, ScriptedAnalyzer, as_account, bearer, card_of, decide, execute, ready_video,
+    request_job, rows, run_pending, serve, session_for, user_id_of,
 )
 from tests.test_api import create_match, create_upload
 from tests.test_media import store
@@ -128,9 +128,9 @@ def served_operations(app) -> set[tuple[str, str]]:
     return set(walk(app.routes))
 
 
-# A request may record the use of its session. The sweep thread writes its clock on its own schedule: a thread
-# that starts 20 ms late writes it for the first time between two snapshots of a test.
-NOT_SNAPSHOT = {"sessions", "server_clock", "server_downtimes", "server_downtimes_kept"}
+# A request may record the use of its session. The sweep thread writes its uptime (server_clock) on its own
+# schedule: a thread that starts 20 ms late writes it for the first time between two snapshots of a test.
+NOT_SNAPSHOT = {"sessions", "server_clock"}
 
 
 def snapshot(storage) -> tuple[dict[str, list[tuple]], list[tuple[str, int]]]:
@@ -402,6 +402,7 @@ def test_a_failed_verification_after_the_session_ended_still_reopens_the_upload(
         upload_id = create_upload(client, create_match(client), size=5).json()["uploadId"]
         assert client.put(f"/v1/uploads/{upload_id}/chunks?offset=0", content=b"abcde").status_code == 200
         touched = rows(storage, "SELECT touched_at FROM uploads WHERE id=?", upload_id)[0]["touched_at"]
+        execute(storage, "UPDATE uploads SET touched_uptime=NULL WHERE id=?", upload_id)
 
         def end_session_and_fail(path, mime):
             with closing(sqlite3.connect(storage / "volleystat.sqlite3")) as db, db:
@@ -412,10 +413,12 @@ def test_a_failed_verification_after_the_session_ended_still_reopens_the_upload(
         failed = client.post(f"/v1/uploads/{upload_id}/complete")
         # The original error, not a 401: the route only undoes its own mark there.
         assert failed.status_code == 500
-        row = rows(storage, "SELECT status, finalize_started_at, finalize_token, touched_at FROM uploads WHERE id=?",
-                   upload_id)[0]
-        assert (row["status"], row["finalize_started_at"], row["finalize_token"]) == ("UPLOADING", None, None)
-        assert row["touched_at"] > touched
+        row = rows(storage, "SELECT status, finalize_started_at, finalize_started_uptime, finalize_token, touched_at,"
+                   " touched_uptime FROM uploads WHERE id=?", upload_id)[0]
+        assert (row["status"], row["finalize_started_at"], row["finalize_started_uptime"], row["finalize_token"]) == (
+            "UPLOADING", None, None, None)
+        # The reopen is a touch: the sweep waits a day of uptime from it (the stored uptime, 0: no sweep runs).
+        assert row["touched_at"] > touched and row["touched_uptime"] == 0.0
 
 
 def test_a_verification_whose_session_ended_answers_401_and_reopens_the_upload(storage, monkeypatch):

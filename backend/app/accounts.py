@@ -585,7 +585,8 @@ def current_user_dependency(connect) -> Callable[..., Caller]:
 
 
 def router(connect, db_path: Path, signup_mode: str, limiter: Limiter, pool: HashPool,
-           current_user: Callable[..., Caller], files: deletion.MediaFiles, release: Callable[[str], None]) -> APIRouter:
+           current_user: Callable[..., Caller], files: deletion.MediaFiles, release: Callable[[str], None],
+           uptime: Callable[[Any], float]) -> APIRouter:
     routes = APIRouter()
 
     def open_session(db, user_id: str, moment: datetime) -> dict[str, str]:
@@ -808,7 +809,7 @@ def router(connect, db_path: Path, signup_mode: str, limiter: Limiter, pool: Has
                     fail("PASSWORD_WRONG", "The password is wrong", 403)
                 owned = [row["id"] for row in db.execute(
                     "SELECT id FROM matches WHERE owner_user_id=? ORDER BY rowid", (user["id"],))]
-                at = time.time()
+                at = uptime(db)
                 # A verification in progress is about to turn an upload into a video of one of these
                 # matches: the same refusal as DELETE /v1/matches/{id}, before any row or file goes.
                 if any(deletion.finalizing(db, match_id, at) for match_id in owned):
