@@ -90,6 +90,7 @@ class LocalStore(private val file: File) {
                         .put("reviewOpen", it.reviewOpen).put("reviewTotal", it.reviewTotal).putOpt("failureCode", it.failureCode)
                 })
                 .put("rules", encodeRules(match.rules))
+                .apply { if (match.noAccess) put("noAccess", true) }
         }))
 
     private fun encodeRules(rules: MatchRules) = JSONObject()
@@ -170,6 +171,7 @@ class LocalStore(private val file: File) {
                         )
                     },
                     rules = decodeRules(match.optJSONObject("rules")),
+                    noAccess = match.optBoolean("noAccess", false),
                 )
             },
         )

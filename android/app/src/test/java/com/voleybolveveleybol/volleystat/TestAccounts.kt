@@ -15,7 +15,7 @@ import java.util.UUID
 
 /** Puts a phone into the state a login leaves behind, so that a test can start on Home with data of its own. */
 object TestAccounts {
-    /** A session no server issued. The routes before slice B3 do not check it. */
+    /** A session no server issued, for stand-in servers only: a real server (0.9 and later) answers it with 401 AUTH_REQUIRED. */
     val SESSION = Session("test-session-token", "test-user", "test.user", "Test Kullanıcı", "2099-01-01T00:00:00Z")
     val SIGNED_IN_PHONE = Settings(welcomeSeen = true, accountSeen = true, legacyHandled = true)
 
@@ -45,6 +45,7 @@ object TestAccounts {
         return ApiClient(url).register(username, "E2E Kullanıcı", password, null) to password
     }
 
+    /** Deletes the account; from server 0.9 on the server deletes the account's matches with it. */
     fun deleteOnBackend(url: String, account: SignedIn, password: String) {
         runCatching { ApiClient(url, token = account.token).deleteAccount(password) }
     }

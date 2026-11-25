@@ -11,14 +11,15 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, Header, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import accounts, content, corrections, jobs, media, report, review
+from . import access, accounts, content, corrections, deletion, jobs, media, quotas, report, review, storagelock, sweep
+from .access import READ, REVIEW
 from .analyzers import load_analyzer, require_known_kind
 from .analyzers.base import MODEL, Analyzer
 from .bodylimit import BodyLimit
@@ -29,9 +30,7 @@ CHUNK_SIZE = 4 * 1024 * 1024
 CHUNK_ROUTE = re.compile(r"/v1/uploads/[^/]+/chunks")
 MAX_VIDEO_BYTES = 4 * 1024 * 1024 * 1024
 ALLOWED_MIMES = {"video/mp4", "video/quicktime", "video/webm", "video/x-matroska"}
-# A finalize that has been running longer than this is treated as abandoned
-# (crashed process) and may be taken over by the next complete call.
-FINALIZE_STALE_SECONDS = 15 * 60
+VERSION = "0.9.0"
 
 
 class MatchRulesInput(BaseModel):
@@ -140,7 +139,8 @@ def match_payload(match) -> dict[str, Any]:
         "id": match["id"], "homeTeamName": match["home_team"], "awayTeamName": match["away_team"],
         "name": match["name"], "playedOn": match["played_on"], "venue": match["venue"], "kind": match["kind"],
         "rules": report.MatchRules.of(match).payload(),
-        "status": "DRAFT",
+        # PERSONAL for every match a caller can read in this version.
+        "status": match["status"],
     }
 
 
@@ -157,8 +157,9 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
         analyzer = load_analyzer(analyzer if analyzer is not None else os.environ.get("VOLLEYSTAT_ANALYZER"))
     if analyzer is not None:
         require_known_kind(analyzer)
-    # An unknown gate setting must stop the start-up too, before storage is touched.
+    # An unknown gate setting or disk floor must stop the start-up too, before storage is touched.
     signup_mode, team_mode = accounts.settings()
+    floor = quotas.settings()
     storage = Path(storage_root or os.environ.get("VOLLEYSTAT_STORAGE") or (Path(__file__).parent.parent / "storage")).resolve()
     storage.mkdir(parents=True, exist_ok=True, mode=0o700)
     (storage / "media").mkdir(exist_ok=True, mode=0o700)
@@ -166,19 +167,10 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
 
     migrate(db_path)
     connect = connector(db_path)
-
-    def upload_path(upload_id: str) -> Path:
-        """One file per upload for its whole life: finalizing never moves it."""
-        return storage / "media" / f"{upload_id}.bin"
-
-    def video_path(record) -> Path:
-        if record["storage_key"]:
-            return storage / record["storage_key"]
-        return storage / "videos" / f"{record['id']}.bin"  # layout of the 0.2 preview
-
-    def old_part_path(upload_id: str) -> Path:
-        """Where the 0.2 preview kept an unfinished upload. Nothing writes there now; a deletion still clears it."""
-        return storage / "uploads" / f"{upload_id}.part"
+    files = deletion.MediaFiles(storage)
+    upload_path, video_path = files.upload, files.video
+    # Every route but health, register and login declares it (docs/API_V1.md, section 10).
+    current_user = accounts.current_user_dependency(connect)
 
     def video_payload(record) -> dict[str, Any]:
         return {
@@ -208,24 +200,41 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
         return record
 
     worker = jobs.JobWorker(connect, analyzer, video_path)
+    sweeper = sweep.Sweeper(connect, files)
+    storage_lock = storagelock.StorageLock(storage)
     hash_pool = accounts.HashPool()
+
+    def uptime(db) -> float:
+        """The server's uptime (sweep.py), read inside the caller's write transaction: what a touch and the mark
+        of a verification carry, and what the 15-minute staleness of a verification compares."""
+        return app.state.sweeper.uptime_now(db)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
-        if start_worker:
-            worker.start()
         try:
+            if start_worker:
+                # One server per storage folder (storagelock.py): a second one stops here, before its threads start.
+                storage_lock.acquire()
+                worker.start()
+                sweeper.start()
             yield
         finally:
             hash_pool.close()
             if start_worker:
                 # Joining the thread can wait for a running analyzer to notice the stop signal.
                 await run_in_threadpool(worker.stop)
+                await run_in_threadpool(sweeper.stop)
+                storage_lock.release()
 
-    app = FastAPI(title="VolleyStat Local Development API", version="0.8.0", lifespan=lifespan,
-                  description="LOCAL TEST DATA ONLY. Accounts exist, but the routes of matches do not ask for a session yet."
+    # No /docs, /redoc or /openapi.json: they would answer without a session, and /docs loads its
+    # scripts from a CDN. app.openapi() still builds the committed document (docs/openapi-local-dev.json).
+    app = FastAPI(title="VolleyStat Local Development API", version=VERSION, lifespan=lifespan,
+                  docs_url=None, redoc_url=None, openapi_url=None,
+                  description="LOCAL TEST DATA ONLY. Every route except health, register and login needs a session."
                               " No trained AI. Never expose to the internet.")
     app.state.worker = worker
+    app.state.sweeper = sweeper
+    app.state.storage_lock = storage_lock
     app.state.hash_pool = hash_pool
     app.add_middleware(BodyLimit, exempt=is_chunk_upload)
 
@@ -253,41 +262,45 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
                 "maxVideoBytes": MAX_VIDEO_BYTES, "chunkSizeBytes": CHUNK_SIZE,
                 "accounts": {"signup": signup_mode, "teams": team_mode}}
 
-    def insert_match(db, match_id: str, payload: MatchInput):
+    def insert_match(db, match_id: str, payload: MatchInput, caller: accounts.Caller):
+        """A personal match of the caller (design 5.6): only that account sees it."""
         rules = payload.rules.rules() if payload.rules is not None else report.FIVB
         db.execute(
             "INSERT INTO matches(id, home_team, away_team, name, played_on, venue, kind, sets_to_win, set_target,"
-            " deciding_set_target) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            " deciding_set_target, status, owner_user_id) VALUES(?,?,?,?,?,?,?,?,?,?,'PERSONAL',?)",
             (match_id, payload.homeTeamName, payload.awayTeamName, payload.name, payload.playedOn, payload.venue, payload.kind,
-             rules.sets_to_win, rules.set_target, rules.deciding_set_target),
+             rules.sets_to_win, rules.set_target, rules.deciding_set_target, caller.id),
         )
         return db.execute("SELECT * FROM matches WHERE id=?", (match_id,)).fetchone()
 
     @app.post("/v1/matches", status_code=201)
-    def create_match(payload: MatchInput):
+    def create_match(payload: MatchInput, caller: accounts.Caller = Depends(current_user)):
         with connect(write=True) as db:
-            return match_payload(insert_match(db, new_id(), payload))
+            access.session_user(db, caller)
+            return match_payload(insert_match(db, new_id(), payload, caller))
 
     @app.put("/v1/matches/{match_id}", responses={201: {"description": "The match was created under this id"}})
-    def put_match(match_id: str, payload: MatchInput, response: Response):
+    def put_match(match_id: str, payload: MatchInput, response: Response,
+                  caller: accounts.Caller = Depends(current_user)):
         """Create the match under an id the client chose, or return the match that already has it.
 
         A client that picks the id before its first request can address the match whatever happens
         to the answer: it repeats this call, or deletes the match, with the id it already holds.
         With POST the id exists only in the answer, and a lost answer leaves a match nobody can
-        delete. A repeat never changes what the first request stored.
+        delete. A repeat never changes what the first request stored, and only an account that may
+        read the match gets it back; any other account gets 403 NOT_A_MEMBER.
         """
         if not is_canonical_id(match_id):
             fail("MATCH_ID_INVALID", "Match id must be a UUID in lowercase with dashes", 422)
         with connect(write=True) as db:
-            match = db.execute("SELECT * FROM matches WHERE id=?", (match_id,)).fetchone()
-            if match is None:
-                match = insert_match(db, match_id, payload)
+            access.session_user(db, caller)
+            if db.execute("SELECT 1 FROM matches WHERE id=?", (match_id,)).fetchone() is None:
                 response.status_code = 201
-            return match_payload(match)
+                return match_payload(insert_match(db, match_id, payload, caller))
+            return match_payload(access.require(db, caller, "match", match_id, READ))
 
     @app.put("/v1/matches/{match_id}/rules")
-    def put_match_rules(match_id: str, payload: MatchRulesChange):
+    def put_match_rules(match_id: str, payload: MatchRulesChange, caller: accounts.Caller = Depends(current_user)):
         """Set the rule the server counts the sets of this match with.
 
         A rule that differs from the stored one moves the rally list of every analysis of the match
@@ -302,9 +315,9 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
         Only the rules are compared: a late request lands when the match is back at the rule it names.
         """
         with connect(write=True) as db:
-            match = db.execute("SELECT * FROM matches WHERE id=?", (match_id,)).fetchone()
-            if not match:
-                fail("MATCH_NOT_FOUND", "Match does not exist", 404)
+            access.session_user(db, caller)
+            # Before the rule check: a stranger must not learn the current rule from MATCH_RULES_STALE.
+            match = access.require(db, caller, "match", match_id, REVIEW)
             stored, wanted = report.MatchRules.of(match), payload.rules()
             if stored != wanted:
                 if stored != payload.expectedRules.rules():
@@ -319,32 +332,61 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
             return match_payload(match)
 
     @app.get("/v1/matches/{match_id}")
-    def get_match(match_id: str):
+    def get_match(match_id: str, caller: accounts.Caller = Depends(current_user)):
         with connect() as db:
-            match = db.execute("SELECT * FROM matches WHERE id=?", (match_id,)).fetchone()
-            if not match:
-                fail("MATCH_NOT_FOUND", "Match does not exist", 404)
+            match = access.require(db, caller, "match", match_id, READ)
         return match_payload(match)
 
-    @app.post("/v1/matches/{match_id}/uploads", status_code=201)
-    def initiate_upload(match_id: str, payload: UploadInput):
+    @app.post("/v1/matches/{match_id}/uploads", status_code=201, responses={
+        200: {"description": "This account already had an unfinished upload of the same file for this match;"
+                             " the answer names it and the offset to continue from"}})
+    def initiate_upload(match_id: str, payload: UploadInput, response: Response,
+                        caller: accounts.Caller = Depends(current_user)):
+        """Start an upload of a video of the match. The quotas, the server-wide pool and the free-disk
+        floor are checked in the transaction that inserts the row (docs/API_V1.md, section 10).
+
+        A start the account repeats for the same file (same match, checksum, size, name and type) gets
+        the unfinished upload it already has, before any limit is checked: a phone that lost the first
+        answer never learned that upload's id, and a second row would hold the same bytes twice."""
         upload_id = new_id()
         with connect(write=True) as db:
-            if not db.execute("SELECT 1 FROM matches WHERE id=?", (match_id,)).fetchone():
-                fail("MATCH_NOT_FOUND", "Match does not exist", 404)
-            db.execute("INSERT INTO uploads(id,match_id,file_name,mime_type,expected_size,client_sha256) VALUES(?,?,?,?,?,?)", (upload_id, match_id, payload.fileName, payload.mimeType, payload.sizeBytes, payload.clientSha256))
+            access.session_user(db, caller)
+            access.require(db, caller, "match", match_id, REVIEW)
+            if payload.clientSha256 is not None:
+                same = db.execute(
+                    "SELECT id, next_offset FROM uploads WHERE match_id=? AND started_by=? AND status='UPLOADING'"
+                    " AND client_sha256=? AND expected_size=? AND file_name=? AND mime_type=? ORDER BY rowid LIMIT 1",
+                    (match_id, caller.id, payload.clientSha256, payload.sizeBytes, payload.fileName,
+                     payload.mimeType)).fetchone()
+                if same is not None:
+                    # A start is activity: the sweep waits a day of server uptime from it, as from a new upload.
+                    db.execute("UPDATE uploads SET touched_at=?, touched_uptime=? WHERE id=?",
+                               (time.time(), uptime(db), same["id"]))
+                    response.status_code = 200
+                    return {"uploadId": same["id"], "nextOffset": same["next_offset"], "chunkSizeBytes": CHUNK_SIZE,
+                            "status": "UPLOADING"}
+            quotas.check_upload(db, caller, payload.sizeBytes, storage, floor)
+            db.execute("INSERT INTO uploads(id,match_id,file_name,mime_type,expected_size,client_sha256,started_by,touched_at,"
+                       "touched_uptime) VALUES(?,?,?,?,?,?,?,?,?)",
+                       (upload_id, match_id, payload.fileName, payload.mimeType, payload.sizeBytes, payload.clientSha256,
+                        caller.id, time.time(), uptime(db)))
             upload_path(upload_id).touch(exist_ok=False)
         return {"uploadId": upload_id, "nextOffset": 0, "chunkSizeBytes": CHUNK_SIZE, "status": "UPLOADING"}
 
     @app.get("/v1/uploads/{upload_id}")
-    def get_upload(upload_id: str):
+    def get_upload(upload_id: str, caller: accounts.Caller = Depends(current_user)):
         with connect() as db:
+            # The status of an upload belongs to its reviewer (design 6.1).
+            access.require(db, caller, "upload", upload_id, REVIEW)
             record = find_upload(db, upload_id)
         return {"uploadId": record["id"], "nextOffset": record["next_offset"], "sizeBytes": record["expected_size"], "status": record["status"], "videoId": record["video_id"]}
 
-    def store_chunk(upload_id: str, offset: int, data: bytes) -> dict[str, Any]:
+    def store_chunk(upload_id: str, offset: int, data: bytes, caller: accounts.Caller) -> dict[str, Any]:
         resume_from = None
         with connect(write=True) as db:
+            access.session_user(db, caller)
+            # Before the state and offset checks: a stranger must not learn the expected offset.
+            access.require(db, caller, "upload", upload_id, REVIEW)
             record = find_upload(db, upload_id)
             if record["status"] != "UPLOADING":
                 fail("UPLOAD_CLOSED", "Upload is not active", 409)
@@ -353,13 +395,16 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
             if stored < record["next_offset"]:
                 # Bytes the database counted are gone; continue from what is really on disk.
                 part.touch()
-                db.execute("UPDATE uploads SET next_offset=? WHERE id=?", (stored, upload_id))
+                db.execute("UPDATE uploads SET next_offset=?, touched_at=?, touched_uptime=? WHERE id=?",
+                           (stored, time.time(), uptime(db), upload_id))
                 resume_from = stored
             elif offset != record["next_offset"]:
                 fail("OFFSET_MISMATCH", "Expected a different offset", 409, expectedOffset=record["next_offset"])
             elif offset + len(data) > record["expected_size"]:
                 fail("UPLOAD_OVERFLOW", "Chunk exceeds declared size", 413)
             else:
+                # Nothing is written, and the offset stays, when the chunk would fill the disk.
+                quotas.check_chunk(storage, len(data), floor)
                 with part.open("r+b") as fh:
                     # Bytes past the committed offset come from a write that was never
                     # committed (interrupted request); the committed offset wins.
@@ -369,13 +414,17 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
                     fh.flush()
                     os.fsync(fh.fileno())
                 new_offset = offset + len(data)
-                db.execute("UPDATE uploads SET next_offset=? WHERE id=?", (new_offset, upload_id))
+                # The touch moves with every stored chunk: the sweep closes an upload a day of uptime after the last one.
+                db.execute("UPDATE uploads SET next_offset=?, touched_at=?, touched_uptime=? WHERE id=?",
+                           (new_offset, time.time(), uptime(db), upload_id))
         if resume_from is not None:
             fail("OFFSET_MISMATCH", "Stored bytes were shorter than recorded; resume from the expected offset", 409, expectedOffset=resume_from)
         return {"uploadId": upload_id, "nextOffset": new_offset, "status": "UPLOADING"}
 
     @app.put("/v1/uploads/{upload_id}/chunks")
-    async def upload_chunk(upload_id: str, request: Request, offset: int):
+    async def upload_chunk(upload_id: str, request: Request, offset: int,
+                           caller: accounts.Caller = Depends(current_user)):
+        # The session was read before the body: a request without one sends its bytes to nobody.
         if offset < 0:
             fail("INVALID_OFFSET", "Offset must be non-negative", 400)
         data = bytearray()
@@ -386,26 +435,33 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
         if not data or len(data) > CHUNK_SIZE:
             fail("CHUNK_SIZE_INVALID", "Chunk must contain 1..4 MiB", 413)
         # Disk and database work must not block the event loop.
-        return await run_in_threadpool(store_chunk, upload_id, offset, bytes(data))
+        return await run_in_threadpool(store_chunk, upload_id, offset, bytes(data), caller)
 
     @app.post("/v1/uploads/{upload_id}/complete")
-    def complete_upload(upload_id: str):
+    def complete_upload(upload_id: str, caller: accounts.Caller = Depends(current_user)):
         part = upload_path(upload_id)
-        started = time.time()
+        # This request owns the verification while the row holds this token (still_ours below). The token carries
+        # the mark of this run of the server, so the start of a later run frees it (sweep.Sweeper.resume).
+        token = app.state.sweeper.token()
         resume_from = None
         with connect(write=True) as db:
+            access.session_user(db, caller)
+            access.require(db, caller, "upload", upload_id, REVIEW)
             record = find_upload(db, upload_id)
             if record["status"] == "COMPLETED":
                 return video_payload(find_video(db, record["video_id"]))
+            now = uptime(db)
             if record["status"] == "FINALIZING":
-                if started - (record["finalize_started_at"] or 0) < FINALIZE_STALE_SECONDS:
+                if deletion.still_verifying(record, now):
                     fail("UPLOAD_FINALIZING", "Upload is being verified", 409)
             elif record["status"] != "UPLOADING":
                 fail("UPLOAD_CLOSED", "Upload is not active", 409)
             stored = part.stat().st_size if part.exists() else 0
             if stored < record["next_offset"]:
                 part.touch()
-                db.execute("UPDATE uploads SET next_offset=?, status='UPLOADING', finalize_started_at=NULL WHERE id=?", (stored, upload_id))
+                db.execute("UPDATE uploads SET next_offset=?, status='UPLOADING', finalize_started_at=NULL,"
+                           " finalize_started_uptime=NULL, finalize_token=NULL, touched_at=?, touched_uptime=? WHERE id=?",
+                           (stored, time.time(), now, upload_id))
                 resume_from = stored
             elif record["next_offset"] != record["expected_size"]:
                 fail("UPLOAD_INCOMPLETE", "Upload is incomplete", 409, expectedSize=record["expected_size"], nextOffset=record["next_offset"])
@@ -413,15 +469,23 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
                 if stored > record["expected_size"]:
                     with part.open("r+b") as fh:
                         fh.truncate(record["expected_size"])
-                db.execute("UPDATE uploads SET status='FINALIZING', finalize_started_at=? WHERE id=?", (started, upload_id))
+                db.execute("UPDATE uploads SET status='FINALIZING', finalize_started_at=?, finalize_started_uptime=?,"
+                           " finalize_token=? WHERE id=?", (time.time(), now, token, upload_id))
         if resume_from is not None:
             fail("UPLOAD_INCOMPLETE", "Stored bytes were shorter than recorded; resume the upload", 409, expectedSize=record["expected_size"], nextOffset=resume_from)
 
         def still_ours(db) -> bool:
-            row = db.execute("SELECT status, finalize_started_at FROM uploads WHERE id=?", (upload_id,)).fetchone()
-            return bool(row) and row["status"] == "FINALIZING" and row["finalize_started_at"] == started
+            # Two things end the ownership: a takeover (a later complete that found this verification 15 minutes of
+            # uptime old wrote its own token), and the start of the next server after a runner let the storage lock go
+            # while this request ran (the start cleared the token; python -m app keeps the lock until its requests
+            # end or its process ends). Every write below checks the token inside its own write transaction.
+            row = db.execute("SELECT status, finalize_token FROM uploads WHERE id=?", (upload_id,)).fetchone()
+            return bool(row) and row["status"] == "FINALIZING" and row["finalize_token"] == token
 
-        # Hashing and probing can take long; keep them outside the write transaction.
+        # Hashing and probing can take long; keep them outside the write transaction. The two
+        # transactions that only undo this route's own FINALIZING mark (the checksum reset and the
+        # reopen below) do not read the session: a 401 there would replace the real answer and leave
+        # the upload FINALIZING, where it holds its quota until a later call takes it over.
         try:
             sha = hashlib.sha256()
             with part.open("rb") as fh:
@@ -430,16 +494,26 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
             digest = sha.hexdigest()
             if record["client_sha256"] and record["client_sha256"] != digest:
                 with connect(write=True) as db:
-                    if still_ours(db):
-                        # Reset the row first: if the truncate below is interrupted, the next
-                        # chunk at offset 0 truncates the leftover bytes anyway.
-                        db.execute("UPDATE uploads SET status='UPLOADING', next_offset=0, finalize_started_at=NULL WHERE id=?", (upload_id,))
-                with part.open("r+b") as fh:
-                    fh.truncate(0)
+                    if not still_ours(db):
+                        # Another request took over and may check the same file now, or the next server freed the
+                        # verification: the bytes and the row are no longer this request's.
+                        fail("UPLOAD_FINALIZING", "Another request took over verification of this upload", 409)
+                    # Reset the row and empty the file while this transaction holds the write lock, so no
+                    # takeover comes between. A crash between the truncate and the commit leaves the row
+                    # FINALIZING over fewer bytes than recorded: the next start frees it, and the complete that
+                    # takes it over reopens the upload at the bytes the disk holds.
+                    db.execute("UPDATE uploads SET status='UPLOADING', next_offset=0, finalize_started_at=NULL,"
+                               " finalize_started_uptime=NULL, finalize_token=NULL, touched_at=?, touched_uptime=?"
+                               " WHERE id=?", (time.time(), uptime(db), upload_id))
+                    with part.open("r+b") as fh:
+                        fh.truncate(0)
                 fail("UPLOAD_CHECKSUM_MISMATCH", "Stored bytes differ from the declared SHA-256; send the file again", 422, expectedOffset=0)
             probe = media.probe_video(part, record["mime_type"])
             video_id = new_id()
             with connect(write=True) as db:
+                # The session may have ended while the file was checked: then no video is stored.
+                access.session_user(db, caller)
+                access.require(db, caller, "upload", upload_id, REVIEW)
                 if not still_ours(db):
                     fail("UPLOAD_FINALIZING", "Another request took over verification of this upload", 409)
                 # The file is not moved, so this commit is the whole finalize.
@@ -449,44 +523,55 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
                      probe.status, probe.reject_code, json.dumps(probe.media) if probe.media else None,
                      json.dumps(probe.warnings), media.PROBE_VERSION, f"media/{upload_id}.bin"),
                 )
-                db.execute("UPDATE uploads SET status='COMPLETED', video_id=?, finalize_started_at=NULL WHERE id=?", (video_id, upload_id))
+                db.execute("UPDATE uploads SET status='COMPLETED', video_id=?, finalize_started_at=NULL,"
+                           " finalize_started_uptime=NULL, finalize_token=NULL WHERE id=?", (video_id, upload_id))
                 return video_payload(find_video(db, video_id))
-        except HTTPException:
-            raise
         except Exception:
+            # Any failure, a refusal of the final transaction included, gives the upload back as it
+            # was. still_ours keeps this from touching a row that another request took over or that
+            # the checksum reset already reopened.
             with connect(write=True) as db:
                 if still_ours(db):
-                    db.execute("UPDATE uploads SET status='UPLOADING', finalize_started_at=NULL WHERE id=?", (upload_id,))
+                    db.execute("UPDATE uploads SET status='UPLOADING', finalize_started_at=NULL, finalize_started_uptime=NULL,"
+                               " finalize_token=NULL, touched_at=?, touched_uptime=? WHERE id=?",
+                               (time.time(), uptime(db), upload_id))
             raise
 
     @app.delete("/v1/uploads/{upload_id}", status_code=204)
-    def abort_upload(upload_id: str):
+    def abort_upload(upload_id: str, caller: accounts.Caller = Depends(current_user)):
         """Give up an unfinished upload and free its bytes."""
         with connect(write=True) as db:
+            access.session_user(db, caller)
+            access.require(db, caller, "upload", upload_id, REVIEW)
             record = find_upload(db, upload_id)
             if record["status"] == "COMPLETED":
                 fail("UPLOAD_COMPLETED", "Upload already became a video; delete the video instead", 409, videoId=record["video_id"])
             if record["status"] in ("ABORTED", "DELETED"):
                 return
-            if record["status"] == "FINALIZING" and time.time() - (record["finalize_started_at"] or 0) < FINALIZE_STALE_SECONDS:
+            if record["status"] == "FINALIZING" and deletion.still_verifying(record, uptime(db)):
                 fail("UPLOAD_FINALIZING", "Upload is being verified", 409)
             upload_path(upload_id).unlink(missing_ok=True)
-            db.execute("UPDATE uploads SET status='ABORTED', finalize_started_at=NULL WHERE id=?", (upload_id,))
+            db.execute("UPDATE uploads SET status='ABORTED', finalize_started_at=NULL, finalize_started_uptime=NULL,"
+                       " finalize_token=NULL WHERE id=?", (upload_id,))
 
     @app.get("/v1/videos/{video_id}")
-    def video_status(video_id: str):
+    def video_status(video_id: str, caller: accounts.Caller = Depends(current_user)):
         with connect() as db:
+            access.require(db, caller, "video", video_id, READ)
             return video_payload(find_video(db, video_id))
 
     @app.get("/v1/videos/{video_id}/quality")
-    def video_quality(video_id: str):
+    def video_quality(video_id: str, caller: accounts.Caller = Depends(current_user)):
         with connect() as db:
+            access.require(db, caller, "video", video_id, READ)
             return quality_payload(find_video(db, video_id))
 
     @app.post("/v1/videos/{video_id}/quality")
-    def recheck_quality(video_id: str):
+    def recheck_quality(video_id: str, caller: accounts.Caller = Depends(current_user)):
         """Run the file check again for a video that could not be validated earlier."""
         with connect() as db:
+            # Before the early answer below, which shows the stored check.
+            access.require(db, caller, "video", video_id, REVIEW)
             record = find_video(db, video_id)
         if record["status"] != media.STORED_UNVALIDATED:
             return quality_payload(record)
@@ -495,6 +580,9 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
             fail("VIDEO_FILE_MISSING", "Stored bytes for this video are missing", 409)
         probe = media.probe_video(path, record["mime_type"])
         with connect(write=True) as db:
+            # The probe ran outside a transaction: the session and the access are read again.
+            access.session_user(db, caller)
+            access.require(db, caller, "video", video_id, REVIEW)
             find_video(db, video_id)
             db.execute(
                 "UPDATE videos SET status=?, reject_code=?, media_json=?, warnings_json=?, probe_version=? WHERE id=? AND status=?",
@@ -508,9 +596,15 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
         206: {"description": "The requested byte range", "content": {"video/*": {}}},
     })
     def video_content(video_id: str, range_header: str | None = Header(default=None, alias="Range"),
-                      if_range: str | None = Header(default=None, alias="If-Range")):
-        """Evidence playback: the client plays the clip of a review card from these bytes."""
+                      if_range: str | None = Header(default=None, alias="If-Range"),
+                      caller: accounts.Caller = Depends(current_user)):
+        """Evidence playback: the client plays the clip of a review card from these bytes.
+
+        The player sends the session in the Authorization header too; no address carries a token.
+        """
         with connect() as db:
+            # Before VIDEO_NOT_READY, which names the video's status, and before the file opens.
+            access.require(db, caller, "video", video_id, READ)
             record = find_video(db, video_id)
         if record["status"] != media.READY:
             fail("VIDEO_NOT_READY", "Only a video that passed media validation can be played", 409, videoStatus=record["status"], rejectCode=record["reject_code"])
@@ -521,8 +615,10 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
         return content.stream_file(handle, os.fstat(handle.fileno()).st_size, json.loads(record["media_json"])["container"], range_header, if_range)
 
     @app.delete("/v1/videos/{video_id}", status_code=204)
-    def delete_video(video_id: str):
+    def delete_video(video_id: str, caller: accounts.Caller = Depends(current_user)):
         with connect(write=True) as db:
+            access.session_user(db, caller)
+            access.require(db, caller, "video", video_id, REVIEW)
             record = find_video(db, video_id)
             pending = [row["id"] for row in db.execute(
                 "SELECT id FROM analysis_jobs WHERE video_id=? AND state IN (?,?)", (video_id, *jobs.ACTIVE_STATES))]
@@ -537,43 +633,32 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
             worker.release(job_id)
 
     @app.delete("/v1/matches/{match_id}", status_code=204)
-    def delete_match(match_id: str):
+    def delete_match(match_id: str, caller: accounts.Caller = Depends(current_user)):
         """Remove a match and everything the server holds for it: its record, uploads, videos, analyses and bytes.
 
         Deleting a video leaves the match record and the upload rows behind. This is the call a
-        client makes when the user removes the match itself, so that nothing of it stays.
+        client makes when the user removes the match itself, so that nothing of it stays. A match
+        that belongs to no account (LEGACY) answers 403; the operator deletes it (`legacy --delete`).
         """
         with connect(write=True) as db:
-            if not db.execute("SELECT 1 FROM matches WHERE id=?", (match_id,)).fetchone():
-                fail("MATCH_NOT_FOUND", "Match does not exist", 404)
-            uploads = db.execute("SELECT * FROM uploads WHERE match_id=?", (match_id,)).fetchall()
+            access.session_user(db, caller)
+            access.require(db, caller, "match", match_id, REVIEW)
             # A verification in progress is about to turn its upload into a video of this match.
             # The route refuses before it removes a row or a file.
-            for upload in uploads:
-                if upload["status"] == "FINALIZING" and time.time() - (upload["finalize_started_at"] or 0) < FINALIZE_STALE_SECONDS:
-                    fail("UPLOAD_FINALIZING", "An upload of this match is being verified", 409)
-            videos = db.execute("SELECT * FROM videos WHERE match_id=?", (match_id,)).fetchall()
-            pending = [row["id"] for row in db.execute(
-                "SELECT id FROM analysis_jobs WHERE match_id=? AND state IN (?,?)", (match_id, *jobs.ACTIVE_STATES))]
-            # The order follows the foreign keys: videos first (their jobs, rallies, cards and
-            # decisions go with them, ON DELETE CASCADE), then the uploads, then the match.
-            db.execute("DELETE FROM videos WHERE match_id=?", (match_id,))
-            db.execute("DELETE FROM uploads WHERE match_id=?", (match_id,))
-            db.execute("DELETE FROM matches WHERE id=?", (match_id,))
+            if deletion.finalizing(db, match_id, uptime(db)):
+                fail("UPLOAD_FINALIZING", "An upload of this match is being verified", 409)
+            removed = deletion.delete_match_rows(db, files, match_id)
             # Remove the bytes before the commit: a deletion must never leave a file behind. If the
             # commit then fails, the rows return without their bytes and the same call clears them.
-            for video in videos:
-                video_path(video).unlink(missing_ok=True)
-            for upload in uploads:
-                upload_path(upload["id"]).unlink(missing_ok=True)
-                old_part_path(upload["id"]).unlink(missing_ok=True)
+            removed.unlink()
         empty_write_ahead_log(db_path)
         # A run in progress has lost its job row and can write nothing; this only makes it stop sooner.
-        for job_id in pending:
+        for job_id in removed.pending_job_ids:
             worker.release(job_id)
 
-    app.include_router(jobs.router(connect, analyzer, worker))
-    app.include_router(review.router(connect))
-    app.include_router(corrections.router(connect))
-    app.include_router(accounts.router(connect, db_path, signup_mode, accounts.Limiter(), hash_pool))
+    app.include_router(jobs.router(connect, analyzer, worker, current_user))
+    app.include_router(review.router(connect, current_user))
+    app.include_router(corrections.router(connect, current_user))
+    app.include_router(accounts.router(connect, db_path, signup_mode, accounts.Limiter(), hash_pool,
+                                       current_user, files, worker.release, uptime))
     return app

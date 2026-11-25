@@ -7,10 +7,8 @@ what follows from them.
 import hashlib
 
 import pytest
-from fastapi.testclient import TestClient
 
-from app.main import create_app
-from tests.helpers import one_match, wait_for_state
+from tests.helpers import one_match, serve, wait_for_state
 
 DEMO = {"id": "demo", "version": "0.1", "kind": "MOCK"}
 UNKNOWN_VALUE = {"value": None, "status": "UNKNOWN"}
@@ -87,7 +85,7 @@ def test_match_upload_demo_analysis_review_and_report(storage, make_clip, monkey
     clip = make_clip("demo-56s.mp4", size="320x180", rate="10", seconds=56)
     # Selected the way a developer selects it; the worker thread runs as in the real server.
     monkeypatch.setenv("VOLLEYSTAT_ANALYZER", "demo")
-    with TestClient(create_app(storage)) as client:
+    with serve(storage, None, start_worker=True) as client:
         assert client.get("/v1/health").json()["analyzer"] == DEMO
 
         match = client.post("/v1/matches", json={

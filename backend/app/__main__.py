@@ -1,15 +1,20 @@
 """Run the local development API: python -m app [--port 8000] [--analyzer demo].
 
-The server binds to the loopback interface only. It has no TLS and most routes do not ask for a
-session yet, so it must not be reachable from another machine. It writes no access log, so no
+The server binds to the loopback interface only. It has no TLS, so neither a session token nor a
+video may travel to it over a network, and it must not be reachable from another machine. It writes no access log, so no
 address or path of a request reaches the disk, and it ignores X-Forwarded-For.
+
+One server uses a storage folder at a time (storagelock.py): a second one on the same folder stops with an
+error before it binds a port.
 """
 import argparse
+import sys
 
 import uvicorn
 
 from .analyzers import REGISTRY, AnalyzerNotAvailable
 from .main import create_app
+from .storagelock import StorageInUse
 
 
 def main() -> None:
@@ -25,6 +30,12 @@ def main() -> None:
         app = create_app(analyzer=args.analyzer)
     except AnalyzerNotAvailable as error:
         parser.error(str(error))
+    # The lifespan holds the folder as well; taken here first, a refusal is one line and not a traceback.
+    try:
+        app.state.storage_lock.acquire()
+    except StorageInUse as error:
+        print(error, file=sys.stderr)
+        sys.exit(1)
     uvicorn.run(app, host="127.0.0.1", port=args.port, access_log=False, forwarded_allow_ips="")
 
 

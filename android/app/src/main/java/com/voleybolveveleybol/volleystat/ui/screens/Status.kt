@@ -30,6 +30,7 @@ import com.voleybolveveleybol.volleystat.JobLoad
 import com.voleybolveveleybol.volleystat.R
 import com.voleybolveveleybol.volleystat.RemovalFailure
 import com.voleybolveveleybol.volleystat.UploadProgress
+import com.voleybolveveleybol.volleystat.UploadRefusal
 import com.voleybolveveleybol.volleystat.data.UploadFailure
 import com.voleybolveveleybol.volleystat.data.UploadPhase
 import com.voleybolveveleybol.volleystat.model.AnalysisSummary
@@ -46,6 +47,7 @@ import com.voleybolveveleybol.volleystat.ui.components.StageState
 import com.voleybolveveleybol.volleystat.ui.components.Tone
 import com.voleybolveveleybol.volleystat.ui.components.VsCard
 import com.voleybolveveleybol.volleystat.ui.formatBytes
+import com.voleybolveveleybol.volleystat.ui.formatBytesInText
 import com.voleybolveveleybol.volleystat.ui.percentOf
 import com.voleybolveveleybol.volleystat.ui.theme.Dimens
 
@@ -86,6 +88,9 @@ private fun warningText(code: String): Int? = when (code) {
  * 07: one screen from the first uploaded byte to the report. The ring shows a number only when
  * that number was measured (bytes sent, or progress the analyzer reported); otherwise it spins
  * while work is running and stands still when nothing is.
+ *
+ * A match the server does not show to this account (403 NOT_A_MEMBER on the upload, the job or the
+ * removal; design 10.7) offers one way only: [onRemoveFromPhone], which sends nothing to the server.
  */
 @Composable
 fun StatusScreen(
@@ -100,6 +105,7 @@ fun StatusScreen(
     onOpenReview: () -> Unit,
     onOpenReport: () -> Unit,
     onBack: () -> Unit,
+    onRemoveFromPhone: () -> Unit = {},
 ) {
     val own = upload?.takeIf { it.matchId == match.localId }
     val check = match.check
@@ -115,6 +121,9 @@ fun StatusScreen(
     val job = analysis.job?.takeIf { analysis.matchId == match.localId }
     val jobLoad = if (analysis.matchId == match.localId) analysis.jobLoad else JobLoad.LOADING
     var confirmRemove by rememberSaveable { mutableStateOf(false) }
+    // The server answered NOT_A_MEMBER: it does not show this match to this account, and every call about it gets the same answer.
+    val noAccess = own?.refusal == UploadRefusal.NoAccess || jobLoad == JobLoad.NO_ACCESS || removalFailure == RemovalFailure.NO_ACCESS
+    var confirmPhoneRemoval by rememberSaveable { mutableStateOf(false) }
 
     // The upload runs inside the app's process, so the screen stays awake while it runs.
     val view = LocalView.current
@@ -131,6 +140,13 @@ fun StatusScreen(
     var ringIcon = R.drawable.ic_sports_volleyball_filled
     var ringText: String? = null
     when {
+        // No detail line: the notice below says what the server answered and what the user can do.
+        noAccess -> {
+            headline = stringResource(R.string.match_no_access_title)
+            detail = null
+            fraction = 0f
+            ringIcon = R.drawable.ic_lock
+        }
         check == null && uploading -> {
             headline = stringResource(when (own?.phase) {
                 UploadPhase.HASHING -> R.string.phase_hashing
@@ -240,10 +256,14 @@ fun StatusScreen(
     FlowScaffold(
         title = stringResource(R.string.status_title), onBack = onBack,
         topActions = {
-            IconButton(onClick = { confirmRemove = true }) { Icon(painterResource(R.drawable.ic_delete), contentDescription = stringResource(R.string.action_delete_match)) }
+            // Without access the server would refuse the deletion, so the icon removes the match from this phone only.
+            IconButton(onClick = { if (noAccess) confirmPhoneRemoval = true else confirmRemove = true }) {
+                Icon(painterResource(R.drawable.ic_delete), contentDescription = stringResource(if (noAccess) R.string.action_remove_from_phone else R.string.action_delete_match))
+            }
         },
         actions = {
             when {
+                noAccess -> PrimaryButton(stringResource(R.string.action_remove_from_phone), { confirmPhoneRemoval = true })
                 check == null && uploading -> SecondaryButton(stringResource(R.string.action_pause), onPause, enabled = own?.pausedByUser != true)
                 check == null && deadEnd -> Unit
                 check == null -> PrimaryButton(
@@ -260,7 +280,7 @@ fun StatusScreen(
                     PrimaryButton(stringResource(if (jobLoad == JobLoad.NO_JOB) R.string.action_start_analysis else R.string.action_retry), onRestartAnalysis)
                 else -> Unit
             }
-            if (check == null) {
+            if (check == null && !noAccess) {
                 TextButton(onClick = { confirmRemove = true }, modifier = Modifier.fillMaxWidth().heightIn(min = Dimens.touchTarget)) {
                     Text(stringResource(R.string.action_cancel_upload), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.error)
                 }
@@ -280,32 +300,44 @@ fun StatusScreen(
             Text(match.title, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
 
-        own?.failure?.let { failure ->
+        // Without access the server's part of the upload belongs to a record this account can not see, so the screen names no bytes it holds.
+        if (noAccess) Notice(stringResource(R.string.match_no_access), Tone.CAUTION)
+        own?.failure?.takeUnless { noAccess }?.let { failure ->
             val what = when (failure) {
                 UploadFailure.SERVER_UNREACHABLE -> stringResource(R.string.upload_error_unreachable)
                 UploadFailure.TOO_LARGE -> stringResource(R.string.upload_error_too_large)
                 UploadFailure.SOURCE_UNREADABLE -> stringResource(R.string.upload_error_source)
-                UploadFailure.SERVER_REFUSED -> stringResource(R.string.upload_error_refused)
+                // The server's limits are worded with the server's own numbers; a refusal without them keeps the general text.
+                UploadFailure.SERVER_REFUSED -> when (val refusal = own.refusal) {
+                    is UploadRefusal.PersonalQuota -> stringResource(R.string.upload_quota_personal, formatBytesInText(refusal.usedBytes), formatBytesInText(refusal.limitBytes))
+                    is UploadRefusal.ServerQuota -> stringResource(R.string.upload_quota_server, formatBytesInText(refusal.limitBytes))
+                    is UploadRefusal.StorageFull -> stringResource(R.string.upload_storage_full, formatBytesInText(refusal.floorBytes))
+                    UploadRefusal.NoAccess, null -> stringResource(R.string.upload_error_refused)
+                }
                 UploadFailure.CHECKSUM_KEEPS_FAILING -> stringResource(R.string.upload_error_checksum)
             }
             // What happened, what the server kept, and (in the buttons below) the one way forward.
-            val kept = if (!deadEnd && match.session.sentBytes > 0) " " + stringResource(R.string.upload_kept, formatBytes(match.session.sentBytes)) else ""
+            val kept = if (!deadEnd && match.session.sentBytes > 0) " " + stringResource(R.string.upload_kept, formatBytesInText(match.session.sentBytes)) else ""
             val next = if (deadEnd) " " + stringResource(R.string.upload_blocked) else ""
             Notice(what + kept + next, if (deadEnd) Tone.NEGATIVE else Tone.CAUTION)
         }
-        if (busyElsewhere) Notice(stringResource(R.string.upload_busy), Tone.NEUTRAL)
-        if (removalFailure != null) {
+        // Without access this match has no upload to start, so the other upload holds nothing up.
+        if (busyElsewhere && !noAccess) Notice(stringResource(R.string.upload_busy), Tone.NEUTRAL)
+        if (removalFailure != null && !noAccess) {
             Notice(
                 stringResource(when (removalFailure) {
                     RemovalFailure.UNCONFIRMED -> R.string.removal_unconfirmed
                     RemovalFailure.VERIFYING -> R.string.removal_verifying
                     RemovalFailure.REFUSED -> R.string.removal_refused
+                    // Shown above as the no-access state.
+                    RemovalFailure.NO_ACCESS -> R.string.match_no_access
                 }),
                 if (removalFailure == RemovalFailure.VERIFYING) Tone.CAUTION else Tone.NEGATIVE,
             )
         }
 
-        VsCard {
+        // The stages describe the server's work on a match; without access the server shows none of it.
+        if (!noAccess) VsCard {
             val fileOk = check?.status == VideoCheck.READY
             StageList(
                 listOf(
@@ -370,10 +402,16 @@ fun StatusScreen(
                 )
             )
         }
-        check?.warnings?.mapNotNull(::warningText)?.forEach { Notice(stringResource(it), Tone.CAUTION) }
+        if (!noAccess) check?.warnings?.mapNotNull(::warningText)?.forEach { Notice(stringResource(it), Tone.CAUTION) }
     }
 
-    if (confirmRemove) {
+    if (confirmPhoneRemoval) {
+        ConfirmDialog(
+            stringResource(R.string.remove_from_phone_title), stringResource(R.string.remove_from_phone_body), stringResource(R.string.action_remove_from_phone),
+            onConfirm = { confirmPhoneRemoval = false; onRemoveFromPhone() }, onDismiss = { confirmPhoneRemoval = false },
+        )
+    }
+    if (confirmRemove && !noAccess) {
         val uploaded = check != null
         ConfirmDialog(
             stringResource(if (uploaded) R.string.delete_title else R.string.cancel_title),

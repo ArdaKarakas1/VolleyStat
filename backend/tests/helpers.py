@@ -3,16 +3,114 @@
 The analyzers here are scripted stand-ins: they return what a test hands them. No video content
 is analysed and no result of theirs describes a real match.
 """
+import secrets
 import sqlite3
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from app import accounts
 from app.analyzers.base import BASELINE, AnalyzerInfo, RallyProposal
+from app.db import migrate, new_id
 from app.main import create_app
 from tests.test_media import store
+
+# The account every test client signs in with, and the account of the tests that look at it from outside.
+OWNER, STRANGER = "test.sahip", "test.yabanci"
+# A per-request header that replaces the client's own: bearer_token() reads an empty header as no session.
+NO_SESSION = {"Authorization": ""}
+_TOKENS: dict[tuple[Path, str], str] = {}
+
+
+def session_for(storage, username=OWNER, signup_via="SIGNUP_CODE", display_name=None, password=None) -> str:
+    """The token of one account and one session per storage folder and username.
+
+    Written straight into SQLite, so no test pays for scrypt. A server restarted on the same storage
+    gets the same token, because the session lives in the database. A cached token whose session row
+    is gone (a test dropped the accounts tables, or deleted the account) is replaced by a new one.
+    The account opens with an operator code unless the test names another way, so it has 8 GiB of
+    personal video and no limit on unfinished uploads (backend/app/quotas.py).
+    """
+    storage = Path(storage).resolve()
+    db_path = storage / "volleystat.sqlite3"
+    migrate(db_path)
+    key = (storage, username)
+    with closing(sqlite3.connect(db_path)) as db, db:
+        db.execute("PRAGMA foreign_keys=ON")
+        token = _TOKENS.get(key)
+        if token is not None and db.execute("SELECT 1 FROM sessions WHERE token_hash=?", (accounts.digest(token),)).fetchone():
+            return token
+        moment = accounts.iso(accounts.now())
+        user = db.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone()
+        if user is None:
+            user_id = new_id()
+            # A digest no password matches, unless the test names the password.
+            digest = accounts.hash_password(password) if password is not None else accounts.dummy_hash()
+            db.execute("INSERT INTO users(id, username, display_name, password_hash, created_at, password_changed_at,"
+                       " signup_via) VALUES(?,?,?,?,?,?,?)",
+                       (user_id, username, display_name or f"Test {username}", digest, moment, moment, signup_via))
+        else:
+            user_id = user[0]
+        token = secrets.token_urlsafe(32)
+        db.execute("INSERT INTO sessions(token_hash, user_id, created_at, last_used_at, expires_at) VALUES(?,?,?,?,?)",
+                   (accounts.digest(token), user_id, moment, moment,
+                    accounts.iso(accounts.now() + accounts.SESSION_MAX)))
+    _TOKENS[key] = token
+    return token
+
+
+def forget_sessions(storage) -> None:
+    """Drop the cached tokens of a storage folder whose accounts tables a rebuild test dropped."""
+    storage = Path(storage).resolve()
+    for key in [key for key in _TOKENS if key[0] == storage]:
+        del _TOKENS[key]
+
+
+def user_id_of(storage, username=OWNER) -> str:
+    with closing(sqlite3.connect(Path(storage) / "volleystat.sqlite3")) as db:
+        return db.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone()[0]
+
+
+def bearer(token) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
+def sign_in(client, storage, username=OWNER):
+    """Make every request of `client` carry the session of `username` on `storage`."""
+    client.headers["Authorization"] = f"Bearer {session_for(storage, username)}"
+    return client
+
+
+class As:
+    """Sends the requests of a client with other headers: another account's session, or none."""
+
+    def __init__(self, client, headers):
+        self.client = client
+        self.headers = dict(headers)
+
+    def request(self, method, url, **options):
+        headers = {**self.headers, **(options.pop("headers", None) or {})}
+        return self.client.request(method, url, headers=headers, **options)
+
+    def get(self, url, **options):
+        return self.request("GET", url, **options)
+
+    def post(self, url, **options):
+        return self.request("POST", url, **options)
+
+    def put(self, url, **options):
+        return self.request("PUT", url, **options)
+
+    def delete(self, url, **options):
+        return self.request("DELETE", url, **options)
+
+
+def as_account(client, storage, username, signup_via="SIGNUP_CODE"):
+    """The client acting as another account on the same storage."""
+    return As(client, bearer(session_for(storage, username, signup_via)))
 
 # Four rally spans inside the one-second synthetic clip.
 SPANS = ((100, 250), (300, 450), (500, 650), (700, 850))
@@ -69,9 +167,11 @@ class BlockingAnalyzer:
 
 
 @contextmanager
-def serve(storage, analyzer, start_worker=False):
-    """A client over `storage`. Without the worker thread, tests step the queue with run_pending(client)."""
-    with TestClient(create_app(storage, analyzer=analyzer, start_worker=start_worker)) as client:
+def serve(storage, analyzer, start_worker=False, user=OWNER, **options):
+    """A client over `storage`, signed in as `user`. Without the worker thread, tests step the queue
+    with run_pending(client)."""
+    with TestClient(create_app(storage, analyzer=analyzer, start_worker=start_worker), **options) as client:
+        sign_in(client, storage, user)
         yield client
 
 

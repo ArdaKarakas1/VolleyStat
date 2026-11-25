@@ -3,10 +3,12 @@ package com.voleybolveveleybol.volleystat.data
 import com.voleybolveveleybol.volleystat.model.MatchRules
 import com.voleybolveveleybol.volleystat.model.UploadSession
 import com.voleybolveveleybol.volleystat.model.VideoCheck
+import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -132,6 +134,10 @@ class UploadEngineTest {
         val failure = assertThrows(UploadException::class.java) { run() }
         assertEquals(UploadFailure.CHECKSUM_KEEPS_FAILING, failure.failure)
         assertEquals(6, server.chunksReceived)
+        // The server dropped every byte at the second mismatch too: the phone keeps no number of bytes the
+        // server deleted, so the status screen names none.
+        assertEquals(0, server.stored.size())
+        assertEquals(0L, sessions.last().sentBytes)
     }
 
     @Test fun anOversizedFileIsRefusedBeforeItIsRead() {
@@ -163,6 +169,123 @@ class UploadEngineTest {
         val check = run(sessions.last())
         assertEquals(VideoCheck.READY, check.status)
         assertArrayEquals(data, server.stored.toByteArray())
+        assertEquals(1, server.uploadsCreated)
+    }
+
+    // ----- Slice B3: the server closes an upload that got no chunk for a day, and it refuses with its numbers -----
+
+    private val gib = 1024L * 1024 * 1024
+
+    /** A run that stopped after the first chunk, as the app saves it: upload-1 with 4 MiB on the server. */
+    private fun stoppedAfterOneChunk(): UploadSession {
+        server.failChunk = 2
+        assertThrows(UploadException::class.java) { run() }
+        server.failChunk = null
+        return sessions.last().also {
+            assertEquals("upload-1", it.uploadId)
+            assertEquals(4L * 1024 * 1024, it.sentBytes)
+            sessions.clear()
+        }
+    }
+
+    /** Design 14.1, B3 row: the sweep closed the saved upload (ABORTED), so the next run opens a new one and sends from byte 0. */
+    @Test fun anAbortedUploadStartsAgainFromZero() {
+        val saved = stoppedAfterOneChunk()
+        server.status = "ABORTED"
+        val check = run(saved)
+        assertEquals(VideoCheck.READY, check.status)
+        assertArrayEquals(data, server.stored.toByteArray())
+        assertEquals(2, server.uploadsCreated)
+        assertEquals("upload-2", sessions.last().uploadId)
+        assertEquals("the same match, under the same id", listOf(saved.serverMatchId), server.matchIds)
+        assertEquals(saved.serverMatchId, sessions.last().serverMatchId)
+    }
+
+    /**
+     * The offset of a closed upload names bytes the sweep deleted. The phone forgets it before it asks for a
+     * new upload, so a refusal of that request leaves no "the server holds 4 MB" behind (Status, upload_kept).
+     */
+    @Test fun anAbortedUploadForgetsItsOldOffsetBeforeItAsksForANewOne() {
+        val saved = stoppedAfterOneChunk()
+        server.status = "ABORTED"
+        server.refuseUpload = Triple(409, "QUOTA_EXCEEDED", JSONObject().put("scope", "PERSONAL").put("usedBytes", 8 * gib).put("limitBytes", 8 * gib))
+        val failure = assertThrows(UploadException::class.java) { run(saved) }
+        assertEquals("QUOTA_EXCEEDED", failure.serverCode)
+        val last = sessions.last()
+        assertNull(last.uploadId)
+        assertEquals(0L, last.sentBytes)
+        assertEquals("the match and the file's digest stay", saved.serverMatchId to saved.sha256, last.serverMatchId to last.sha256)
+    }
+
+    /** The sweep closed the upload between the status read and a chunk: one round of the loop opens a new upload. */
+    @Test fun aChunkThatFindsTheUploadClosedStartsAgainFromZeroOnce() {
+        server.closeAtChunks = setOf(2)
+        val check = run()
+        assertEquals(VideoCheck.READY, check.status)
+        assertArrayEquals(data, server.stored.toByteArray())
+        assertEquals(2, server.uploadsCreated)
+        assertEquals("chunk 1, the refused chunk 2, then the three chunks of the new upload", 5, server.chunksReceived)
+        val reset = sessions.indexOfFirst { it.uploadId == null && it.sentBytes == 0L && it.serverMatchId != null && it.sha256 != null }
+        assertTrue("the phone forgot the closed upload before it opened the new one", reset in 0 until sessions.indexOfFirst { it.uploadId == "upload-2" })
+    }
+
+    @Test fun aCompleteThatFindsTheUploadClosedStartsAgainFromZeroOnce() {
+        server.closedCompletes = 1
+        val check = run()
+        assertEquals(VideoCheck.READY, check.status)
+        assertArrayEquals(data, server.stored.toByteArray())
+        assertEquals(2, server.uploadsCreated)
+        assertEquals(6, server.chunksReceived)
+        assertEquals("upload-2", sessions.last().uploadId)
+    }
+
+    @Test fun aSecondClosedUploadInOneRunIsARefusal() {
+        server.closeAtChunks = setOf(1, 2)
+        val failure = assertThrows(UploadException::class.java) { run() }
+        assertEquals(UploadFailure.SERVER_REFUSED, failure.failure)
+        assertEquals("UPLOAD_CLOSED", failure.serverCode)
+        assertEquals("one new upload, not a loop", 2, server.uploadsCreated)
+    }
+
+    /** The view model words a quota refusal with the server's own numbers, so the engine hands them over untouched. */
+    @Test fun aQuotaRefusalKeepsTheServersNumbers() {
+        server.refuseUpload = Triple(409, "QUOTA_EXCEEDED", JSONObject().put("scope", "PERSONAL").put("usedBytes", 6 * gib).put("limitBytes", 8 * gib))
+        val failure = assertThrows(UploadException::class.java) { run() }
+        assertEquals(UploadFailure.SERVER_REFUSED, failure.failure)
+        assertEquals("QUOTA_EXCEEDED", failure.serverCode)
+        val details = (failure.cause as ApiException).details
+        assertEquals("PERSONAL", details.getString("scope"))
+        assertEquals(6 * gib, details.getLong("usedBytes"))
+        assertEquals(8 * gib, details.getLong("limitBytes"))
+        assertEquals(0, server.chunksReceived)
+        assertNull(sessions.last().uploadId)
+    }
+
+    /** A chunk that would fill the server's disk is not written: the phone keeps the offset the server confirmed last and goes on from there later. */
+    @Test fun aStorageFullChunkKeepsTheLastConfirmedOffset() {
+        server.storageFullAtChunk = 2
+        val failure = assertThrows(UploadException::class.java) { run() }
+        assertEquals(UploadFailure.SERVER_REFUSED, failure.failure)
+        assertEquals("STORAGE_FULL", failure.serverCode)
+        assertEquals(10 * gib, (failure.cause as ApiException).details.getLong("floorBytes"))
+        assertEquals(4L * 1024 * 1024, sessions.last().sentBytes)
+        assertEquals("upload-1", sessions.last().uploadId)
+
+        server.storageFullAtChunk = null
+        val check = run(sessions.last())
+        assertEquals(VideoCheck.READY, check.status)
+        assertArrayEquals(data, server.stored.toByteArray())
+        assertEquals(1, server.uploadsCreated)
+    }
+
+    /** A 403 is no "upload gone": the saved upload stays saved, and nothing opens a second one (design 10.7). */
+    @Test fun aMatchThisAccountCanNotSeeIsARefusalAndTheSavedUploadStays() {
+        val saved = stoppedAfterOneChunk()
+        server.notAMember = true
+        val failure = assertThrows(UploadException::class.java) { run(saved) }
+        assertEquals(UploadFailure.SERVER_REFUSED, failure.failure)
+        assertEquals("NOT_A_MEMBER", failure.serverCode)
+        assertTrue(sessions.all { it.uploadId == "upload-1" && it.sentBytes == saved.sentBytes })
         assertEquals(1, server.uploadsCreated)
     }
 

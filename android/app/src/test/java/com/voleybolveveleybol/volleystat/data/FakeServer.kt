@@ -33,6 +33,19 @@ class FakeServer(var maxVideoBytes: Long = 4L * 1024 * 1024 * 1024) : AutoClosea
     var checksumFailures = 0
     /** Answer every request with a web page, as another service on the same port would. */
     var answersWithAPage = false
+    /** The refusal (status and error code with its details) that every request to open an upload gets, while set. */
+    var refuseUpload: Triple<Int, String, JSONObject>? = null
+    /**
+     * Chunk numbers (1-based, counted over the whole test) that find the upload closed, as after the
+     * server's sweep: the server marks the upload ABORTED, drops its bytes and answers 409 UPLOAD_CLOSED.
+     */
+    var closeAtChunks: Set<Int> = emptySet()
+    /** Number of completes that find the upload closed by the sweep, as [closeAtChunks] does. */
+    var closedCompletes = 0
+    /** Chunk number (1-based) that would take the server's disk below its floor: 507 STORAGE_FULL, nothing written. */
+    var storageFullAtChunk: Int? = null
+    /** The server answers 403 NOT_A_MEMBER on every route of a match, as to an account that does not own it. */
+    var notAMember = false
 
     init {
         server.dispatcher = object : Dispatcher() {
@@ -57,6 +70,7 @@ class FakeServer(var maxVideoBytes: Long = 4L * 1024 * 1024 * 1024) : AutoClosea
         return when {
             method == "GET" && path == "/health" ->
                 reply(200, JSONObject().put("status", "ok").put("mediaProbe", "available").put("maxVideoBytes", maxVideoBytes))
+            notAMember -> reply(403, error("NOT_A_MEMBER", "This account can not see this match"))
             method == "PUT" && path.startsWith("/matches/") && path.count { it == '/' } == 2 -> {
                 val id = path.removePrefix("/matches/")
                 matchBodies += JSONObject(request.body.readUtf8())
@@ -70,6 +84,8 @@ class FakeServer(var maxVideoBytes: Long = 4L * 1024 * 1024 * 1024) : AutoClosea
             }
             method == "POST" && path.endsWith("/uploads") && path.removePrefix("/matches/").removeSuffix("/uploads") !in matchIds ->
                 reply(404, error("MATCH_NOT_FOUND", "no such match"))
+            method == "POST" && path.endsWith("/uploads") && refuseUpload != null ->
+                refuseUpload!!.let { (status, code, details) -> reply(status, error(code, "refused", details)) }
             method == "POST" && path.endsWith("/uploads") -> {
                 uploadsCreated++
                 declaredSha = JSONObject(request.body.readUtf8()).getString("clientSha256")
@@ -85,6 +101,10 @@ class FakeServer(var maxVideoBytes: Long = 4L * 1024 * 1024 * 1024) : AutoClosea
                 val offset = url.queryParameter("offset")!!.toLong()
                 when {
                     failChunk == chunksReceived -> reply(500, error("BROKEN", "injected failure"))
+                    chunksReceived in closeAtChunks -> sweptAway()
+                    status != "UPLOADING" -> reply(409, error("UPLOAD_CLOSED", "Upload is not active"))
+                    storageFullAtChunk == chunksReceived ->
+                        reply(507, error("STORAGE_FULL", "below the floor", JSONObject().put("floorBytes", 10L * 1024 * 1024 * 1024)))
                     offset != stored.size().toLong() ->
                         reply(409, error("OFFSET_MISMATCH", "expected other offset", JSONObject().put("expectedOffset", stored.size())))
                     else -> {
@@ -94,6 +114,8 @@ class FakeServer(var maxVideoBytes: Long = 4L * 1024 * 1024 * 1024) : AutoClosea
                 }
             }
             method == "POST" && path.endsWith("/complete") -> when {
+                closedCompletes > 0 -> { closedCompletes--; sweptAway() }
+                status != "UPLOADING" -> reply(409, error("UPLOAD_CLOSED", "Upload is not active"))
                 checksumFailures > 0 || sha256(stored.toByteArray()) != declaredSha -> {
                     if (checksumFailures > 0) checksumFailures--
                     stored.reset()
@@ -107,6 +129,13 @@ class FakeServer(var maxVideoBytes: Long = 4L * 1024 * 1024 * 1024) : AutoClosea
             method == "GET" && path == "/videos/video-1" -> reply(200, video())
             else -> reply(404, error("NOT_FOUND", "no route for $method $path"))
         }
+    }
+
+    /** The sweep closed the upload: its bytes are gone and the request that finds it so is refused. */
+    private fun sweptAway(): MockResponse {
+        status = "ABORTED"
+        stored.reset()
+        return reply(409, error("UPLOAD_CLOSED", "Upload is not active"))
     }
 
     private fun video() = JSONObject().put("id", "video-1").put("videoId", "video-1").put("status", "READY")

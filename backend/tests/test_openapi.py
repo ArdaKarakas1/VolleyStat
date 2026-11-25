@@ -51,9 +51,9 @@ def test_the_openapi_document_does_not_depend_on_the_analyzer(storage):
     assert create_app(storage, analyzer="demo").openapi() == create_app(storage, analyzer="none").openapi()
 
 
-def test_the_app_is_version_0_8_0_and_serves_every_route_of_the_contract(storage):
+def test_the_app_is_version_0_9_0_and_serves_every_route_of_the_contract(storage):
     spec = create_app(storage, analyzer="none").openapi()
-    assert spec["info"]["version"] == "0.8.0"
+    assert spec["info"]["version"] == "0.9.0"
     missing = [(path, method) for path, method in CONTRACT_ROUTES if method not in spec["paths"].get(path, {})]
     assert missing == []
 
@@ -75,9 +75,8 @@ def test_a_rule_change_names_the_rule_its_user_saw(storage):
 
 def test_the_routes_that_need_a_session_say_so_and_the_others_do_not(storage):
     spec = create_app(storage, analyzer="none").openapi()
-    session = {("/v1/auth/logout", "post"), ("/v1/me", "get"), ("/v1/me/display-name", "put"),
-               ("/v1/me/password", "put"), ("/v1/me/delete", "post")}
-    marked = {(path, method) for path, operations in spec["paths"].items() for method, operation in operations.items()
-              if operation.get("security")}
-    assert marked == session
+    public = {("/v1/health", "get"), ("/v1/auth/register", "post"), ("/v1/auth/login", "post")}
+    operations = {(path, method): operation for path, methods in spec["paths"].items() for method, operation in methods.items()}
+    assert {key for key, operation in operations.items() if "security" not in operation} == public
+    assert all(operation["security"] == [{"HTTPBearer": []}] for key, operation in operations.items() if key not in public)
     assert spec["components"]["securitySchemes"]["HTTPBearer"]["scheme"] == "bearer"

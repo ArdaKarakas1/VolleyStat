@@ -53,6 +53,7 @@ import com.voleybolveveleybol.volleystat.model.VideoSource
 import com.voleybolveveleybol.volleystat.ui.screens.ClipPlaceholder
 import com.voleybolveveleybol.volleystat.ui.screens.HomeScreen
 import com.voleybolveveleybol.volleystat.ui.screens.MatchCreateScreen
+import com.voleybolveveleybol.volleystat.ui.screens.MatchesScreen
 import com.voleybolveveleybol.volleystat.ui.screens.PlayersScreen
 import com.voleybolveveleybol.volleystat.FEEDBACK_ADDRESS
 import com.voleybolveveleybol.volleystat.ui.screens.ProfileScreen
@@ -108,6 +109,13 @@ import com.voleybolveveleybol.volleystat.ui.screens.LoginScreen
 import com.voleybolveveleybol.volleystat.ui.screens.ProfileAccountActions
 import com.voleybolveveleybol.volleystat.ui.screens.RegisterScreen
 import com.voleybolveveleybol.volleystat.ui.screens.StartScreen
+import com.voleybolveveleybol.volleystat.RalliesLoad
+import com.voleybolveveleybol.volleystat.UploadProgress
+import com.voleybolveveleybol.volleystat.UploadRefusal
+import com.voleybolveveleybol.volleystat.data.UploadFailure
+import com.voleybolveveleybol.volleystat.model.UploadSession
+import com.voleybolveveleybol.volleystat.ui.screens.RalliesScreen
+import com.voleybolveveleybol.volleystat.ui.screens.RallyEditorWaiting
 
 /**
  * What single screens say in the states an independent review found wrong in version 0.4.0:
@@ -538,7 +546,7 @@ class ScreenStatesTest {
     @Test fun theProfileSaysWhoSeesTheVideoHowLongTheServerKeepsItAndHowItIsDeleted() {
         show { ProfileScreen(AppUiState(), "0.4.2", {}, {}, {}, { true }) }
         listOf(
-            R.string.privacy_accounts, R.string.privacy_matches_open, R.string.privacy_phone_accounts, R.string.privacy_session,
+            R.string.privacy_accounts, R.string.privacy_matches, R.string.privacy_phone_accounts, R.string.privacy_session,
             R.string.privacy_retention, R.string.privacy_delete, R.string.privacy_faces,
         ).forEach {
             compose.onNodeWithText(text(it)).performScrollTo().assertIsDisplayed()
@@ -786,7 +794,7 @@ class ScreenStatesTest {
                 0 -> LoginScreen(account, onLogin = { _, _ -> }, onCreateAccount = {}, initialUsername = "ali", initialPassword = "uzun bir şifre 42")
                 1 -> RegisterScreen(account, onRegister = { _, _, _, _ -> }, onHaveAccount = {}, onBack = {})
                 2 -> PasswordChangeScreen(account.copy(user = ali), { _, _ -> }, onBack = {})
-                3 -> DeleteAccountScreen(account.copy(user = ali), serverMatches = 0, onDelete = {}, onBack = {})
+                3 -> DeleteAccountScreen(account.copy(user = ali), holdsUploadedMatches = false, onDelete = {}, onBack = {})
                 // The row under Adı Kaydet and the logout dialog show the outcome of their call.
                 else -> AccountOutcome(account.copy(user = ali), AccountAction.LOGOUT)
             }
@@ -1048,13 +1056,14 @@ class ScreenStatesTest {
         assertEquals(listOf(false, true), logouts)
     }
 
-    @Test fun theDeletionNeedsThePasswordAndSaysWhatTheServerKeeps() {
+    @Test fun theDeletionNeedsThePasswordAndSaysWhatTheServerDeletes() {
         var account by mutableStateOf(AccountUi(user = ali))
         val deletions = mutableListOf<String>()
-        show { DeleteAccountScreen(account, serverMatches = 2, onDelete = { deletions += it }, onBack = {}) }
+        show { DeleteAccountScreen(account, holdsUploadedMatches = false, onDelete = { deletions += it }, onBack = {}) }
         compose.onNodeWithText(text(R.string.delete_account_title)).assertIsDisplayed()
         compose.onNodeWithText(text(R.string.delete_account_body)).assertIsDisplayed()
-        compose.onNodeWithText(text(R.string.delete_account_server_matches, 2)).assertIsDisplayed()
+        // From server 0.9 on the server deletes the account's matches with it, so the screen names no match that stays there.
+        assertFalse(shown("hesaplara bağlamıyor"))
         val confirm = compose.onNode(hasClickAction() and hasText(text(R.string.action_delete_account)))
         confirm.assertIsNotEnabled()
         field(R.string.field_your_password).performTextInput("uzun bir şifre 42")
@@ -1067,10 +1076,72 @@ class ScreenStatesTest {
         compose.onNodeWithText(text(R.string.password_wrong)).assertIsDisplayed()
     }
 
-    @Test fun aDeletionNamesNoServerMatchesWhenTheListHoldsNone() {
-        show { DeleteAccountScreen(AccountUi(user = ali), serverMatches = 0, onDelete = {}, onBack = {}) }
+    @Test fun theDeletionSaysThatTheServerDeletesTheAccountsMatchesToo() {
+        show { DeleteAccountScreen(AccountUi(user = ali), holdsUploadedMatches = false, onDelete = {}, onBack = {}) }
         compose.onNodeWithText(text(R.string.delete_account_body)).assertIsDisplayed()
-        assertFalse(shown(text(R.string.delete_account_server_matches, 0)))
+        assertTrue(text(R.string.delete_account_body).contains("Sunucu bu hesaba bağladığı maçları, videolarını ve analizlerini de siler."))
+        assertFalse(shown("maç listendeki"))
+        // No match in the list went to a server: none of them can be a match an older server stored.
+        assertFalse(shown(text(R.string.delete_account_legacy)))
+    }
+
+    /**
+     * Review findings ACC-1 and F1: servers before 0.9 bound no match to an account, and the deletion leaves such a
+     * match on the server. The app can not tell which of its matches went to such a server, so the notice is a
+     * condition that holds for every match the list holds.
+     */
+    @Test fun theDeletionSaysThatTheServerKeepsAMatchAnOlderServerStored() {
+        show { DeleteAccountScreen(AccountUi(user = ali), holdsUploadedMatches = true, onDelete = {}, onBack = {}) }
+        compose.onNodeWithText(text(R.string.delete_account_legacy)).assertIsDisplayed()
+        assertTrue(text(R.string.delete_account_legacy).contains("sunucu maçı hesabınla birlikte silmez"))
+        // The app deletes the match records with the account: the person notes what the operator finds the match by.
+        assertTrue(text(R.string.delete_account_legacy).endsWith("hesabını silmeden önce maçın takım adlarını ve tarihini not al."))
+    }
+
+    /** Review finding F1: the card limits what the server shows, keeps and deletes with the account to the matches bound to it. */
+    @Test fun thePrivacyCardSaysWhatHappensToTheMatchesOfOlderServers() {
+        show { ProfileScreen(AppUiState(), "0.9.0", {}, {}, {}, { true }) }
+        compose.onNodeWithText(text(R.string.privacy_matches)).performScrollTo().assertIsDisplayed()
+        assertTrue(text(R.string.privacy_matches).startsWith("Sunucu hesabına bağladığı maçları ve videolarını yalnız bu hesapla giriş yapan kişiye gösterir."))
+        assertTrue(text(R.string.privacy_matches).contains("Sunucunun eski sürümleri maçları hiçbir hesaba bağlamıyordu."))
+        assertTrue(text(R.string.privacy_retention).contains("Sunucu hesabına bağladığı maçların videolarını ve bilgilerini sen maçı ya da hesabını silene kadar saklar."))
+        assertTrue(text(R.string.privacy_retention).contains("Sunucu hiçbir hesaba bağlı olmayan maçları Voleybol Ve Veleybol silene ya da bir hesaba bağlayana kadar saklar."))
+        assertTrue(text(R.string.privacy_retention).contains("Sen hesabını silince sunucu bu maçları silmez."))
+    }
+
+    /** Review finding F6: the lists show the server's refusal, not the analysis state the phone remembered before it. */
+    @Test fun aMatchTheServerDoesNotShowSaysSoOnItsCardAndCountsAsNoReport() {
+        val reported = match.copy(analysis = AnalysisSummary("j1", AnalysisSummary.COMPLETE, mock = false, reviewOpen = 0, reviewTotal = 3), noAccess = true)
+        val analyzing = match.copy(localId = "m2", homeTeam = "C Takımı", awayTeam = "D Takımı", noAccess = true,
+            analysis = AnalysisSummary("j2", AnalysisSummary.PROCESSING, mock = false, reviewOpen = 0, reviewTotal = 0))
+        val state = signedIn.copy(matches = listOf(reported, analyzing))
+        show { HomeScreen(state, {}, {}, {}, {}, {}) }
+        assertEquals(2, compose.onAllNodesWithText(text(R.string.status_no_access)).fetchSemanticsNodes().size)
+        assertFalse(shown(text(R.string.status_report_ready)))
+        assertFalse(shown(text(R.string.status_analyzing)))
+        compose.onNodeWithText(text(R.string.home_no_reports)).performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun theMatchListShowsTheRefusalToo() {
+        // A demo analysis the phone remembered is an analysis state too: the card names only the refusal.
+        val reported = match.copy(analysis = AnalysisSummary("j1", AnalysisSummary.COMPLETE, mock = true, reviewOpen = 0, reviewTotal = 3), noAccess = true)
+        show { MatchesScreen(signedIn.copy(matches = listOf(reported)), {}, {}) }
+        compose.onNodeWithText(text(R.string.status_no_access)).assertIsDisplayed()
+        assertFalse(shown(text(R.string.status_report_ready)))
+        assertFalse(shown(text(R.string.status_demo)))
+    }
+
+    /**
+     * Review finding Q3: the server counts idle time only while it runs, so a phone gets a whole day again after the
+     * server was off. Every text that names the day says so, and none promises a deletion the server does not make.
+     */
+    @Test fun theTextsAboutTheDayCountOnlyTheTimeTheServerIsOn() {
+        val day = "Sunucunun açık kaldığı bir gün boyunca yükleme sürmezse sunucu"
+        for (id in listOf(R.string.upload_kept, R.string.session_ended, R.string.logout_upload, R.string.privacy_retention)) {
+            val said = context.getString(id)
+            assertTrue(said, said.contains(day))
+            assertFalse(said, said.contains("Yükleme bir gün boyunca sürmezse"))
+        }
     }
 
     @Test fun theProfileOpensTheDeletion() {
@@ -1089,5 +1160,150 @@ class ScreenStatesTest {
     @Test fun theProfileNamesATemporaryPassword() {
         show { ProfileScreen(signedIn.copy(account = AccountUi(user = ali.copy(passwordTemporary = true))), "0.8.0", {}, {}, {}, { true }) }
         compose.onNodeWithText(text(R.string.password_temporary)).performScrollTo().assertIsDisplayed()
+    }
+
+    // ----- Slice B3: a match the server does not show to this account, and the server's limits -----
+
+    private val gib = 1024L * 1024 * 1024
+    private val nb = '\u00A0'
+    /** A match whose upload stopped after 400 MB, as the phone saved it. */
+    private val unfinished = match.copy(check = null, session = UploadSession("sha", "srv", "up", 400_000_000))
+
+    private fun refused(refusal: UploadRefusal?, code: String) =
+        UploadProgress(unfinished.localId, failure = UploadFailure.SERVER_REFUSED, serverCode = code, refusal = refusal)
+
+    /** Design 10.7: the phone can only forget such a match. Nothing on the screen offers a call the server would refuse. */
+    @Test fun aMatchWithoutAccessOffersOnlyRemovalFromThePhone() {
+        var screen by mutableStateOf(0)
+        var removals = 0
+        var phoneRemovals = 0
+        show {
+            when (screen) {
+                // The upload of a match the server no longer shows to this account.
+                0 -> StatusScreen(unfinished, refused(UploadRefusal.NoAccess, "NOT_A_MEMBER"), AnalysisUi(), null, {}, {}, { removals++ }, {}, {}, {}, {}, onRemoveFromPhone = { phoneRemovals++ })
+                // An uploaded match whose job the server does not show to this account, while another match uploads.
+                1 -> StatusScreen(match, UploadProgress("m2", running = true), AnalysisUi("m1", JobLoad.NO_ACCESS), null, {}, {}, { removals++ }, {}, {}, {}, {}, onRemoveFromPhone = { phoneRemovals++ })
+                // A removal the server refused with 403.
+                else -> StatusScreen(match, null, AnalysisUi("m1", JobLoad.NO_JOB), RemovalFailure.NO_ACCESS, {}, {}, { removals++ }, {}, {}, {}, {}, onRemoveFromPhone = { phoneRemovals++ })
+            }
+        }
+        for (shownScreen in 0..2) {
+            screen = shownScreen
+            compose.onNodeWithText(text(R.string.match_no_access_title)).assertIsDisplayed()
+            compose.onNodeWithText(text(R.string.match_no_access)).performScrollTo().assertIsDisplayed()
+            listOf(
+                R.string.action_retry, R.string.action_resume, R.string.action_start_analysis, R.string.action_cancel_upload, R.string.upload_error_refused,
+                R.string.removal_refused, R.string.stage_check_ok, R.string.upload_busy,
+            )
+                .forEach { assertFalse("screen $shownScreen: ${text(it)}", shown(text(it))) }
+            // The server's part belongs to a record this account can not see: no "the server got 400 MB".
+            assertFalse(shown("400"))
+
+            compose.onNode(hasClickAction() and hasText(text(R.string.action_remove_from_phone))).performClick()
+            compose.onNodeWithText(text(R.string.remove_from_phone_title)).assertIsDisplayed()
+            compose.onNodeWithText(text(R.string.remove_from_phone_body)).assertIsDisplayed()
+            if (shownScreen == 1) compose.onNode(isDialog()).captureRoboImage("build/outputs/roborazzi/07_erisim_yok_telefondan_kaldir.png")
+            compose.onNode(hasClickAction() and hasText(text(R.string.action_remove_from_phone)) and hasAnyAncestor(isDialog())).performClick()
+            assertEquals(shownScreen + 1, phoneRemovals)
+
+            // The delete icon of the top bar opens the same dialog, and never the server's removal.
+            compose.onNodeWithContentDescription(text(R.string.action_remove_from_phone)).performClick()
+            compose.onNodeWithText(text(R.string.remove_from_phone_title)).assertIsDisplayed()
+            compose.onNode(hasClickAction() and hasText(text(R.string.action_give_up)) and hasAnyAncestor(isDialog())).performClick()
+            assertEquals(0, removals)
+        }
+    }
+
+    /**
+     * formatBytes writes decimal units, the unit phones show for files: 8 GiB is 8,6 GB. Inside a sentence a
+     * no-break space keeps a number and its unit on one line ([nb]).
+     */
+    @Test fun theQuotaNoticeNamesTheServersNumbersInGigabytes() {
+        assertEquals("8,6 GB", formatBytes(8 * gib))
+        assertEquals("8,6${nb}GB", formatBytesInText(8 * gib))
+        var progress by mutableStateOf(refused(UploadRefusal.PersonalQuota(6 * gib, 8 * gib), "QUOTA_EXCEEDED"))
+        val fresh = unfinished.copy(session = UploadSession("sha", "srv", null, 0))
+        show { StatusScreen(fresh, progress, AnalysisUi(), null, {}, {}, {}, {}, {}, {}, {}) }
+        compose.onNodeWithText(text(R.string.upload_quota_personal, "6,4${nb}GB", "8,6${nb}GB")).performScrollTo().assertIsDisplayed()
+        // The person may try again after deleting an old match.
+        compose.onNodeWithText(text(R.string.action_retry)).assertIsDisplayed()
+        assertFalse(shown(text(R.string.upload_error_refused)))
+
+        progress = refused(UploadRefusal.ServerQuota(40 * gib), "QUOTA_EXCEEDED")
+        compose.onNodeWithText(text(R.string.upload_quota_server, "42,9${nb}GB")).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.action_retry)).assertIsDisplayed()
+
+        // A refusal without the server's numbers keeps the general text and writes no number.
+        progress = refused(null, "QUOTA_EXCEEDED")
+        compose.onNodeWithText(text(R.string.upload_error_refused)).performScrollTo().assertIsDisplayed()
+        assertFalse(shown("GB"))
+    }
+
+    @Test fun aFullDiskNamesTheFloor() {
+        show { StatusScreen(unfinished, refused(UploadRefusal.StorageFull(10 * gib), "STORAGE_FULL"), AnalysisUi(), null, {}, {}, {}, {}, {}, {}, {}) }
+        // A chunk met the floor: the server keeps what it confirmed before, and says how long.
+        val notice = text(R.string.upload_storage_full, "10,7${nb}GB") + " " + text(R.string.upload_kept, "400${nb}MB")
+        compose.onNodeWithText(notice).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.action_retry)).assertIsDisplayed()
+    }
+
+    /**
+     * Checker finding P2: the server refuses a new upload at the floor also for the bytes that other unfinished
+     * uploads still owe, so a video that fits alone can meet the floor. A chunk meets half the floor. The text holds
+     * in both states: it names this upload together with the other uploads in progress, if there are any, and says
+     * neither that other uploads exist nor that this video alone takes the space.
+     */
+    @Test fun theFullDiskTextHoldsWithOtherUploadsInProgressAndAtAChunk() {
+        val said = context.getString(R.string.upload_storage_full, "10,7${nb}GB")
+        assertEquals(
+            "Bu videonun yüklemesi ve varsa süren öteki yüklemeler bitince sunucunun diskindeki boş yer 10,7${nb}GB " +
+                "sınırının altına inerdi. Sunucu bu yüzden yüklemeyi durdurdu. Video telefonunda kalır. " +
+                "Yüklemeyi sonra yeniden deneyebilirsin.",
+            said,
+        )
+        assertFalse(said, said.contains("Bu video sunucunun diskindeki boş yeri"))
+    }
+
+    @Test fun theReportAndThePlayersTableSayTheServerDoesNotShowTheMatchAndDoNotSpin() {
+        var statusOpened = 0
+        var players by mutableStateOf(false)
+        show {
+            if (players) PlayersScreen(match, null, emptyList(), emptyList(), load = ReportLoad.NO_ACCESS) {}
+            else ReportScreen(match, ReportLoad.NO_ACCESS, null, {}, {}, { statusOpened++ }, {}, {})
+        }
+        compose.onNodeWithText(text(R.string.match_no_access)).assertIsDisplayed()
+        // Without the branch the report said that it has no report yet.
+        listOf(R.string.report_unavailable_title, R.string.report_loading, R.string.action_retry, R.string.report_load_failed).forEach { assertFalse(text(it), shown(text(it))) }
+        // The way to Telefondan Kaldır leads through the match's own screen.
+        compose.onNodeWithText(text(R.string.status_title)).performClick()
+        assertEquals(1, statusOpened)
+
+        players = true
+        compose.onNodeWithText(text(R.string.match_no_access)).assertIsDisplayed()
+        listOf(R.string.report_loading, R.string.action_retry, R.string.players_empty).forEach { assertFalse(text(it), shown(text(it))) }
+    }
+
+    @Test fun theRallyListTheEditorAndTheReviewSayTheServerDoesNotShowTheMatch() {
+        val job = job(AnalysisSummary.NEEDS_REVIEW)
+        // The job was readable and the list is not; then neither is.
+        val states = listOf(AnalysisUi("m1", JobLoad.READY, job, ralliesLoad = RalliesLoad.NO_ACCESS), AnalysisUi("m1", JobLoad.NO_ACCESS))
+        var analysis by mutableStateOf(states[0])
+        var which by mutableStateOf(0)
+        show {
+            when (which) {
+                0 -> RalliesScreen(match, analysis, {}, {}, {}, {}, {}, {})
+                1 -> RallyEditorWaiting("Ralli", analysis, {}, {})
+                else -> ReviewScreen(match, analysis, emptyList(), {}, {}, {}, {}, {}, {}) { ClipPlaceholder() }
+            }
+        }
+        for (screen in 0..2) {
+            for (state in if (screen == 2) states.drop(1) else states) {
+                which = screen
+                analysis = state
+                compose.onNodeWithText(text(R.string.match_no_access)).assertIsDisplayed()
+                listOf(R.string.rallies_loading, R.string.review_loading, R.string.action_retry, R.string.rallies_load_failed, R.string.review_no_job)
+                    .forEach { assertFalse("screen $screen: ${text(it)}", shown(text(it))) }
+            }
+        }
     }
 }

@@ -227,8 +227,11 @@ class AccountFlowTest {
 
         tap(R.string.nav_profile)
         button(R.string.action_delete_account).performScrollTo().performClick()
-        // The list holds one match the server has: the screen says the server keeps it.
-        compose.onNodeWithText(text(R.string.delete_account_server_matches, 1)).assertIsDisplayed()
+        // The list holds one match that went to the server. Server 0.9 deletes it with the account, unless an older
+        // server stored it: then it belongs to no account and stays. The app can not tell which, and the screen says so.
+        compose.onNodeWithText(text(R.string.delete_account_body)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.delete_account_legacy)).performScrollTo().assertIsDisplayed()
+        assertFalse(shown("hesaplara bağlamıyor"))
         field(R.string.field_your_password).performTextInput("yanlış bir şifre")
         button(R.string.action_delete_account).performClick()
         waitFor(text(R.string.password_wrong))

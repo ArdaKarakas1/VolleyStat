@@ -29,14 +29,33 @@ CREATE TABLE IF NOT EXISTS matches (
   name TEXT, played_on TEXT, venue TEXT, kind TEXT NOT NULL DEFAULT 'TRAINING',
   -- The rule the sets of this match are counted with (report.MatchRules). The defaults are FIVB.
   sets_to_win INTEGER NOT NULL DEFAULT 3, set_target INTEGER NOT NULL DEFAULT 25,
-  deciding_set_target INTEGER NOT NULL DEFAULT 15
+  deciding_set_target INTEGER NOT NULL DEFAULT 15,
+  -- PERSONAL for a match an account opened or LEGACY for a row stored before accounts
+  status TEXT NOT NULL DEFAULT 'LEGACY',
+  -- The account that owns a PERSONAL match. No foreign key: account deletion removes the matches itself
+  owner_user_id TEXT
 );
 CREATE TABLE IF NOT EXISTS uploads (
   id TEXT PRIMARY KEY, match_id TEXT NOT NULL REFERENCES matches(id),
   file_name TEXT NOT NULL, mime_type TEXT NOT NULL, expected_size INTEGER NOT NULL,
   next_offset INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'UPLOADING',
   video_id TEXT UNIQUE, created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  client_sha256 TEXT, finalize_started_at REAL
+  client_sha256 TEXT, finalize_started_at REAL,
+  -- A random token that complete writes with its FINALIZING mark. It starts with the mark of the server's run.
+  -- The request owns the verification while the row holds its token: a takeover after 15 minutes writes a new
+  -- one and the start of the next run clears it. A FINALIZING row without a token is abandoned
+  finalize_token TEXT,
+  -- The wall clock moment of the last initiate or stored chunk. Information only: no decision reads its value
+  -- and only an empty touch (this and touched_uptime NULL) marks a row stored before server 0.9
+  touched_at REAL,
+  -- The server's uptime (server_clock) at the last initiate or stored chunk. The sweep aborts an upload
+  -- once the uptime is 24 h past it
+  touched_uptime REAL,
+  -- The server's uptime when complete wrote its FINALIZING mark. The sweep closes the verification 24 h
+  -- of uptime later. complete may take it over 15 minutes of uptime later and at once when it has no token
+  finalize_started_uptime REAL,
+  -- The account that started the upload or NULL once that account is deleted
+  started_by TEXT
 );
 CREATE TABLE IF NOT EXISTS videos (
   id TEXT PRIMARY KEY, match_id TEXT NOT NULL REFERENCES matches(id),
@@ -164,6 +183,14 @@ CREATE TRIGGER IF NOT EXISTS rally_corrections_keep_rows BEFORE DELETE ON rally_
 WHEN EXISTS (SELECT 1 FROM analysis_jobs WHERE id = OLD.job_id)
 BEGIN SELECT RAISE(ABORT, 'rally_corrections is append-only'); END;
 
+-- The uptime counter of the sweep (sweep.py). Only the time this server runs counts as idle time of an
+-- upload: a phone can not send a chunk to a server that is off. The counter never reads the wall clock.
+CREATE TABLE IF NOT EXISTS server_clock (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  -- Seconds this server has run summed over its life: written at every pass of the sweep and at a stop
+  uptime REAL NOT NULL
+);
+
 -- Accounts (ADR-0119). The server keeps no e-mail and no phone number.
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
@@ -222,14 +249,28 @@ ADDED_COLUMNS = (
                  ("kind", "TEXT NOT NULL DEFAULT 'TRAINING'"),
                  # Version 0.5 counted every match with the FIVB rule, so the defaults keep its counts.
                  ("sets_to_win", "INTEGER NOT NULL DEFAULT 3"), ("set_target", "INTEGER NOT NULL DEFAULT 25"),
-                 ("deciding_set_target", "INTEGER NOT NULL DEFAULT 15"))),
-    ("uploads", (("client_sha256", "TEXT"), ("finalize_started_at", "REAL"))),
+                 ("deciding_set_target", "INTEGER NOT NULL DEFAULT 15"),
+                 # Every row stored before accounts becomes LEGACY: it belongs to no account (ADR-0119, B3).
+                 ("status", "TEXT NOT NULL DEFAULT 'LEGACY'"), ("owner_user_id", "TEXT"))),
+    ("uploads", (("client_sha256", "TEXT"), ("finalize_started_at", "REAL"), ("finalize_token", "TEXT"),
+                 ("touched_at", "REAL"), ("started_by", "TEXT"), ("touched_uptime", "REAL"),
+                 ("finalize_started_uptime", "REAL"))),
     ("videos", (("reject_code", "TEXT"), ("media_json", "TEXT"), ("warnings_json", "TEXT"),
                 ("probe_version", "TEXT"), ("storage_key", "TEXT"))),
     ("analysis_jobs", (("rally_list_version", "INTEGER NOT NULL DEFAULT 0"), ("list_confirmed_version", "INTEGER"),
                        ("list_confirmed_at", "TEXT"))),
     ("rallies", (("proposal_id", "TEXT"),)),
     ("review_decisions", (("correction_id", "TEXT"),)),
+)
+
+# Indexes on added columns. They can not go into SCHEMA: migrate() runs SCHEMA before it adds the
+# columns, and on older storage an index on a column that does not exist yet stops the start-up. These
+# are the first indexes on added columns; a rebuild test drops them before it drops their columns.
+ADDED_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS matches_owner ON matches(owner_user_id) WHERE owner_user_id IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS matches_status ON matches(status)",
+    "CREATE INDEX IF NOT EXISTS uploads_unfinished ON uploads(status) WHERE status IN ('UPLOADING', 'FINALIZING')",
+    "CREATE INDEX IF NOT EXISTS uploads_started_by ON uploads(started_by) WHERE started_by IS NOT NULL",
 )
 
 
@@ -249,16 +290,47 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# The builds of B3 before the uptime counter measured uptime with the wall clock (server_clock.last_alive and
+# the time off in server_downtimes). Nothing there converts into uptime, so migrate() drops it and the counter
+# starts at 0. Their columns uploads.kept_touched_at and kept_finalize_started_at stay unused: dropping a
+# column needs SQLite 3.35, and a start must not fail on an older one.
+EARLIER_CLOCK = (
+    "DROP TABLE IF EXISTS server_downtimes",
+    "DROP TABLE IF EXISTS server_downtimes_kept",
+    "DROP INDEX IF EXISTS uploads_touched",
+)
+
+# An unfinished upload of an earlier build has a wall clock touch but no uptime. It counts as touched, and its
+# verification as started, at the stored uptime of the first start of this build: a full day from there, late
+# and never early. Such a verification holds no token of this run (0.8 wrote none, and the start frees an
+# earlier build's), so the first complete may take it over at once. A row without any touch was stored before
+# server 0.9, and the first pass of the sweep aborts it.
+FIRST_UPTIME = (
+    "UPDATE uploads SET touched_uptime = (SELECT COALESCE(MAX(uptime), 0) FROM server_clock)"
+    " WHERE touched_uptime IS NULL AND touched_at IS NOT NULL AND status IN ('UPLOADING', 'FINALIZING')",
+    "UPDATE uploads SET finalize_started_uptime = (SELECT COALESCE(MAX(uptime), 0) FROM server_clock)"
+    " WHERE finalize_started_uptime IS NULL AND finalize_started_at IS NOT NULL AND status = 'FINALIZING'",
+)
+
+
 def migrate(db_path: Path) -> None:
     setup = sqlite3.connect(db_path, timeout=30)
     try:
         setup.execute("PRAGMA journal_mode=WAL")
+        if any(row[1] == "last_alive" for row in setup.execute("PRAGMA table_info(server_clock)")):
+            setup.execute("DROP TABLE server_clock")
+        for statement in EARLIER_CLOCK:
+            setup.execute(statement)
         setup.executescript(SCHEMA)
         for table, columns in ADDED_COLUMNS:
             present = {row[1] for row in setup.execute(f"PRAGMA table_info({table})")}
             for column, kind in columns:
                 if column not in present:
                     setup.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
+        for statement in ADDED_INDEXES:
+            setup.execute(statement)
+        for statement in FIRST_UPTIME:
+            setup.execute(statement)
         if any(row[1] == "idempotency_key" for row in setup.execute("PRAGMA table_info(analysis_jobs)")):
             # Earlier storage kept the key in a column of the job that the request created.
             setup.execute(

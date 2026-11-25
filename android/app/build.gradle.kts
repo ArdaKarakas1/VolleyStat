@@ -13,8 +13,8 @@ android {
         applicationId = "com.voleybolveveleybol.volleystat"
         minSdk = 26
         targetSdk = 36
-        versionCode = 11
-        versionName = "0.8.0"
+        versionCode = 12
+        versionName = "0.9.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildFeatures {

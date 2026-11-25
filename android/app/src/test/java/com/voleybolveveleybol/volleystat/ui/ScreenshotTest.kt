@@ -39,6 +39,8 @@ import com.voleybolveveleybol.volleystat.AppUiState
 import com.voleybolveveleybol.volleystat.JobLoad
 import com.voleybolveveleybol.volleystat.ReportLoad
 import com.voleybolveveleybol.volleystat.UploadProgress
+import com.voleybolveveleybol.volleystat.UploadRefusal
+import com.voleybolveveleybol.volleystat.data.UploadFailure
 import com.voleybolveveleybol.volleystat.data.AccountUser
 import com.voleybolveveleybol.volleystat.data.UploadPhase
 import com.voleybolveveleybol.volleystat.model.AnalysisJob
@@ -181,11 +183,17 @@ class ScreenshotTest {
 
     @Test fun tabs() {
         shot("maclar") { MatchesScreen(state, {}, {}) }
+        // Slice B3, review finding F6: the server answered 403 for two matches, and their cards show that instead of
+        // the analysis state the phone remembered before.
+        val refused = state.copy(matches = state.matches.mapIndexed { index, match -> if (index < 2) match.copy(noAccess = true) else match })
+        shot("maclar_erisim_yok") { MatchesScreen(refused, {}, {}) }
+        shot("maclar_erisim_yok_koyu", dark = true) { MatchesScreen(refused, {}, {}) }
+        shotOn("kucuk_buyuk_yazi_maclar_erisim_yok", "+w320dp-h568dp-port", fontScale = 1.5f) { MatchesScreen(refused, {}, {}) }
         shot("takimlar") { TeamsScreen(teams, { true }, {}) }
         shot("takim_kadro") { TeamRosterScreen(teams[0], { _, _ -> true }, {}, {}, {}) }
-        shot("profil") { ProfileScreen(state, "0.8.0", {}, {}, {}, { true }) }
+        shot("profil") { ProfileScreen(state, "0.9.0", {}, {}, {}, { true }) }
         // The privacy lines sit below the first screen; a tall window keeps all of them in one picture.
-        shotOn("profil_gizlilik", "+w411dp-h2600dp-port") { ProfileScreen(state, "0.8.0", {}, {}, {}, { true }) }
+        shotOn("profil_gizlilik", "+w411dp-h2600dp-port") { ProfileScreen(state, "0.9.0", {}, {}, {}, { true }) }
     }
 
     @Test fun s03_s04_s05_newMatch() {
@@ -242,6 +250,28 @@ class ScreenshotTest {
         shot("07_analiz_suruyor", content = screen(match("m4"), null, AnalysisUi("m4", JobLoad.READY, job(AnalysisSummary.PROCESSING, mock = false, done = 3100, total = 5400))))
         shot("07_dogrulama_bekliyor", content = screen(reviewing, null, AnalysisUi("m2", JobLoad.READY, job(AnalysisSummary.NEEDS_REVIEW))))
         shot("07_analiz_durdu", content = screen(match("m4"), null, AnalysisUi("m4", JobLoad.READY, job(AnalysisSummary.FAILED, mock = false, failure = "NO_RALLIES_FOUND"))))
+
+        // Slice B3: the server's limits, worded with the numbers it sent, and a match it does not show to this account.
+        val gib = 1024L * 1024 * 1024
+        fun refused(refusal: UploadRefusal?, code: String, sent: Long = 0) = match("m1", check = null, session = UploadSession("abc", "srv", "up", sent)) to
+            UploadProgress("m1", failure = UploadFailure.SERVER_REFUSED, serverCode = code, refusal = refusal)
+        val (quotaMatch, quota) = refused(UploadRefusal.PersonalQuota(6 * gib, 8 * gib), "QUOTA_EXCEEDED")
+        val (poolMatch, pool) = refused(UploadRefusal.ServerQuota(40 * gib), "QUOTA_EXCEEDED")
+        val (diskMatch, disk) = refused(UploadRefusal.StorageFull(10 * gib), "STORAGE_FULL", sent = 533_000_000)
+        val (strangerMatch, stranger) = refused(UploadRefusal.NoAccess, "NOT_A_MEMBER", sent = 533_000_000)
+        shot("07_yukleme_kota", content = screen(quotaMatch, quota, AnalysisUi()))
+        shot("07_yukleme_kota_koyu", dark = true, content = screen(quotaMatch, quota, AnalysisUi()))
+        shotOn("kucuk_buyuk_yazi_07_yukleme_kota", "+w320dp-h568dp-port", fontScale = 1.5f, content = screen(quotaMatch, quota, AnalysisUi()))
+        shot("07_yukleme_sunucu_kotasi", content = screen(poolMatch, pool, AnalysisUi()))
+        shot("07_yukleme_disk_dolu", content = screen(diskMatch, disk, AnalysisUi()))
+        shot("07_yukleme_disk_dolu_koyu", dark = true, content = screen(diskMatch, disk, AnalysisUi()))
+        shotOn("kucuk_buyuk_yazi_07_yukleme_disk_dolu", "+w320dp-h568dp-port", fontScale = 1.5f, content = screen(diskMatch, disk, AnalysisUi()))
+        shot("07_erisim_yok", content = screen(strangerMatch, stranger, AnalysisUi()))
+        shot("07_erisim_yok_koyu", dark = true, content = screen(strangerMatch, stranger, AnalysisUi()))
+        shotOn("kucuk_buyuk_yazi_07_erisim_yok", "+w320dp-h568dp-port", fontScale = 1.5f, content = screen(strangerMatch, stranger, AnalysisUi()))
+        // The same width and text size in a tall window: the whole notice, below the fold of a small phone.
+        // An uploaded match whose job the server does not show looks the same, so it has no picture of its own.
+        shotOn("kucuk_buyuk_yazi_07_erisim_yok_tamami", "+w320dp-h1100dp-port", fontScale = 1.5f, content = screen(match("m4"), null, AnalysisUi("m4", JobLoad.NO_ACCESS)))
     }
 
     @Test fun s08_review() {
@@ -342,6 +372,10 @@ class ScreenshotTest {
         }
         shot("10_oyuncu_istatistik") { PlayersScreen(finished, report, players, teams[1].players) {} }
         shot("09_mac_raporu_eski_sunucu") { ReportScreen(finished, ReportLoad.OUTDATED, null, {}, {}, {}, {}, {}) }
+        // Slice B3: the server does not show the match to this account.
+        shot("09_mac_raporu_erisim_yok") { ReportScreen(finished, ReportLoad.NO_ACCESS, null, {}, {}, {}, {}, {}) }
+        shot("09_mac_raporu_erisim_yok_koyu", dark = true) { ReportScreen(finished, ReportLoad.NO_ACCESS, null, {}, {}, {}, {}, {}) }
+        shotOn("kucuk_buyuk_yazi_09_mac_raporu_erisim_yok", "+w320dp-h568dp-port", fontScale = 1.5f) { ReportScreen(finished, ReportLoad.NO_ACCESS, null, {}, {}, {}, {}, {}) }
         // Home wins two matches and away one; the count stops in a fourth part. Every number is invented.
         val severalMatches = report.copy(
             matches = listOf(
@@ -441,37 +475,45 @@ class ScreenshotTest {
         shot("15b_eski_veriler_tek_takim") { LegacyScreen(LegacyQuestion(listOf("Hazırlık Maçı"), teams = 1, recordings = 0, draft = false), saveFailed = false, moving = false) {} }
         val signedIn = AccountUi(user = AccountUser("user-1", "deneme", "Deneme"))
         shot("15c_sifre_degistir") { PasswordChangeScreen(signedIn.copy(problem = AuthProblem.PasswordWrong), { _, _ -> }, {}) }
-        shot("15d_hesabi_sil") { DeleteAccountScreen(signedIn, serverMatches = 3, onDelete = {}, onBack = {}) }
-        shot("15d_hesabi_sil_koyu", dark = true) { DeleteAccountScreen(signedIn, serverMatches = 3, onDelete = {}, onBack = {}) }
+        // The list holds matches that went to a server, so the screen names those an older server stored.
+        shot("15d_hesabi_sil") { DeleteAccountScreen(signedIn, holdsUploadedMatches = true, onDelete = {}, onBack = {}) }
+        shot("15d_hesabi_sil_koyu", dark = true) { DeleteAccountScreen(signedIn, holdsUploadedMatches = true, onDelete = {}, onBack = {}) }
+        shotOn("kucuk_buyuk_yazi_15d_hesabi_sil", "+w320dp-h568dp-port", fontScale = 1.5f) {
+            DeleteAccountScreen(signedIn, holdsUploadedMatches = true, onDelete = {}, onBack = {})
+        }
+        // The same width and text size in a tall window: the notice sits below the fold of a small phone.
+        shotOn("kucuk_buyuk_yazi_15d_hesabi_sil_tamami", "+w320dp-h1300dp-port", fontScale = 1.5f) {
+            DeleteAccountScreen(signedIn, holdsUploadedMatches = true, onDelete = {}, onBack = {})
+        }
         // The account card at the top of the profile.
-        shotOn("profil_hesap", "+w411dp-h1100dp-port") { ProfileScreen(state, "0.8.0", {}, {}, {}, { true }) }
+        shotOn("profil_hesap", "+w411dp-h1100dp-port") { ProfileScreen(state, "0.9.0", {}, {}, {}, { true }) }
         // While someone is signed in, the server choice is read-only (review finding S5).
         shotOn("profil_sunucu_oturum_acik", "+w411dp-h500dp-port") {
             androidx.compose.foundation.layout.Column(Modifier.fillMaxSize().background(androidx.compose.material3.MaterialTheme.colorScheme.background)) { ServerSection(state, {}, {}) }
         }
-        shotOn("profil_hesap_koyu", "+w411dp-h1100dp-port", dark = true) { ProfileScreen(state, "0.8.0", {}, {}, {}, { true }) }
+        shotOn("profil_hesap_koyu", "+w411dp-h1100dp-port", dark = true) { ProfileScreen(state, "0.9.0", {}, {}, {}, { true }) }
         // A password change confirmed after Android rebuilt its screen: the password manager did not get it (second review, R2-D).
         val notHandedOver = state.copy(account = state.account.copy(confirmed = AccountChange.PASSWORD, newPasswordNotHandedOver = com.voleybolveveleybol.volleystat.PasswordNotHandedOver.SCREEN_REBUILT))
-        shotOn("profil_sifre_iletilemedi", "+w411dp-h1300dp-port") { ProfileScreen(notHandedOver, "0.8.0", {}, {}, {}, { true }) }
-        shotOn("profil_sifre_iletilemedi_koyu", "+w411dp-h1300dp-port", dark = true) { ProfileScreen(notHandedOver, "0.8.0", {}, {}, {}, { true }) }
-        shotOn("kucuk_buyuk_yazi_profil_sifre_iletilemedi", "+w320dp-h1900dp-port", fontScale = 1.5f) { ProfileScreen(notHandedOver, "0.8.0", {}, {}, {}, { true }) }
+        shotOn("profil_sifre_iletilemedi", "+w411dp-h1300dp-port") { ProfileScreen(notHandedOver, "0.9.0", {}, {}, {}, { true }) }
+        shotOn("profil_sifre_iletilemedi_koyu", "+w411dp-h1300dp-port", dark = true) { ProfileScreen(notHandedOver, "0.9.0", {}, {}, {}, { true }) }
+        shotOn("kucuk_buyuk_yazi_profil_sifre_iletilemedi", "+w320dp-h1900dp-port", fontScale = 1.5f) { ProfileScreen(notHandedOver, "0.9.0", {}, {}, {}, { true }) }
         // The user left the screen while the change was on its way, or edited the new password meanwhile (third review, B1 and B2).
         fun notHandedOver(reason: com.voleybolveveleybol.volleystat.PasswordNotHandedOver) =
             state.copy(account = state.account.copy(confirmed = AccountChange.PASSWORD, newPasswordNotHandedOver = reason))
         val left = notHandedOver(com.voleybolveveleybol.volleystat.PasswordNotHandedOver.SCREEN_LEFT)
         val edited = notHandedOver(com.voleybolveveleybol.volleystat.PasswordNotHandedOver.PASSWORD_EDITED)
-        shotOn("profil_sifre_iletilemedi_cikildi", "+w411dp-h1300dp-port") { ProfileScreen(left, "0.8.0", {}, {}, {}, { true }) }
-        shotOn("profil_sifre_iletilemedi_degistirildi", "+w411dp-h1300dp-port") { ProfileScreen(edited, "0.8.0", {}, {}, {}, { true }) }
-        shotOn("profil_sifre_iletilemedi_degistirildi_koyu", "+w411dp-h1300dp-port", dark = true) { ProfileScreen(edited, "0.8.0", {}, {}, {}, { true }) }
-        shotOn("kucuk_buyuk_yazi_profil_sifre_iletilemedi_degistirildi", "+w320dp-h2200dp-port", fontScale = 1.5f) { ProfileScreen(edited, "0.8.0", {}, {}, {}, { true }) }
+        shotOn("profil_sifre_iletilemedi_cikildi", "+w411dp-h1300dp-port") { ProfileScreen(left, "0.9.0", {}, {}, {}, { true }) }
+        shotOn("profil_sifre_iletilemedi_degistirildi", "+w411dp-h1300dp-port") { ProfileScreen(edited, "0.9.0", {}, {}, {}, { true }) }
+        shotOn("profil_sifre_iletilemedi_degistirildi_koyu", "+w411dp-h1300dp-port", dark = true) { ProfileScreen(edited, "0.9.0", {}, {}, {}, { true }) }
+        shotOn("kucuk_buyuk_yazi_profil_sifre_iletilemedi_degistirildi", "+w320dp-h2200dp-port", fontScale = 1.5f) { ProfileScreen(edited, "0.9.0", {}, {}, {}, { true }) }
         // The user left the screen while the change was on its way, and its answer was lost (fourth review, D1).
         val unknown = state.copy(
             account = state.account.copy(
                 afterLeave = com.voleybolveveleybol.volleystat.OutcomeAfterLeave(AccountChange.PASSWORD, com.voleybolveveleybol.volleystat.data.AuthProblem.Unreachable, outcomeUnknown = true),
             ),
         )
-        shotOn("profil_sifre_sonucu_bilinmiyor", "+w411dp-h1300dp-port") { ProfileScreen(unknown, "0.8.0", {}, {}, {}, { true }) }
-        shotOn("profil_sifre_sonucu_bilinmiyor_koyu", "+w411dp-h1300dp-port", dark = true) { ProfileScreen(unknown, "0.8.0", {}, {}, {}, { true }) }
-        shotOn("kucuk_buyuk_yazi_profil_sifre_sonucu_bilinmiyor", "+w320dp-h2200dp-port", fontScale = 1.5f) { ProfileScreen(unknown, "0.8.0", {}, {}, {}, { true }) }
+        shotOn("profil_sifre_sonucu_bilinmiyor", "+w411dp-h1300dp-port") { ProfileScreen(unknown, "0.9.0", {}, {}, {}, { true }) }
+        shotOn("profil_sifre_sonucu_bilinmiyor_koyu", "+w411dp-h1300dp-port", dark = true) { ProfileScreen(unknown, "0.9.0", {}, {}, {}, { true }) }
+        shotOn("kucuk_buyuk_yazi_profil_sifre_sonucu_bilinmiyor", "+w320dp-h2200dp-port", fontScale = 1.5f) { ProfileScreen(unknown, "0.9.0", {}, {}, {}, { true }) }
     }
 }

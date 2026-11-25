@@ -160,6 +160,7 @@ fun jobProblemText(problem: JobLoad): Int = when (problem) {
     JobLoad.UNREACHABLE -> R.string.analysis_unreachable
     JobLoad.NO_ANALYZER -> R.string.analysis_none_title
     JobLoad.VIDEO_MISSING -> R.string.analysis_video_missing_body
+    JobLoad.NO_ACCESS -> R.string.match_no_access
     else -> R.string.review_no_job
 }
 
@@ -263,8 +264,12 @@ fun RalliesScreen(
                 // The server answered, and not with a list this app can read. Asking again would get the same answer.
                 item(key = "outdated") { Notice(stringResource(R.string.rallies_outdated_server), Tone.NEGATIVE) }
             }
+            if (jobProblem == null && analysis.ralliesLoad == RalliesLoad.NO_ACCESS) {
+                // The server does not show the match to this account. Asking again gets the same answer.
+                item(key = "no-access") { Notice(stringResource(R.string.match_no_access), Tone.CAUTION) }
+            }
             if (list == null) {
-                if (jobProblem == null && analysis.ralliesLoad != RalliesLoad.UNREACHABLE && analysis.ralliesLoad != RalliesLoad.OUTDATED) {
+                if (jobProblem == null && analysis.ralliesLoad !in setOf(RalliesLoad.UNREACHABLE, RalliesLoad.OUTDATED, RalliesLoad.NO_ACCESS)) {
                     item(key = "loading") {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)

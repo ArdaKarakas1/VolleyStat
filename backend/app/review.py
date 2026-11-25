@@ -8,10 +8,11 @@ from __future__ import annotations
 import json
 from typing import Any, Literal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
-from . import report
+from . import access, report
+from .access import READ, REVIEW
 from .analyzers.base import AWAY, HOME
 from .analyzers.demo import MOCK_DATA
 from .db import new_id, utc_now
@@ -209,12 +210,13 @@ def _change(db, card, selection: str | None, action: str, idempotency_key: str |
     return response
 
 
-def router(connect) -> APIRouter:
+def router(connect, current_user) -> APIRouter:
     api = APIRouter()
 
     @api.get("/v1/analyses/{job_id}/rallies")
-    def list_rallies(job_id: str):
+    def list_rallies(job_id: str, caller=Depends(current_user)):
         with connect() as db:
+            access.require(db, caller, "job", job_id, READ)
             job = find_job(db, job_id)
             media = db.execute("SELECT media_json FROM videos WHERE id=?", (job["video_id"],)).fetchone()
             rallies, parts, rules = scored_rallies(db, job)
@@ -231,8 +233,9 @@ def router(connect) -> APIRouter:
             }
 
     @api.get("/v1/analyses/{job_id}/review-cards")
-    def list_cards(job_id: str, scope: Literal["SCORE", "DETAIL", "ALL"] = "SCORE"):
+    def list_cards(job_id: str, scope: Literal["SCORE", "DETAIL", "ALL"] = "SCORE", caller=Depends(current_user)):
         with connect() as db:
+            access.require(db, caller, "job", job_id, READ)
             job = find_job(db, job_id)
             rows = db.execute(CARD_QUERY + " WHERE c.job_id=?", (job_id,)).fetchall()
         cards = [card_payload(row, is_mock(job)) for row in rows]
@@ -242,15 +245,20 @@ def router(connect) -> APIRouter:
         return {"cards": cards, "position": {"answered": answered, "total": len(cards)}}
 
     @api.post("/v1/review-cards/{card_id}/decisions")
-    def decide(card_id: str, payload: DecisionInput):
+    def decide(card_id: str, payload: DecisionInput, caller=Depends(current_user)):
         with connect(write=True) as db:
+            access.session_user(db, caller)
             if payload.idempotencyKey is not None:
                 # Looked up before the card: a later decision may have removed the card or moved its version.
                 earlier = db.execute(
-                    "SELECT response_json FROM review_decisions WHERE idempotency_key=? ORDER BY rowid LIMIT 1",
+                    "SELECT job_id, response_json FROM review_decisions WHERE idempotency_key=? ORDER BY rowid LIMIT 1",
                     (payload.idempotencyKey,),
                 ).fetchone()
                 if earlier:
+                    # The stored row decides who may see its answer, whatever card the request names:
+                    # keys are server-wide, so a key another account used answers 403. A decision row
+                    # always has its job, because the rows go only with their job.
+                    access.require(db, caller, "job", earlier["job_id"], REVIEW)
                     stored = json.loads(earlier["response_json"])
                     answered = stored["card"]
                     # A decision moves its card exactly one version on, so the stored answer also tells
@@ -260,6 +268,8 @@ def router(connect) -> APIRouter:
                         # Replaying the old answer here would report a decision as stored that never was.
                         fail("IDEMPOTENCY_KEY_REUSED", "This idempotency key already belongs to another decision", 409)
                     return stored
+            # Before the version and selection checks: a stranger must not learn the card's version.
+            access.require(db, caller, "card", card_id, REVIEW)
             card = find_card(db, card_id)
             _check_version(card, payload.expectedVersion)
             if payload.selection not in QUESTIONS[card["question_type"]][1]:
@@ -273,8 +283,10 @@ def router(connect) -> APIRouter:
             return _change(db, card, payload.selection, "DECISION", payload.idempotencyKey)
 
     @api.post("/v1/review-cards/{card_id}/reopen")
-    def reopen(card_id: str, payload: ReopenInput):
+    def reopen(card_id: str, payload: ReopenInput, caller=Depends(current_user)):
         with connect(write=True) as db:
+            access.session_user(db, caller)
+            access.require(db, caller, "card", card_id, REVIEW)
             card = find_card(db, card_id)
             _check_version(card, payload.expectedVersion)
             if card["status"] == "OPEN":
@@ -287,11 +299,10 @@ def router(connect) -> APIRouter:
             return response
 
     @api.get("/v1/matches/{match_id}/report")
-    def match_report(match_id: str):
+    def match_report(match_id: str, caller=Depends(current_user)):
         with connect() as db:
-            match = db.execute("SELECT * FROM matches WHERE id=?", (match_id,)).fetchone()
-            if not match:
-                fail("MATCH_NOT_FOUND", "Match does not exist", 404)
+            # REPORT_NOT_AVAILABLE below goes to the owner only.
+            match = access.require(db, caller, "match", match_id, READ)
             # Read with the rallies: a rule changed after this transaction belongs to the next report.
             rules = report.MatchRules.of(match)
             # A newer job that is still running, failed or was cancelled does not hide an earlier result.

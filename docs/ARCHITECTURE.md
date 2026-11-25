@@ -36,7 +36,7 @@ Bilinmeyen değer `{"value": null, "status": "UNKNOWN"}` biçimindedir ve hiçbi
 | Sunum | `ui/screens/*`, `ui/components/*`, `ui/theme/*`, `VolleyStatApp.kt` | Ekranlar, ortak bileşenler, tema, gezinme grafiği |
 | Durum | `AppViewModel.kt` | Tek `ViewModel`. Ekran durumunu `StateFlow` ile yayar. Yükleme, analiz izleme, doğrulama ve rapor işlerini yürütür. |
 | Alan | `model/*`, `android/core` | Maç, takım, iş, kart ve rapor tipleri. `core` modülü Android'den bağımsız skor kurallarını taşır, ama uygulama bu modülü bugün kullanmaz. Set skorunu sunucu maçın kuralıyla sayar (ADR-0115). |
-| Veri | `data/ApiClient.kt`, `data/UploadEngine.kt`, `data/LocalStore.kt`, `data/VideoInspector.kt` | HTTP istemcisi, kaldığı yerden süren yükleme, telefondaki JSON kayıt, videonun telefonda okunan özellikleri |
+| Veri | `data/ApiClient.kt`, `data/UploadEngine.kt`, `data/LocalStore.kt`, `data/VideoInspector.kt` | HTTP istemcisi, kaldığı yerden süren yükleme (sunucu yüklemeyi kapattıysa yükleme baştan başlar), telefondaki JSON kayıt, videonun telefonda okunan özellikleri |
 
 Uygulama kamera kaydı için CameraX, klip oynatma için Media3 kullanır. Uygulama ses kaydetmez. Oyuncu adları yalnız telefonda durur. Uygulama sunucuya yalnız forma numarası gönderir.
 
@@ -45,6 +45,11 @@ Uygulama kamera kaydı için CameraX, klip oynatma için Media3 kullanır. Uygul
 | Dosya | Görev |
 |---|---|
 | `main.py` | FastAPI uygulaması, maç ve yükleme uçları, hata zarfı |
+| `access.py` | Erişim: her nesneyi maçına çözer, maçın sahibini denetler (`404` ve `403 NOT_A_MEMBER`), yazma işleminde oturumu yeniden okur |
+| `quotas.py` | Kişisel kota, sunucunun kişisel video havuzu ve boş disk sınırı (`VOLLEYSTAT_DISK_FLOOR_GIB`) |
+| `sweep.py` | Dakikalık tarama: son dokunuştan sonra sunucunun açık kaldığı toplam bir gün boyunca parça almayan yüklemeyi ve aynı süre boyunca bitmeyen doğrulamayı kapatır. Tarama sunucunun kapalı kaldığı süreyi saymaz. Sunucu açık kaldığı süreyi takvim saatine bakmadan kendi sayacıyla sayar: toplamı her taramada ve kapanırken yazar (`server_clock.uptime`), iki yazma arasındaki süreyi monoton saatten okur, üç dakikadan uzun bir arayı saymaz ve açılınca son toplamdan devam eder. Her dokunuş ve her doğrulama başlangıcı o anki toplamı taşır (`touched_uptime`, `finalize_started_uptime`). Uçlar toplamı çalışan taramadan okur. Sunucu doğrulamanın 15 dakikasını da bu toplamla ölçer. Tarama açılışta kayıtlı toplamı okurken önceki sunucu süreçlerinin bıraktığı doğrulamaların anahtarlarını siler. Uçlar anahtarsız bir doğrulamayı hemen terk edilmiş sayar |
+| `storagelock.py` | Bir depolama klasöründe tek sunucu: Sunucu çalıştığı sürece klasördeki `server.lock` dosyasını kilitler. Aynı klasörde açılan ikinci sunucu bir hata yazar ve port açmadan çıkar. İşletim sistemi süreç bitince kilidi bırakır |
+| `deletion.py` | Yüklemelerin ve videoların dosya yolları, bir maçın satırlarını ve dosyalarını silen ortak kod |
 | `media.py` | ffprobe ile dosya doğrulaması. Sunucu kapsayıcıya, video akışına ve dosyanın sonunun okunabilirliğine bakar. Sunucu görüntünün içeriğini ölçmez. |
 | `db.py` | SQLite şeması ve bağlantı |
 | `jobs.py` | Analiz işi, işçi iş parçacığı, durum makinesi, iptal ve kurtarma |
@@ -53,11 +58,11 @@ Uygulama kamera kaydı için CameraX, klip oynatma için Media3 kullanır. Uygul
 | `corrections.py` | Ralli listesinin düzeltmeleri (ekleme, taşıma, bölme, birleştirme) ve liste onayı |
 | `report.py` | Kararlardan rapor üreten saf fonksiyon |
 | `content.py` | Videoyu `Range` isteğiyle sunma |
-| `accounts.py` | Hesaplar: kayıt, giriş, oturum, şifre özeti havuzu, deneme sınırı, `/v1/me` uçları |
-| `admin.py` | Operatör komutları: kayıt kodu ve geçici şifre (`python -m app.admin`) |
+| `accounts.py` | Hesaplar: kayıt, giriş, oturum (`current_user`), şifre özeti havuzu, deneme sınırı, `/v1/me` uçları, hesap silme |
+| `admin.py` | Operatör komutları: kayıt kodu, geçici şifre ve hiçbir hesaba bağlı olmayan maçlar (`python -m app.admin legacy`) |
 | `wordlists/` | Yaygın şifre listesi ve lisansı |
 
-Sunucu yalnız geliştirme bilgisayarında çalışır. Sunucuda hesaplar var, ama maç uçları henüz oturum istemez ve TLS yoktur. Sunucu `127.0.0.1` adresini dinler.
+Sunucu yalnız geliştirme bilgisayarında çalışır. Sunucu sağlık, kayıt ve giriş dışındaki her uçta oturum ister. Sunucuda TLS yoktur. Sunucu `127.0.0.1` adresini dinler.
 
 Yüklenen her dosya `storage/media/<uploadId>.bin` adında tek bir dosyadır. Tamamlama adımı dosyayı taşımaz, video kaydı aynı dosyayı gösterir.
 

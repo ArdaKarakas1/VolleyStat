@@ -52,7 +52,7 @@ class LocalStoreTest {
                     VideoCheck("v1", VideoCheck.QUARANTINED, "VIDEO_CORRUPT", null, null, null, null, null, emptyList()), 99,
                     rules = MatchRules(2, 25, 25)),
                 MatchRecord("m2", "Bir", "İki", 20, unknownVideo, check = check(VideoCheck.READY), checkedAtMs = 5,
-                    analysis = AnalysisSummary("job", AnalysisSummary.NEEDS_REVIEW, mock = true, reviewOpen = 3, reviewTotal = 9)),
+                    analysis = AnalysisSummary("job", AnalysisSummary.NEEDS_REVIEW, mock = true, reviewOpen = 3, reviewTotal = 9), noAccess = true),
                 MatchRecord("m3", "Üç", "Dört", 30, unknownVideo),
             ),
         )
@@ -64,6 +64,7 @@ class LocalStoreTest {
         assertNull("a player without a number keeps no number", loaded.teams[0].players[1].jersey)
         assertNull(loaded.matches[2].session.uploadId)
         assertNull(loaded.matches[2].name)
+        assertFalse("a match the server never refused carries no mark", loaded.matches[0].noAccess)
     }
 
     @Test fun aFileWrittenByVersion0_5LoadsWithTheFivbRule() {

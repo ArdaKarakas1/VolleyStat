@@ -22,16 +22,18 @@ import threading
 import time
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable
 
-from fastapi import APIRouter, Request, Response, Security
-from fastapi.security import HTTPBearer
+from fastapi import APIRouter, Depends, Request, Response, Security
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from . import deletion
 from .db import connector, empty_write_ahead_log, migrate, new_id
 from .errors import fail, fail_with_headers
 
@@ -510,12 +512,81 @@ def password_rejected(reason: str) -> None:
     fail("PASSWORD_REJECTED", "The password does not meet the rule", 422, reason=reason)
 
 
-# Names the session in the OpenAPI document. The routes read the header themselves, so a missing or
-# wrong token gets the API's own AUTH_REQUIRED answer instead of FastAPI's.
-SESSION = [Security(HTTPBearer(auto_error=False, description="The session token from register or login"))]
+# --- sessions -------------------------------------------------------------------------------------
+
+# Names the session in the OpenAPI document of every route that needs one. current_user reads the
+# header itself, so a missing or wrong token gets the API's own AUTH_REQUIRED answer, not FastAPI's.
+SESSION_SCHEME = HTTPBearer(auto_error=False, description="The session token from register or login")
 
 
-def router(connect, db_path: Path, signup_mode: str, limiter: Limiter, pool: HashPool) -> APIRouter:
+def live_session(db, hashed: str, moment: datetime):
+    """The session row joined with its user, or None when the session is gone or ended."""
+    row = db.execute("SELECT s.last_used_at, s.expires_at, u.* FROM sessions s JOIN users u ON u.id = s.user_id"
+                     " WHERE s.token_hash=?", (hashed,)).fetchone()
+    if row is None or moment >= parse_time(row["expires_at"]) or moment >= parse_time(row["last_used_at"]) + SESSION_IDLE:
+        return None
+    return row
+
+
+def signed_in(connect, hashed: str, moment: datetime):
+    """The user of a session, or 401. Reading a session writes at most once an hour.
+
+    A route that writes reads the session once more inside its own write transaction
+    (still_signed_in), so a session that ended while the route waited (for a hash, say) can not
+    write anything.
+    """
+    with connect() as db:
+        row = live_session(db, hashed, moment)
+    if row is None:
+        with connect(write=True) as db:
+            db.execute("DELETE FROM sessions WHERE token_hash=? AND (expires_at <= ? OR last_used_at <= ?)",
+                       (hashed, iso(moment), iso(moment - SESSION_IDLE)))
+        not_signed_in()
+    if moment - parse_time(row["last_used_at"]) >= SESSION_TOUCH:
+        with connect(write=True) as db:
+            db.execute("UPDATE sessions SET last_used_at=? WHERE token_hash=?", (iso(moment), hashed))
+    return row
+
+
+def still_signed_in(db, hashed: str, moment: datetime):
+    """The session's user read again inside the caller's transaction, or 401."""
+    row = live_session(db, hashed, moment)
+    if row is None:
+        not_signed_in()
+    return row
+
+
+@dataclass(frozen=True, eq=False)
+class Caller:
+    """The account behind a request, as current_user read it."""
+    id: str
+    signup_via: str
+    token_hash: str
+    user: Any  # the session row joined with its user (sqlite3.Row)
+
+
+def current_user_dependency(connect) -> Callable[..., Caller]:
+    """The dependency every route but health, register and login declares.
+
+    FastAPI runs it before it validates the path, the query, the headers and the fields of the body,
+    and before a route streams its body, so a request without a valid session gets 401 before
+    anything else. Only BodyLimit's 413 and the 422 of a JSON body that does not parse come earlier,
+    and neither reads the database.
+    """
+    def current_user(request: Request,
+                     _credentials: HTTPAuthorizationCredentials | None = Security(SESSION_SCHEME)) -> Caller:
+        token = bearer_token(request)
+        if token is None:
+            not_signed_in()
+        hashed = digest(token)
+        row = signed_in(connect, hashed, now())
+        return Caller(row["id"], row["signup_via"], hashed, row)
+    return current_user
+
+
+def router(connect, db_path: Path, signup_mode: str, limiter: Limiter, pool: HashPool,
+           current_user: Callable[..., Caller], files: deletion.MediaFiles, release: Callable[[str], None],
+           uptime: Callable[[Any], float]) -> APIRouter:
     routes = APIRouter()
 
     def open_session(db, user_id: str, moment: datetime) -> dict[str, str]:
@@ -544,45 +615,6 @@ def router(connect, db_path: Path, signup_mode: str, limiter: Limiter, pool: Has
         if row is None or row["username"] != username or moment - parse_time(row["last_used_at"]) >= DEVICE_IDLE:
             return None
         return hashed
-
-    def live_session(db, hashed: str, moment: datetime):
-        """The session row joined with its user, or None when the session is gone or ended."""
-        row = db.execute("SELECT s.last_used_at, s.expires_at, u.* FROM sessions s JOIN users u ON u.id = s.user_id"
-                         " WHERE s.token_hash=?", (hashed,)).fetchone()
-        if row is None or moment >= parse_time(row["expires_at"]) or moment >= parse_time(row["last_used_at"]) + SESSION_IDLE:
-            return None
-        return row
-
-    def own_token_hash(request: Request) -> str:
-        token = bearer_token(request)
-        if token is None:
-            not_signed_in()
-        return digest(token)
-
-    def signed_in(request: Request, moment: datetime):
-        """The user of the request's session, or 401. Reading a session writes at most once an hour.
-
-        A route that writes reads the session once more inside its own write transaction, so a
-        session that ended while the route waited (for a hash, say) can not write anything.
-        """
-        hashed = own_token_hash(request)
-        with connect() as db:
-            row = live_session(db, hashed, moment)
-        if row is None:
-            with connect(write=True) as db:
-                db.execute("DELETE FROM sessions WHERE token_hash=? AND (expires_at <= ? OR last_used_at <= ?)",
-                           (hashed, iso(moment), iso(moment - SESSION_IDLE)))
-            not_signed_in()
-        if moment - parse_time(row["last_used_at"]) >= SESSION_TOUCH:
-            with connect(write=True) as db:
-                db.execute("UPDATE sessions SET last_used_at=? WHERE token_hash=?", (iso(moment), hashed))
-        return row
-
-    def still_signed_in(db, request: Request, moment: datetime):
-        row = live_session(db, own_token_hash(request), moment)
-        if row is None:
-            not_signed_in()
-        return row
 
     async def check_own_password(user, password: str, moment: datetime) -> None:
         """403 PASSWORD_WRONG on a wrong password, counted under the account's own key.
@@ -706,48 +738,46 @@ def router(connect, db_path: Path, signup_mode: str, limiter: Limiter, pool: Has
 
         return await run_in_threadpool(open_)
 
-    @routes.post("/v1/auth/logout", status_code=204, dependencies=SESSION)
-    def logout(request: Request):
+    @routes.post("/v1/auth/logout", status_code=204)
+    def logout(caller: Caller = Depends(current_user)):
         moment = now()
         with connect(write=True) as db:
-            still_signed_in(db, request, moment)
-            db.execute("DELETE FROM sessions WHERE token_hash=?", (own_token_hash(request),))
+            still_signed_in(db, caller.token_hash, moment)
+            db.execute("DELETE FROM sessions WHERE token_hash=?", (caller.token_hash,))
         return Response(status_code=204)
 
-    @routes.get("/v1/me", dependencies=SESSION)
-    def me(request: Request):
-        user = signed_in(request, now())
+    @routes.get("/v1/me")
+    def me(caller: Caller = Depends(current_user)):
         # Teams come with their own slice; until then a person belongs to none.
-        return {"user": user_payload(user), "teams": []}
+        return {"user": user_payload(caller.user), "teams": []}
 
-    @routes.put("/v1/me/display-name", dependencies=SESSION)
-    def change_display_name(payload: DisplayNameInput, request: Request):
+    @routes.put("/v1/me/display-name")
+    def change_display_name(payload: DisplayNameInput, caller: Caller = Depends(current_user)):
         moment = now()
-        signed_in(request, moment)
         display_name = clean_display_name(payload.displayName)
         if display_name is None:
             fail("DISPLAY_NAME_INVALID", "The display name does not meet the rule", 422)
         with connect(write=True) as db:
-            user = still_signed_in(db, request, moment)
+            user = still_signed_in(db, caller.token_hash, moment)
             db.execute("UPDATE users SET display_name=? WHERE id=?", (display_name, user["id"]))
             return {"user": user_payload(db.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone())}
 
-    @routes.put("/v1/me/password", dependencies=SESSION)
-    async def change_password(payload: PasswordChangeInput, request: Request):
+    @routes.put("/v1/me/password")
+    async def change_password(payload: PasswordChangeInput, caller: Caller = Depends(current_user)):
         """Set a new password. Every other session of the account ends and every phone is forgotten."""
         moment = now()
-        user = await run_in_threadpool(signed_in, request, moment)
+        user = caller.user
         await check_own_password(user, payload.currentPassword, moment)
         problem = password_problem(payload.newPassword, user["username"])
         if problem is not None:
             password_rejected(problem)
         stored = await pool.run(hash_password, payload.newPassword)
-        own = own_token_hash(request)
+        own = caller.token_hash
 
         def change() -> dict[str, Any]:
             with connect(write=True) as db:
                 # The session may have ended and the password may have changed while the hashes ran.
-                still_signed_in(db, request, moment)
+                still_signed_in(db, own, moment)
                 if db.execute("UPDATE users SET password_hash=?, password_temporary_until=NULL, password_changed_at=?"
                               " WHERE id=? AND password_hash=?",
                               (stored, iso(moment), user["id"], user["password_hash"])).rowcount != 1:
@@ -758,23 +788,46 @@ def router(connect, db_path: Path, signup_mode: str, limiter: Limiter, pool: Has
 
         return await run_in_threadpool(change)
 
-    @routes.post("/v1/me/delete", status_code=204, dependencies=SESSION)
-    async def delete_account(payload: PasswordInput, request: Request):
-        """Delete the account: the user row, its sessions and its phones. Nothing of it stays in the file."""
+    @routes.post("/v1/me/delete", status_code=204)
+    async def delete_account(payload: PasswordInput, caller: Caller = Depends(current_user)):
+        """Delete the account with its personal matches: their uploads, videos, analyses and bytes,
+        then the user row, its sessions and its phones. Nothing of it stays in the file.
+
+        Matches that belong to no account (LEGACY) stay; the operator deletes them.
+        """
         moment = now()
-        user = await run_in_threadpool(signed_in, request, moment)
+        user = caller.user
         await check_own_password(user, payload.password, moment)
 
-        def delete() -> None:
+        def delete() -> list[str]:
             with connect(write=True) as db:
-                # The session may have ended and the password may have changed while the hash ran.
-                still_signed_in(db, request, moment)
-                if db.execute("DELETE FROM users WHERE id=? AND password_hash=?",
-                              (user["id"], user["password_hash"])).rowcount != 1:
+                # The session may have ended and the password may have changed while the hash ran. Both
+                # are checked before anything is deleted, because unlinked bytes can not come back.
+                still_signed_in(db, caller.token_hash, moment)
+                if db.execute("SELECT 1 FROM users WHERE id=? AND password_hash=?",
+                              (user["id"], user["password_hash"])).fetchone() is None:
                     fail("PASSWORD_WRONG", "The password is wrong", 403)
+                owned = [row["id"] for row in db.execute(
+                    "SELECT id FROM matches WHERE owner_user_id=? ORDER BY rowid", (user["id"],))]
+                at = uptime(db)
+                # A verification in progress is about to turn an upload into a video of one of these
+                # matches: the same refusal as DELETE /v1/matches/{id}, before any row or file goes.
+                if any(deletion.finalizing(db, match_id, at) for match_id in owned):
+                    fail("UPLOAD_FINALIZING", "An upload of this account is being verified", 409)
+                removed = [deletion.delete_match_rows(db, files, match_id) for match_id in owned]
+                # No row names the deleted account afterwards (design 3.7, step 5).
+                db.execute("UPDATE uploads SET started_by=NULL WHERE started_by=?", (user["id"],))
+                db.execute("DELETE FROM users WHERE id=?", (user["id"],))
+                # The bytes go before the commit: a deletion must never leave a file behind.
+                for each in removed:
+                    each.unlink()
             empty_write_ahead_log(db_path)
+            return [job_id for each in removed for job_id in each.pending_job_ids]
 
-        await run_in_threadpool(delete)
+        pending = await run_in_threadpool(delete)
+        # A run in progress has lost its job row and can write nothing; this only makes it stop sooner.
+        for job_id in pending:
+            release(job_id)
         return Response(status_code=204)
 
     return routes

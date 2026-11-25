@@ -22,7 +22,9 @@ class UploadCancelled : IOException("cancelled")
  * Sends one video with the resumable protocol. The id of the match is chosen here and reported
  * through [onSession] before the first request; every later step is reported once the server
  * confirmed it. A later run with the saved session continues instead of creating a second
- * match or starting again from byte 0.
+ * match or starting again from byte 0, unless the server closed the saved upload (it does so a day
+ * after the last chunk): then the run opens a new upload of the same match and starts from byte 0.
+ * The engine never tries again on its own after a refusal; the user does, with Yeniden Dene.
  */
 class UploadEngine(private val api: ApiClient) {
 
@@ -69,22 +71,28 @@ class UploadEngine(private val api: ApiClient) {
             }
 
             var checksumRetries = 0
+            var closedRounds = 0
             while (true) {
                 checkCancelled()
                 var offset = openOrResume(session, match, fileName, mimeType, bytes.sizeBytes, ::save)?.let { return it.result } ?: session.sentBytes
-                offset = send(session.uploadId!!, offset, bytes, onProgress, ::checkCancelled) { sent -> save(session.copy(sentBytes = sent)) }
-                onProgress(UploadPhase.VERIFYING, offset, bytes.sizeBytes)
                 try {
+                    offset = send(session.uploadId!!, offset, bytes, onProgress, ::checkCancelled) { sent -> save(session.copy(sentBytes = sent)) }
+                    onProgress(UploadPhase.VERIFYING, offset, bytes.sizeBytes)
                     return completeWhenReady(session.uploadId!!, ::checkCancelled)
                 } catch (error: ApiException) {
                     when (error.code) {
-                        // The server found different bytes than the phone hashed: send once more.
+                        // The server found different bytes than the phone hashed and dropped them all: send once
+                        // more. It drops them at every mismatch, so the phone forgets them before it gives up too.
                         "UPLOAD_CHECKSUM_MISMATCH" -> {
-                            if (++checksumRetries > 1) throw UploadException(UploadFailure.CHECKSUM_KEEPS_FAILING, error.code, error)
                             save(session.copy(sentBytes = 0))
+                            if (++checksumRetries > 1) throw UploadException(UploadFailure.CHECKSUM_KEEPS_FAILING, error.code, error)
                         }
                         // Bytes went missing on the server: go round again from its offset.
                         "UPLOAD_INCOMPLETE" -> save(session.copy(sentBytes = error.details.optLong("nextOffset", 0)))
+                        // The server closed the upload after a day without a chunk (its sweep) while this run read
+                        // its status: one more round finds it ABORTED and opens a new one from byte 0. A second
+                        // closed upload in one run is a refusal, so the loop can not go on for ever.
+                        "UPLOAD_CLOSED" -> if (++closedRounds > 1) throw error
                         else -> throw error
                     }
                 }
@@ -130,8 +138,11 @@ class UploadEngine(private val api: ApiClient) {
                 }
             }
         }
-        // No usable upload on the server (first run, aborted, or the server was reset). The match
-        // comes first; the call changes nothing when the server already has it.
+        // No usable upload on the server (first run, aborted, or the server was reset). A saved upload
+        // that is gone takes its offset with it: the server deleted those bytes, so the phone forgets them
+        // before it asks for a new upload, and a refusal of that request names no bytes the server holds.
+        if (saved != null) save(session.copy(uploadId = null, sentBytes = 0))
+        // The match comes first; the call changes nothing when the server already has it.
         api.putMatch(session.serverMatchId!!, match)
         val ticket = api.createUpload(session.serverMatchId!!, fileName, sizeBytes, mimeType, session.sha256!!)
         save(session.copy(uploadId = ticket.uploadId, sentBytes = ticket.nextOffset))

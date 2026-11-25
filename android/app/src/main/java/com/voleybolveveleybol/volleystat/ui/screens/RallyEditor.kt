@@ -116,6 +116,8 @@ fun RallyEditorWaiting(title: String, analysis: AnalysisUi, onRetry: () -> Unit,
             }
             // Asking again does not change what an older server answers, so there is no retry here.
             load == RalliesLoad.OUTDATED -> Notice(stringResource(R.string.rallies_outdated_server), Tone.NEGATIVE)
+            // The server does not show the match to this account: no list will come, and asking again gets the same answer.
+            load == RalliesLoad.NO_ACCESS -> Notice(stringResource(R.string.match_no_access), Tone.CAUTION)
             else -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                 Text(stringResource(R.string.rallies_loading), style = MaterialTheme.typography.bodyMedium)

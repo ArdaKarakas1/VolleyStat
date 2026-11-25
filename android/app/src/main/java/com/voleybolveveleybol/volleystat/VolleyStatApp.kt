@@ -484,7 +484,7 @@ fun VolleyStatApp(
                 // After the deletion the app opens the login, which says what the server deleted.
                 StopAccountCallOnLeave(viewModel)
                 DeleteAccountScreen(
-                    state.account, serverMatches = state.matches.count { it.session.serverMatchId != null },
+                    state.account, holdsUploadedMatches = state.matches.any { it.session.serverMatchId != null },
                     onDelete = viewModel::deleteAccount, onBack = { viewModel.clearAccountProblem(); nav.popBackStack() },
                 )
             }
@@ -565,6 +565,8 @@ fun VolleyStatApp(
                         onRestartAnalysis = { viewModel.restartAnalysis(match.localId) },
                         onOpenReview = { go(Routes.review(match.localId)) }, onOpenReport = { go(Routes.report(match.localId)) },
                         onBack = { nav.popBackStack() },
+                        // Sends nothing to the server. Once the record is gone this route leaves for Home.
+                        onRemoveFromPhone = { viewModel.removeFromPhone(match.localId) },
                     )
                 }
             }

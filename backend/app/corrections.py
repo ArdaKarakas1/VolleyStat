@@ -14,9 +14,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
+from . import access
+from .access import REVIEW
 from .db import new_id, utc_now
 from .errors import fail
 from .jobs import COMPLETE, NEEDS_REVIEW, clip_bounds, find_job, is_mock, job_payload, list_confirmed
@@ -156,13 +158,20 @@ def _changed(db, job, correction_id: str | None, affected_ids: tuple[str, ...], 
             "removed": list(removed_ids), **closing}
 
 
-def router(connect) -> APIRouter:
+def router(connect, current_user) -> APIRouter:
     api = APIRouter()
 
+    def allowed_on(db, caller, kind: str, object_id: str) -> None:
+        """The session and the access, before any check that names the job's state, the list's
+        version or the rally's bounds (JOB_NOT_REVIEWABLE, RALLY_LIST_STALE, SPLIT_POINT_OUTSIDE)."""
+        access.session_user(db, caller)
+        access.require(db, caller, kind, object_id, REVIEW)
+
     @api.post("/v1/analyses/{job_id}/rallies", status_code=201)
-    def add_rally(job_id: str, payload: IntervalInput):
+    def add_rally(job_id: str, payload: IntervalInput, caller=Depends(current_user)):
         """Add a rally that the analyzer missed."""
         with connect(write=True) as db:
+            allowed_on(db, caller, "job", job_id)
             job = _reviewable(db, job_id)
             _on_current_list(job, payload.expectedListVersion)
             duration_ms = _duration_ms(db, job)
@@ -174,9 +183,10 @@ def router(connect) -> APIRouter:
             return _changed(db, job, correction_id, (rally_id,), (), closing)
 
     @api.post("/v1/rallies/{rally_id}/move")
-    def move_rally(rally_id: str, payload: IntervalInput):
+    def move_rally(rally_id: str, payload: IntervalInput, caller=Depends(current_user)):
         """Set the start and the end of a rally. A changed end asks for the winner again."""
         with connect(write=True) as db:
+            allowed_on(db, caller, "rally", rally_id)
             rally = _find_rally(db, rally_id)
             job = _reviewable(db, rally["job_id"])
             _on_current_list(job, payload.expectedListVersion)
@@ -198,9 +208,10 @@ def router(connect) -> APIRouter:
             return _changed(db, job, correction_id, (rally_id,), (), closing)
 
     @api.post("/v1/rallies/{rally_id}/split")
-    def split_rally(rally_id: str, payload: SplitInput):
+    def split_rally(rally_id: str, payload: SplitInput, caller=Depends(current_user)):
         """Cut a rally that holds two. The later part is the rally whose end the user may already have judged."""
         with connect(write=True) as db:
+            allowed_on(db, caller, "rally", rally_id)
             rally = _find_rally(db, rally_id)
             job = _reviewable(db, rally["job_id"])
             _on_current_list(job, payload.expectedListVersion)
@@ -218,9 +229,10 @@ def router(connect) -> APIRouter:
             return _changed(db, job, correction_id, (earlier_id, rally_id), (), closing)
 
     @api.post("/v1/rallies/{rally_id}/merge-previous")
-    def merge_previous(rally_id: str, payload: _OnList):
+    def merge_previous(rally_id: str, payload: _OnList, caller=Depends(current_user)):
         """Join a rally with the one before it. The earlier one was no rally of its own, so its answers go."""
         with connect(write=True) as db:
+            allowed_on(db, caller, "rally", rally_id)
             rally = _find_rally(db, rally_id)
             job = _reviewable(db, rally["job_id"])
             _on_current_list(job, payload.expectedListVersion)
@@ -242,9 +254,10 @@ def router(connect) -> APIRouter:
             return _changed(db, job, correction_id, (rally_id,), (previous["id"],), closing)
 
     @api.post("/v1/analyses/{job_id}/rally-list/confirm")
-    def confirm_list(job_id: str, payload: _OnList):
+    def confirm_list(job_id: str, payload: _OnList, caller=Depends(current_user)):
         """Record that the user declares the list complete: it holds every rally of the video."""
         with connect(write=True) as db:
+            allowed_on(db, caller, "job", job_id)
             job = _reviewable(db, job_id)
             if is_mock(job):
                 fail("MOCK_LIST_NOT_CONFIRMABLE", "The intervals of a demo analysis are invented and can not be confirmed", 409)

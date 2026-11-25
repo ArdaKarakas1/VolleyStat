@@ -801,11 +801,16 @@ fun PasswordChangeScreen(
 }
 
 /**
- * Hesabı Sil: what the server and the phone delete, what stays on the server, and the password
- * that confirms it. Nothing on the phone goes before the server's answer.
+ * Hesabı Sil: what the server and the phone delete, and the password that confirms it. From server
+ * 0.9 on the server deletes the matches bound to the account with it. Nothing on the phone goes before the server's answer.
+ *
+ * [holdsUploadedMatches]: the list holds a match the app started to send to a server (it has a server id). An older
+ * server stored such a match without an account, and the deletion leaves it there. The app can not tell which matches
+ * those are, so the notice is a condition that holds for each of them. The app forgets the match records with the
+ * account, so the notice asks the person to note the teams and the date the operator finds such a match by.
  */
 @Composable
-fun DeleteAccountScreen(account: AccountUi, serverMatches: Int, onDelete: (password: String) -> Unit, onBack: () -> Unit) {
+fun DeleteAccountScreen(account: AccountUi, holdsUploadedMatches: Boolean, onDelete: (password: String) -> Unit, onBack: () -> Unit) {
     var password by remember { mutableStateOf("") }
     val ready = password.isNotEmpty() && !account.busy
     AccountScaffold(
@@ -818,7 +823,7 @@ fun DeleteAccountScreen(account: AccountUi, serverMatches: Int, onDelete: (passw
     ) {
         Text(stringResource(R.string.delete_account_title), style = MaterialTheme.typography.titleMedium)
         Text(stringResource(R.string.delete_account_body), style = MaterialTheme.typography.bodyMedium)
-        if (serverMatches > 0) Notice(stringResource(R.string.delete_account_server_matches, serverMatches), Tone.CAUTION)
+        if (holdsUploadedMatches) Notice(stringResource(R.string.delete_account_legacy), Tone.CAUTION)
         PasswordField(password, { password = it }, stringResource(R.string.field_your_password), ContentType.Password)
     }
 }

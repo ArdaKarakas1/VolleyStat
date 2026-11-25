@@ -78,7 +78,56 @@ data class UploadProgress(
     val pausedByUser: Boolean = false,
     val failure: UploadFailure? = null,
     val serverCode: String? = null,
+    /** The server's refusal, read from its answer, when the screen has words of its own for it. Null keeps the general text. */
+    val refusal: UploadRefusal? = null,
 )
+
+/**
+ * A refusal of an upload that the status screen words with the server's own numbers (docs/API_V1.md, section 10,
+ * "Depolama sınırları"). Every number here came from the server's answer and is above 0: an answer without one
+ * gives no refusal at all, and the screen keeps upload_error_refused. The app never writes a number of its own.
+ */
+sealed interface UploadRefusal {
+    /** 409 QUOTA_EXCEEDED, scope PERSONAL: what the server set aside for this account, and its limit. */
+    data class PersonalQuota(val usedBytes: Long, val limitBytes: Long) : UploadRefusal
+    /** 409 QUOTA_EXCEEDED, scope SERVER, pool PERSONAL: the limit for the personal videos of every account. */
+    data class ServerQuota(val limitBytes: Long) : UploadRefusal
+    /** 507 STORAGE_FULL: the free space the server keeps on its disk, as the refused request met it. */
+    data class StorageFull(val floorBytes: Long) : UploadRefusal
+    /** 403 NOT_A_MEMBER: the server does not show this match to this account. */
+    data object NoAccess : UploadRefusal
+
+    companion object {
+        /**
+         * Reads the refusal out of a failed upload. A variant without its numbers, a number that is not a whole
+         * number above 0, a quota with a reason (UNFINISHED_UPLOAD: on a 0.9 server only an account opened without an
+         * operator code meets it, and its own text comes with a later version) and a scope this app has no text for
+         * (TEAM, OPEN_MATCH) give null.
+         */
+        fun of(error: Throwable): UploadRefusal? {
+            if (error !is UploadException || error.failure != UploadFailure.SERVER_REFUSED) return null
+            val answer = error.cause as? ApiException ?: return null
+            val details = answer.details
+            fun bytes(name: String): Long? = when (val value = details.opt(name)) {
+                is Int -> value.toLong()
+                is Long -> value
+                else -> null
+            }?.takeIf { it > 0 }
+            return when (answer.code) {
+                "NOT_A_MEMBER" -> NoAccess
+                "STORAGE_FULL" -> bytes("floorBytes")?.let(::StorageFull)
+                "QUOTA_EXCEEDED" -> when {
+                    !details.isNull("reason") -> null
+                    details.optString("scope") == "PERSONAL" ->
+                        bytes("usedBytes")?.let { used -> bytes("limitBytes")?.let { limit -> PersonalQuota(used, limit) } }
+                    details.optString("scope") == "SERVER" && details.optString("pool") == "PERSONAL" -> bytes("limitBytes")?.let(::ServerQuota)
+                    else -> null
+                }
+                else -> null
+            }
+        }
+    }
+}
 
 enum class ServerTest { IDLE, TESTING, OK, OK_NO_PROBE, UNREACHABLE }
 
@@ -89,9 +138,10 @@ data class RecordingFile(val name: String, val path: String, val sizeBytes: Long
 /**
  * Why the server did not confirm the removal of a match. UNCONFIRMED: no answer came, so the app
  * does not know what the server holds. VERIFYING: the server is still checking the match's upload.
- * REFUSED: the server answered and deleted nothing.
+ * REFUSED: the server answered and deleted nothing. NO_ACCESS: the server does not show the match to
+ * this account (403 NOT_A_MEMBER); the match is not deleted, and the phone can only forget it (Telefondan Kaldır).
  */
-enum class RemovalFailure { UNCONFIRMED, VERIFYING, REFUSED }
+enum class RemovalFailure { UNCONFIRMED, VERIFYING, REFUSED, NO_ACCESS }
 
 data class RemovalProblem(val matchId: String, val failure: RemovalFailure)
 
@@ -224,15 +274,22 @@ data class AppUiState(
 
 /** How much the app knows about the analysis job of the match that is open. */
 /** VIDEO_MISSING: the server answered that it no longer holds a usable video for this match. */
-enum class JobLoad { LOADING, READY, NO_JOB, NO_ANALYZER, VIDEO_MISSING, UNREACHABLE }
+/** NO_ACCESS: the server does not show the match to this account (403 NOT_A_MEMBER); asking again gets the same answer. */
+enum class JobLoad { LOADING, READY, NO_JOB, NO_ANALYZER, VIDEO_MISSING, UNREACHABLE, NO_ACCESS }
 
 enum class ReviewProblem { STALE, SAVE_FAILED, LOAD_FAILED }
 
-/** OUTDATED: an answer came, but not one this app can read as a report. A server before 0.7 answers that way, and so may something else at its address. */
-enum class ReportLoad { LOADING, READY, NONE, UNREACHABLE, OUTDATED }
+/**
+ * OUTDATED: an answer came, but not one this app can read as a report. A server before 0.7 answers that way, and so may something else at its address.
+ * NO_ACCESS: the server does not show the match to this account (403 NOT_A_MEMBER).
+ */
+enum class ReportLoad { LOADING, READY, NONE, UNREACHABLE, OUTDATED, NO_ACCESS }
 
-/** OUTDATED: an answer came, but not one this app can read as a rally list. An older server answers that way, and so may something else at its address. */
-enum class RalliesLoad { LOADING, READY, UNREACHABLE, OUTDATED }
+/**
+ * OUTDATED: an answer came, but not one this app can read as a rally list. An older server answers that way, and so may something else at its address.
+ * NO_ACCESS: the server does not show the match to this account (403 NOT_A_MEMBER).
+ */
+enum class RalliesLoad { LOADING, READY, UNREACHABLE, OUTDATED, NO_ACCESS }
 
 /**
  * Why a correction of the rally list did not go through. STALE: the list changed after the screen
@@ -520,7 +577,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         fileName = "video.${format.extension}", mimeType = format.mimeType,
                         bytes = VideoBytes(total) { inspector.open(match.video) },
                         onSession = { session -> change { state -> state.copy(matches = state.matches.map { m -> if (m.localId == matchId) m.copy(session = session) else m }) } },
-                        onProgress = { phase, done, all -> _state.update { it.copy(upload = it.upload?.copy(phase = phase, doneBytes = done, totalBytes = all)) } },
+                        onProgress = { phase, done, all ->
+                            // The engine sends or verifies only once the server opened or resumed this match's upload
+                            // for this account: the server shows the match to it again.
+                            if (phase == UploadPhase.SENDING || phase == UploadPhase.VERIFYING) markAccess(matchId, noAccess = false)
+                            _state.update { it.copy(upload = it.upload?.copy(phase = phase, doneBytes = done, totalBytes = all)) }
+                        },
                         cancelled = { !job.isActive || stopRequested },
                     )
                     Result.success(check)
@@ -532,17 +594,21 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 change { state ->
                     state.copy(
                         upload = null,
-                        matches = state.matches.map { m -> if (m.localId == matchId) m.copy(check = check, checkedAtMs = System.currentTimeMillis()) else m },
+                        // The server took the video of the match for this account, so it shows the match to it.
+                        matches = state.matches.map { m -> if (m.localId == matchId) m.copy(check = check, checkedAtMs = System.currentTimeMillis(), noAccess = false) else m },
                     )
                 }
             }.onFailure { error ->
+                if (UploadRefusal.of(error) == UploadRefusal.NoAccess) markAccess(matchId, noAccess = true)
                 val sent = _state.value.matches.firstOrNull { it.localId == matchId }?.session?.sentBytes ?: 0
                 _state.update { state ->
                     val current = state.upload ?: UploadProgress(matchId)
                     state.copy(
                         upload = when (error) {
                             is UploadCancelled -> current.copy(running = false, phase = null, doneBytes = sent)
-                            is UploadException -> current.copy(running = false, phase = null, doneBytes = sent, failure = error.failure, serverCode = error.serverCode)
+                            is UploadException -> current.copy(
+                                running = false, phase = null, doneBytes = sent, failure = error.failure, serverCode = error.serverCode, refusal = UploadRefusal.of(error),
+                            )
                             else -> current.copy(running = false, phase = null, doneBytes = sent, failure = UploadFailure.SERVER_UNREACHABLE)
                         }
                     )
@@ -587,6 +653,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         // other answer, a 404 from a wrong address included, deleted nothing.
                         "MATCH_NOT_FOUND" -> null
                         "UPLOAD_FINALIZING" -> RemovalFailure.VERIFYING
+                        // The match is there and this account may not see it: nothing was deleted (design 10.7).
+                        "NOT_A_MEMBER" -> RemovalFailure.NO_ACCESS
                         else -> RemovalFailure.REFUSED
                     }
                 } catch (error: IOException) {
@@ -598,8 +666,21 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 forget(match)
                 onDone()
             } else {
+                if (failure == RemovalFailure.NO_ACCESS) markAccess(matchId, noAccess = true)
                 _state.update { it.copy(removalProblem = RemovalProblem(matchId, failure)) }
             }
+        }
+    }
+
+    /**
+     * Telefondan Kaldır: forgets a match the server does not show to this account (design 10.7). It stops the
+     * match's upload if one runs and sends nothing to the server, so it claims no deletion there. The user's
+     * video file stays on the phone, as with every removal.
+     */
+    fun removeFromPhone(matchId: String) {
+        viewModelScope.launch {
+            if (_state.value.upload?.matchId == matchId) stopUpload()
+            _state.value.matches.firstOrNull { it.localId == matchId }?.let(::forget)
         }
     }
 
@@ -634,6 +715,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun markWelcomeSeen() = changeDevice { it.copy(welcomeSeen = true) }
 
+    /**
+     * Marks a match the server does not show to this account (403 NOT_A_MEMBER), or clears the mark once the server
+     * shows the match again. The mark is saved, so the lists show the refusal and not an older analysis state.
+     */
+    private fun markAccess(matchId: String, noAccess: Boolean) {
+        if (_state.value.matches.none { it.localId == matchId && it.noAccess != noAccess }) return
+        change { state -> state.copy(matches = state.matches.map { if (it.localId == matchId) it.copy(noAccess = noAccess) else it }) }
+    }
+
     /** Remembers the last job state the analysis screens saw, so lists can show it offline. */
     fun rememberAnalysis(matchId: String, summary: AnalysisSummary?) = change { state ->
         state.copy(matches = state.matches.map { if (it.localId == matchId && it.analysis != summary) it.copy(analysis = summary) else it })
@@ -648,9 +738,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private fun videoIdOf(matchId: String) = _state.value.matches.firstOrNull { it.localId == matchId }?.check
         ?.takeIf { it.status == com.voleybolveveleybol.volleystat.model.VideoCheck.READY }?.videoId
 
+    /** The server answered about the match's job, so it shows the match to this account. */
     private fun publish(matchId: String, job: AnalysisJob?) {
         _analysis.update { if (it.matchId == matchId) it.withJob(job) else it }
         rememberAnalysis(matchId, job?.summary)
+        markAccess(matchId, noAccess = false)
     }
 
     /**
@@ -697,12 +789,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 val refusal = when ((error as? ApiException)?.code) {
                     "MODEL_NOT_CONFIGURED" -> JobLoad.NO_ANALYZER
                     "VIDEO_NOT_FOUND", "VIDEO_NOT_READY", "VIDEO_FILE_MISSING" -> JobLoad.VIDEO_MISSING
+                    "NOT_A_MEMBER" -> JobLoad.NO_ACCESS
                     else -> null
                 }
                 when {
                     refusal != null -> {
                         // The job is gone, and with it what belonged to it: a list without a job can not be corrected.
                         _analysis.update { if (it.matchId == matchId) it.withJob(null).copy(jobLoad = refusal) else it }
+                        if (refusal == JobLoad.NO_ACCESS) markAccess(matchId, noAccess = true)
                         return@launch
                     }
                     error != null -> _analysis.update { if (it.matchId == matchId) it.copy(jobLoad = JobLoad.UNREACHABLE) else it }
@@ -837,11 +931,22 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val read = withContext(Dispatchers.IO) { runCatching { api().rallies(jobId) } }
             val list = read.getOrNull()
             // No answer and a refusal are both failures of the connection or of the request. An answer that came
-            // and can not be read as a list is another matter: asking again will not change it.
-            val failure = if (read.exceptionOrNull() is IOException) RalliesLoad.UNREACHABLE else RalliesLoad.OUTDATED
+            // and can not be read as a list is another matter: asking again will not change it. Nor will asking
+            // again for a match the server does not show to this account.
+            val failure = when {
+                (read.exceptionOrNull() as? ApiException)?.code == "NOT_A_MEMBER" -> RalliesLoad.NO_ACCESS
+                read.exceptionOrNull() is IOException -> RalliesLoad.UNREACHABLE
+                else -> RalliesLoad.OUTDATED
+            }
+            if (list != null) markAccess(matchId, noAccess = false) else if (failure == RalliesLoad.NO_ACCESS) markAccess(matchId, noAccess = true)
             _analysis.update { current ->
                 if (current.matchId != matchId || current.job?.id != jobId) return@update current
-                if (list == null) current.copy(ralliesLoad = failure) else current.copy(rallies = newer(list, current.rallies), ralliesLoad = RalliesLoad.READY)
+                when {
+                    // A list the server no longer shows to this account is not shown either, and no correction is made on it.
+                    failure == RalliesLoad.NO_ACCESS && list == null -> current.copy(ralliesLoad = failure, rallies = null)
+                    list == null -> current.copy(ralliesLoad = failure)
+                    else -> current.copy(rallies = newer(list, current.rallies), ralliesLoad = RalliesLoad.READY)
+                }
             }
         }
     }
@@ -1019,12 +1124,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val outcome = withContext(Dispatchers.IO) { runCatching { api().report(serverMatchId) } }
             // No answer and a refusal are failures of the connection or of the request. An answer that came and
             // can not be read as a report is the answer of another server version: asking again will not change it.
-            val failure = if (outcome.exceptionOrNull() is IOException) ReportLoad.UNREACHABLE else ReportLoad.OUTDATED
+            // Nor will asking again for a match the server does not show to this account.
+            val failure = when {
+                (outcome.exceptionOrNull() as? ApiException)?.code == "NOT_A_MEMBER" -> ReportLoad.NO_ACCESS
+                outcome.exceptionOrNull() is IOException -> ReportLoad.UNREACHABLE
+                else -> ReportLoad.OUTDATED
+            }
+            if (outcome.getOrNull() != null) markAccess(matchId, noAccess = false) else if (failure == ReportLoad.NO_ACCESS) markAccess(matchId, noAccess = true)
             _analysis.update { current ->
                 if (current.matchId != matchId) return@update current
                 outcome.fold(
                     onSuccess = { report -> current.copy(report = report, reportLoad = if (report == null) ReportLoad.NONE else ReportLoad.READY) },
-                    onFailure = { current.copy(reportLoad = failure) },
+                    // A report the server no longer shows to this account leaves the screen; the players table reads it too.
+                    onFailure = { if (failure == ReportLoad.NO_ACCESS) current.copy(reportLoad = failure, report = null) else current.copy(reportLoad = failure) },
                 )
             }
         }

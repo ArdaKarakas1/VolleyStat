@@ -279,6 +279,12 @@ fun ReportScreen(
             }
             // The server answered, and not with a report this app can read. Asking again would get the same answer.
             load == ReportLoad.OUTDATED -> Notice(stringResource(R.string.report_outdated_server), Tone.NEGATIVE)
+            // The server does not show the match to this account. Asking again gets the same answer; the match's own
+            // screen offers Telefondan Kaldır. Without this branch the screen would say that no report exists yet.
+            load == ReportLoad.NO_ACCESS -> {
+                Notice(stringResource(R.string.match_no_access), Tone.CAUTION)
+                PrimaryButton(stringResource(R.string.status_title), onOpenStatus)
+            }
             report == null -> {
                 ScoreHeader(match, null)
                 NotYetCard(stringResource(R.string.report_unavailable_title), stringResource(R.string.report_unavailable_body))
@@ -416,6 +422,7 @@ fun PlayersScreen(
                 }
                 ReportLoad.NONE -> NotYetCard(stringResource(R.string.report_unavailable_title), stringResource(R.string.report_unavailable_body))
                 ReportLoad.OUTDATED -> Notice(stringResource(R.string.report_outdated_server), Tone.NEGATIVE)
+                ReportLoad.NO_ACCESS -> Notice(stringResource(R.string.match_no_access), Tone.CAUTION)
                 else -> ReportLoading()
             }
         }
