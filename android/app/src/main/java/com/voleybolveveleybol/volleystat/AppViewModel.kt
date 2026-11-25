@@ -1395,6 +1395,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val logoReads = HashSet<String>()
     /** The read of Çıkarılanlar on its way. A new read replaces it. */
     @Volatile private var blockedJob: Job? = null
+    /** Counts Takım Kur's logo picks and every clearDraftLogo, so a picture ready after the form was left is dropped (P7-C2). */
+    private var draftLogoPicks = 0L
 
     /** Encodes a logo's files. Tests put a recording encoder here; LogoDeviceTest runs the platform's on an emulator. */
     @Volatile internal var logoCompressor: LogoCodec.Compressor = LogoCodec.platform
@@ -1723,19 +1725,27 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             it.copy(serverTeams = it.serverTeams.copy(busy = true, problem = null))
         }
         if (!started) return
+        val pick = ++draftLogoPicks
         viewModelScope.launch(teamCalls) {
             val outcome = withContext(Dispatchers.IO) { runCatching { prepareLogo(uri, compressor) } }
             teamState(token) { ui ->
-                outcome.fold(
-                    onSuccess = { (image, files) -> ui.copy(busy = false, draftLogo = DraftLogo(image, files.first, files.second)) },
-                    onFailure = { ui.copy(busy = false, draftLogo = null, problem = TeamProblem.of(it)) },
-                )
+                when {
+                    // The user left the form meanwhile: the picture belongs to no form any more.
+                    pick != draftLogoPicks -> ui.copy(busy = false)
+                    else -> outcome.fold(
+                        onSuccess = { (image, files) -> ui.copy(busy = false, draftLogo = DraftLogo(image, files.first, files.second)) },
+                        onFailure = { ui.copy(busy = false, draftLogo = null, problem = TeamProblem.of(it)) },
+                    )
+                }
             }
         }
     }
 
-    /** Takım Kur's logo goes: the user removed it or left the form. */
-    fun clearDraftLogo() = _state.update { it.copy(serverTeams = it.serverTeams.copy(draftLogo = null)) }
+    /** Takım Kur's logo goes: the user removed it or left the form, with the arrow or the system back. A pick on its way goes too. */
+    fun clearDraftLogo() {
+        draftLogoPicks++
+        _state.update { it.copy(serverTeams = it.serverTeams.copy(draftLogo = null)) }
+    }
 
     /** Forma Numaran: sets the account's own jersey in the team; null clears it. */
     fun setJersey(teamId: String, jersey: Int?, onDone: () -> Unit) {

@@ -6,6 +6,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.net.Uri
+import androidx.exifinterface.media.ExifInterface
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -143,6 +144,36 @@ class LogoCodecTest {
         assertTrue(runCatching { LogoCodec.decodeSource(resolver, Uri.fromFile(notAPicture)) }.exceptionOrNull() is LogoCodec.Unreadable)
     }
 
+    /**
+     * P7-C7 (M3): the app reads at most SOURCE_MAX_BYTES of a picked file. A picture followed by bytes of nothing decodes
+     * up to the limit; one byte more reads as a picture the app can not open, so a huge or endless file never fills the
+     * memory.
+     */
+    @Test fun aPickedFileAboveTheLimitIsNotRead() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val png = ByteArrayOutputStream().also { bands(300, 200).compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
+        fun padded(name: String, size: Int) = File(context.cacheDir, name).apply {
+            outputStream().buffered().use { out ->
+                out.write(png)
+                val zeros = ByteArray(64 * 1024)
+                var left = size - png.size
+                while (left > 0) {
+                    val count = minOf(left, zeros.size)
+                    out.write(zeros, 0, count)
+                    left -= count
+                }
+            }
+        }
+        val atLimit = padded("am-limit.png", LogoCodec.SOURCE_MAX_BYTES)
+        assertEquals(LogoCodec.SOURCE_MAX_BYTES.toLong(), atLimit.length())
+        val read = LogoCodec.decodeSource(context.contentResolver, Uri.fromFile(atLimit))
+        assertEquals(300 to 200, read.width to read.height)
+        atLimit.delete()
+        val above = padded("above.png", LogoCodec.SOURCE_MAX_BYTES + 1)
+        assertTrue(runCatching { LogoCodec.decodeSource(context.contentResolver, Uri.fromFile(above)) }.exceptionOrNull() is LogoCodec.Unreadable)
+        above.delete()
+    }
+
     @Test fun decodingKeepsItsBounds() {
         val png = ByteArrayOutputStream().also { bands(1000, 500).compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
         LogoCodec.decode(png, LogoCodec.LARGE)!!.let { assertEquals(LogoCodec.LARGE to LogoCodec.LARGE / 2, it.width to it.height) }
@@ -153,6 +184,149 @@ class LogoCodecTest {
         val file = File(ApplicationProvider.getApplicationContext<Context>().cacheDir, "logo.png").apply { writeBytes(ByteArrayOutputStream().also { bands(3000, 2000).compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()) }
         val picked = LogoCodec.decodeSource(ApplicationProvider.getApplicationContext<Context>().contentResolver, Uri.fromFile(file))
         assertEquals("3000 × 2000 scaled by 1024 / 3000", 1024 to 683, picked.width to picked.height)
+    }
+
+    /**
+     * A camera JPEG stored as 600 × 300 pixels with [orientation] in its EXIF: a red bar along the stored top edge and a
+     * green bar along the stored left edge, blue elsewhere.
+     */
+    private fun cameraJpeg(orientation: Int): ByteArray {
+        val stored = Bitmap.createBitmap(600, 300, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.BLUE) }
+        Canvas(stored).apply {
+            drawRect(0f, 0f, 600f, 40f, Paint().apply { color = Color.RED })
+            drawRect(0f, 40f, 40f, 300f, Paint().apply { color = Color.GREEN })
+        }
+        val file = File(ApplicationProvider.getApplicationContext<Context>().cacheDir, "camera-$orientation.jpg")
+        file.outputStream().use { stored.compress(Bitmap.CompressFormat.JPEG, 95, it) }
+        ExifInterface(file.absolutePath).apply { setAttribute(ExifInterface.TAG_ORIENTATION, orientation.toString()); saveAttributes() }
+        assertEquals(orientation, ExifInterface(file.absolutePath).getAttributeInt(ExifInterface.TAG_ORIENTATION, 0))
+        return file.readBytes().also { file.delete() }
+    }
+
+    private enum class Edge { TOP, RIGHT, BOTTOM, LEFT }
+
+    /** The colour in the middle of an [edge], 8 px inside the picture: R, G or B. */
+    private fun Bitmap.edge(edge: Edge): Char {
+        val pixel = when (edge) {
+            Edge.TOP -> getPixel(width / 2, 8)
+            Edge.RIGHT -> getPixel(width - 9, height / 2)
+            Edge.BOTTOM -> getPixel(width / 2, height - 9)
+            Edge.LEFT -> getPixel(8, height / 2)
+        }
+        return when {
+            Color.red(pixel) > 180 && Color.green(pixel) < 90 && Color.blue(pixel) < 90 -> 'R'
+            Color.green(pixel) > 180 && Color.red(pixel) < 90 && Color.blue(pixel) < 90 -> 'G'
+            Color.blue(pixel) > 180 && Color.red(pixel) < 90 && Color.green(pixel) < 90 -> 'B'
+            else -> '?'
+        }
+    }
+
+    /**
+     * P7-C1: ImageDecoder (API 28+) turns a photo by its EXIF orientation, BitmapFactory (API 26 and 27) does not. The
+     * app's API 26-27 path reads the orientation and turns or mirrors the picture the same way, for all eight values, so a
+     * portrait camera photo becomes an upright logo on every API level.
+     */
+    @Test fun theApi26PathTurnsAPhotoByItsExifOrientationAsImageDecoderDoes() {
+        // Where the red bar (stored top edge) and the green bar (stored left edge) are seen, by the EXIF definition.
+        val expected = mapOf(
+            ExifInterface.ORIENTATION_NORMAL to (Edge.TOP to Edge.LEFT),
+            ExifInterface.ORIENTATION_FLIP_HORIZONTAL to (Edge.TOP to Edge.RIGHT),
+            ExifInterface.ORIENTATION_ROTATE_180 to (Edge.BOTTOM to Edge.RIGHT),
+            ExifInterface.ORIENTATION_FLIP_VERTICAL to (Edge.BOTTOM to Edge.LEFT),
+            ExifInterface.ORIENTATION_TRANSPOSE to (Edge.LEFT to Edge.TOP),
+            ExifInterface.ORIENTATION_ROTATE_90 to (Edge.RIGHT to Edge.TOP),
+            ExifInterface.ORIENTATION_TRANSVERSE to (Edge.RIGHT to Edge.BOTTOM),
+            ExifInterface.ORIENTATION_ROTATE_270 to (Edge.LEFT to Edge.BOTTOM),
+        )
+        val resolver = ApplicationProvider.getApplicationContext<Context>().contentResolver
+        expected.forEach { (orientation, bars) ->
+            val (red, green) = bars
+            val jpeg = cameraJpeg(orientation)
+            val turned = orientation >= ExifInterface.ORIENTATION_TRANSPOSE
+            val size = if (turned) 300 to 600 else 600 to 300
+            val modern = LogoCodec.decode(jpeg, LogoCodec.SOURCE_SIDE)!!
+            val old = LogoCodec.viaBitmapFactory({ jpeg.inputStream() }, LogoCodec.SOURCE_SIDE)!!
+            // The picked picture through the whole API 26-27 path: the file, the bounds and the orientation.
+            val file = File(ApplicationProvider.getApplicationContext<Context>().cacheDir, "picked-$orientation.jpg").apply { writeBytes(jpeg) }
+            val picked = LogoCodec.decodeSource(resolver, Uri.fromFile(file), sdk = 26)
+            file.delete()
+            listOf("ImageDecoder" to modern, "BitmapFactory" to old, "decodeSource on API 26" to picked).forEach { (path, bitmap) ->
+                assertEquals("$path, orientation $orientation", size, bitmap.width to bitmap.height)
+                assertEquals("$path, orientation $orientation: the red bar", 'R', bitmap.edge(red))
+                assertEquals("$path, orientation $orientation: the green bar", 'G', bitmap.edge(green))
+                Edge.entries.filter { it != red && it != green }.forEach { assertEquals("$path, orientation $orientation: $it", 'B', bitmap.edge(it)) }
+            }
+        }
+        // A scaled picture turns too: its longer side keeps the bound.
+        val small = LogoCodec.viaBitmapFactory({ cameraJpeg(ExifInterface.ORIENTATION_ROTATE_90).inputStream() }, 200)!!
+        assertEquals(100 to 200, small.width to small.height)
+        assertEquals('R', small.edge(Edge.RIGHT))
+    }
+
+    /**
+     * P7-C4: a panorama or a long screenshot keeps at least LARGE px on its shorter side, so the centred square stays sharp.
+     * The longer side may then exceed SOURCE_SIDE, up to SOURCE_LONG_SIDE.
+     */
+    @Test fun aWideOrTallPictureKeepsASharpSquare() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        // 10:1 and 1:9 pictures, and one beyond SOURCE_LONG_SIDE's reach.
+        mapOf((5000 to 500) to (2560 to 256), (1000 to 9000) to (256 to 2304), (12000 to 1500) to (2048 to 256), (4000 to 1000) to (1024 to 256))
+            .forEach { (source, decoded) ->
+                assertEquals("$source", decoded, LogoCodec.sourceSize(source.first, source.second))
+            }
+        assertEquals("the longer side stays at most SOURCE_LONG_SIDE", LogoCodec.SOURCE_LONG_SIDE to 205, LogoCodec.sourceSize(20000, 1000))
+        assertEquals("a usual photo as before", 1024 to 683, LogoCodec.sourceSize(3000, 2000))
+        assertEquals("a small picture keeps its size", 300 to 200, LogoCodec.sourceSize(300, 200))
+        // A 10:1 picture through both decoders: the square's source edge is LARGE px, not 102.
+        val file = File(context.cacheDir, "panorama.png").apply { writeBytes(ByteArrayOutputStream().also { bands(5000, 500).compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()) }
+        listOf(35, 26).forEach { sdk ->
+            val picked = LogoCodec.decodeSource(context.contentResolver, Uri.fromFile(file), sdk = sdk)
+            assertEquals("API $sdk", 2560 to 256, picked.width to picked.height)
+            assertTrue("API $sdk", minOf(picked.width, picked.height) >= LogoCodec.LARGE)
+            // The green middle fills the square.
+            val square = LogoCodec.square(picked, LogoCodec.LARGE)
+            listOf(2 to 2, 253 to 253, 128 to 128).forEach { (x, y) -> assertTrue("API $sdk: $x,$y", square.getPixel(x, y).isGreen()) }
+        }
+        file.delete()
+    }
+
+    /**
+     * P7-C5: a logo made for dark shirts, white art on a transparent background, gets a dark background, so the crest
+     * stays visible. Dark art keeps the white background (see theBitmapHasNoAlpha), and an opaque picture shows no
+     * background at all.
+     */
+    @Test fun lightArtOnATransparentPictureGetsADarkBackground() {
+        fun art(color: Int) = Bitmap.createBitmap(400, 400, Bitmap.Config.ARGB_8888).apply {
+            eraseColor(Color.TRANSPARENT)
+            Canvas(this).drawCircle(200f, 200f, 120f, Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = color })
+        }
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        // The white crest as a PNG file the user picks.
+        val file = File(context.cacheDir, "beyaz-arma.png").apply { writeBytes(ByteArrayOutputStream().also { art(Color.WHITE).compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()) }
+        val white = LogoCodec.square(LogoCodec.decodeSource(context.contentResolver, Uri.fromFile(file)), LogoCodec.LARGE)
+        file.delete()
+        assertEquals("the corner", LogoCodec.DARK_BACKGROUND, white.getPixel(2, 2))
+        assertEquals("the crest", Color.WHITE, white.getPixel(128, 128))
+        assertFalse(white.hasAlpha())
+        // A light yellow crest too; a dark blue one and a black one keep the white background.
+        assertEquals(LogoCodec.DARK_BACKGROUND, LogoCodec.square(art(Color.rgb(250, 220, 80)), LogoCodec.LARGE).getPixel(2, 2))
+        assertEquals(LogoCodec.BACKGROUND, LogoCodec.square(art(Color.rgb(20, 40, 140)), LogoCodec.LARGE).getPixel(2, 2))
+        assertEquals(LogoCodec.BACKGROUND, LogoCodec.square(art(Color.BLACK), LogoCodec.LARGE).getPixel(2, 2))
+        // The encoder gets the dark corner, the white crest and no alpha, for both files.
+        val recording = Recording()
+        LogoCodec.encode(art(Color.WHITE), sdk = 35, compressor = recording)
+        assertEquals(2, recording.calls.size)
+        recording.calls.forEach { call ->
+            assertFalse(call.hasAlpha)
+            assertEquals(LogoCodec.DARK_BACKGROUND, call.corner)
+            assertEquals(Color.WHITE, call.centre)
+        }
+        // An opaque white picture with a black dot: no background shows, its corner stays white.
+        val opaque = Bitmap.createBitmap(400, 400, Bitmap.Config.ARGB_8888).apply {
+            eraseColor(Color.WHITE)
+            Canvas(this).drawCircle(200f, 200f, 20f, Paint().apply { color = Color.BLACK })
+        }
+        assertEquals(Color.WHITE, LogoCodec.square(opaque, LogoCodec.LARGE).getPixel(2, 2))
     }
 
     /**

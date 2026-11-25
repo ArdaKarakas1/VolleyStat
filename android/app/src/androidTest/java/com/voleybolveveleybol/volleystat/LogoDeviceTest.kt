@@ -6,8 +6,11 @@ import android.graphics.Color
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Shader
+import android.net.Uri
 import android.os.Build
+import androidx.exifinterface.media.ExifInterface
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import com.voleybolveveleybol.volleystat.data.ApiClient
 import com.voleybolveveleybol.volleystat.data.LogoCodec
 import com.voleybolveveleybol.volleystat.model.Seat
@@ -18,6 +21,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.io.File
 import java.util.UUID
 
 /**
@@ -25,7 +29,8 @@ import java.util.UUID
  * 10.5, plan P7): the app encodes a synthetic test pattern with LogoCodec, a team the test creates takes both files with
  * 200, and the server sends the same bytes back. CI runs it on API 34 in the device job and on API 26, where the app
  * encodes with CompressFormat.WEBP instead of WEBP_LOSSY, in a job of its own. Skipped when the backend does not answer.
- * The test opens an e2e_ account (VOLLEYSTAT_SIGNUP=open) and deletes it, which deletes its team with the logo.
+ * The test opens an e2e_ account (VOLLEYSTAT_SIGNUP=open) and deletes it, which deletes its team with the logo. A second
+ * test, which needs no backend, turns a camera photo by its EXIF orientation on this device's decoder (P7-C1).
  */
 @RunWith(AndroidJUnit4::class)
 class LogoDeviceTest {
@@ -71,6 +76,53 @@ class LogoDeviceTest {
             assertEquals(LogoCodec.LARGE, shown!!.width)
         } finally {
             runCatching { api.deleteAccount(password) }
+        }
+    }
+
+    /** The colour at [x], [y]: R, G or B, and ? for any other. */
+    private fun Bitmap.colourAt(x: Int, y: Int): Char {
+        val pixel = getPixel(x, y)
+        return when {
+            Color.red(pixel) > 180 && Color.green(pixel) < 90 && Color.blue(pixel) < 90 -> 'R'
+            Color.green(pixel) > 180 && Color.red(pixel) < 90 && Color.blue(pixel) < 90 -> 'G'
+            Color.blue(pixel) > 180 && Color.red(pixel) < 90 && Color.green(pixel) < 90 -> 'B'
+            else -> '?'
+        }
+    }
+
+    /**
+     * P7-C1: a portrait camera photo that the camera stored as landscape pixels with EXIF orientation 6. ImageDecoder
+     * turns it from API 28; on API 26 and 27 the app turns it itself. On both, the picked picture and the logo the app
+     * sends stand upright. The photo is synthetic: a red bar along the stored top edge, a green one along the stored left
+     * edge, blue elsewhere.
+     */
+    @Test fun aCameraPhotoTurnedByItsExifBecomesAnUprightLogo() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val stored = Bitmap.createBitmap(600, 300, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.BLUE) }
+        Canvas(stored).apply {
+            drawRect(0f, 0f, 600f, 40f, Paint().apply { color = Color.RED })
+            drawRect(0f, 40f, 40f, 300f, Paint().apply { color = Color.GREEN })
+        }
+        val file = File(context.cacheDir, "kamera-${UUID.randomUUID()}.jpg")
+        try {
+            file.outputStream().use { stored.compress(Bitmap.CompressFormat.JPEG, 95, it) }
+            ExifInterface(file.absolutePath).apply { setAttribute(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_ROTATE_90.toString()); saveAttributes() }
+            val api = "API ${Build.VERSION.SDK_INT}"
+            val picked = LogoCodec.decodeSource(context.contentResolver, Uri.fromFile(file))
+            assertEquals(api, 300 to 600, picked.width to picked.height)
+            // The stored top edge is the right edge now, the stored left edge the top.
+            assertEquals(api, 'R', picked.colourAt(picked.width - 9, picked.height / 2))
+            assertEquals(api, 'G', picked.colourAt(picked.width / 2, 8))
+            assertEquals(api, 'B', picked.colourAt(8, picked.height / 2))
+            // The logo the app would send: the centred square, with the red bar on its right edge, through this device's encoder.
+            val (large, _) = LogoCodec.encode(picked)
+            val logo = LogoCodec.decode(large, LogoCodec.LARGE)
+            assertNotNull(api, logo)
+            assertEquals(api, 'R', logo!!.colourAt(logo.width - 9, logo.height / 2))
+            assertEquals(api, 'B', logo.colourAt(8, logo.height / 2))
+            assertEquals(api, 'B', logo.colourAt(logo.width / 2, 8))
+        } finally {
+            file.delete()
         }
     }
 }

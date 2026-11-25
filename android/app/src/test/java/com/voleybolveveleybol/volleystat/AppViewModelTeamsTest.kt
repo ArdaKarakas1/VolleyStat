@@ -946,6 +946,44 @@ class AppViewModelTeamsTest {
         assertNull(vm.state.value.serverTeams.loadProblem)
     }
 
+    /**
+     * P7-C7 (M6): the read of the logo the list named answers only after the captain sent a new one. The app keeps the new
+     * logo it showed at once, because the late answer belongs to a version the team no longer shows.
+     */
+    @Test fun aLateReadOfAnOlderLogoLeavesTheNewerOne() {
+        TestAccounts.seed(context)
+        var version = 3
+        on("GET /teams") { teams(team("t1", logo = version)) }
+        val held = CountDownLatch(1)
+        val answered = CountDownLatch(1)
+        on("GET /teams/t1/logo") {
+            held.await(10, TimeUnit.SECONDS)
+            logoAnswer().also { answered.countDown() }
+        }
+        val vm = viewModel().withFakeEncoder().loaded()
+        await("the read of version 3") { seen.any { it.key == "GET /teams/t1/logo" } }
+        on("PUT /teams/t1/logo") {
+            version = 4
+            ok(JSONObject().put("logo", JSONObject().put("version", 4)))
+        }
+        var done = 0
+        vm.setLogo("t1", picture("new.png")) { done++ }
+        await("the new logo") { done == 1 }
+        // The list read that ends the action names version 4, which the app holds already.
+        await("the list after the action") { seen.count { it.key == "GET /teams" } == 2 && !vm.state.value.serverTeams.loading }
+        val shown = vm.state.value.serverTeams.logos.getValue("t1")
+        assertEquals(4, shown.version)
+        // Version 3's answer arrives now.
+        held.countDown()
+        assertTrue(answered.await(10, TimeUnit.SECONDS))
+        settle()
+        settle()
+        assertEquals("the late answer of version 3 changes nothing", 4, vm.state.value.serverTeams.logos["t1"]?.version)
+        assertTrue("the picture the captain sent stays", vm.state.value.serverTeams.logos["t1"]?.image === shown.image)
+        assertEquals(4, vm.state.value.serverTeams.teamOf("t1")!!.logoVersion)
+        assertEquals("version 4 is not read back", 1, seen.count { it.key == "GET /teams/t1/logo" })
+    }
+
     @Test fun aLogoGoesToTheServerAsTwoFilesAndShowsAtOnce() {
         TestAccounts.seed(context)
         on("GET /teams") { teams(team("t1")) }
@@ -1027,6 +1065,36 @@ class AppViewModelTeamsTest {
         await("the second draft logo") { vm.state.value.serverTeams.draftLogo != null && !vm.state.value.serverTeams.busy }
         vm.clearDraftLogo()
         assertNull(vm.state.value.serverTeams.draftLogo)
+    }
+
+    /**
+     * P7-C2: the user leaves Takım Kur while the app still prepares the picked picture. The picture that is ready after the
+     * form was left is no draft logo of the next form.
+     */
+    @Test fun aDraftLogoReadyAfterTheFormWasLeftIsDropped() {
+        TestAccounts.seed(context)
+        on("GET /teams") { teams() }
+        val vm = viewModel().loaded()
+        val encoding = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        vm.logoCompressor = com.voleybolveveleybol.volleystat.data.LogoCodec.Compressor { bitmap, _, quality ->
+            encoding.countDown()
+            release.await(10, TimeUnit.SECONDS)
+            ByteArray(100) { (bitmap.width + quality).toByte() }
+        }
+        vm.pickDraftLogo(picture("late.png"))
+        assertTrue(encoding.await(10, TimeUnit.SECONDS))
+        // The form goes (the arrow or the system back) before the picture is ready.
+        vm.clearDraftLogo()
+        release.countDown()
+        await("the preparation") { !vm.state.value.serverTeams.busy }
+        settle()
+        assertNull("the left form's picture is no draft logo", vm.state.value.serverTeams.draftLogo)
+        assertNull(vm.state.value.serverTeams.problem)
+        // The next form's pick is kept.
+        vm.withFakeEncoder()
+        vm.pickDraftLogo(picture("next.png"))
+        await("the next draft logo") { vm.state.value.serverTeams.draftLogo != null && !vm.state.value.serverTeams.busy }
     }
 
     // ----- the session (D1) -----

@@ -65,6 +65,8 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.4")
     implementation("androidx.navigation:navigation-compose:2.9.5")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+    // The logo's EXIF orientation on API 26 and 27 (P7-C1). CameraX and Media3 already bring this version along.
+    implementation("androidx.exifinterface:exifinterface:1.3.6")
     implementation("androidx.camera:camera-camera2:1.5.1")
     implementation("androidx.camera:camera-lifecycle:1.5.1")
     implementation("androidx.camera:camera-video:1.5.1")

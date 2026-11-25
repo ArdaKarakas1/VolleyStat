@@ -3,6 +3,7 @@ package com.voleybolveveleybol.volleystat
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.os.Build
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -498,6 +499,7 @@ fun VolleyStatApp(
                 // The photo picker needs no permission (design 4.2); a dismissed picker returns null and changes nothing.
                 val logoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> uri?.let(viewModel::pickDraftLogo) }
                 val draftLogo = state.serverTeams.draftLogo?.image
+                val back = teamBack { viewModel.clearTeamProblem(); viewModel.clearDraftLogo(); nav.popBackStack() }
                 TeamCreateScreen(
                     state.serverTeams.busy, state.serverTeams.problem,
                     onCreate = { draft ->
@@ -506,7 +508,7 @@ fun VolleyStatApp(
                             if (nav.currentDestination?.route == Routes.NEW_TEAM) nav.navigate(Routes.team(id)) { popUpTo(Routes.NEW_TEAM) { inclusive = true } }
                         }
                     },
-                    onEdit = viewModel::clearTeamProblem, onBack = { viewModel.clearTeamProblem(); viewModel.clearDraftLogo(); nav.popBackStack() },
+                    onEdit = viewModel::clearTeamProblem, onBack = back,
                     logo = remember(draftLogo) { draftLogo?.asImageBitmap() },
                     onPickLogo = { viewModel.clearTeamProblem(); logoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                     onRemoveLogo = viewModel::clearDraftLogo,
@@ -524,10 +526,11 @@ fun VolleyStatApp(
                 val logo = state.serverTeams.logos[id]?.image
                 // Leaving and deleting end on the Teams tab, unless the user left the screen meanwhile.
                 val toTeams = { if (nav.currentDestination?.route == Routes.TEAM) nav.popBackStack() }
+                val back = teamBack { viewModel.clearTeamProblem(); nav.popBackStack() }
                 TeamScreen(
                     team, loading = team == null && read?.problem == null, problem = read?.problem,
                     onSeats = { viewModel.clearTeamProblem(); go(Routes.teamSeats(id)) }, onRetry = { viewModel.openTeam(id, screen) },
-                    onBack = { viewModel.clearTeamProblem(); nav.popBackStack() },
+                    onBack = back,
                     // The new members of the screen's first answer, which the app marks seen; the mark keeps the line (P6-C3).
                     recentJoins = read?.recentJoins,
                     myUserId = state.account.user?.id, logo = remember(logo) { logo?.asImageBitmap() }, busy = state.serverTeams.busy,
@@ -548,6 +551,7 @@ fun VolleyStatApp(
                 val id = entry.arguments?.getString("id").orEmpty()
                 val team = state.serverTeams.teamOf(id)
                 val logoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> uri?.let { viewModel.setLogo(id, it) } }
+                val back = teamBack { viewModel.clearTeamProblem(); nav.popBackStack() }
                 if (team == null || !team.captain) {
                     LaunchedEffect(Unit) { leave(Routes.TEAM_SETTINGS) }
                 } else {
@@ -557,42 +561,45 @@ fun VolleyStatApp(
                         onSave = { name, schedule -> viewModel.saveTeamSettings(id, name, schedule) { leave(Routes.TEAM_SETTINGS) } },
                         onPickLogo = { viewModel.clearTeamProblem(); logoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                         onRemoveLogo = { viewModel.removeLogo(id) },
-                        onEdit = viewModel::clearTeamProblem, onBack = { viewModel.clearTeamProblem(); nav.popBackStack() },
+                        onEdit = viewModel::clearTeamProblem, onBack = back,
                     )
                 }
             }
             composable(Routes.TEAM_JERSEY) { entry ->
                 val id = entry.arguments?.getString("id").orEmpty()
                 val team = state.serverTeams.teamOf(id)
+                val back = teamBack { viewModel.clearTeamProblem(); nav.popBackStack() }
                 if (team == null) {
                     LaunchedEffect(Unit) { leave(Routes.TEAM_JERSEY) }
                 } else {
                     TeamJerseyScreen(
                         team.myJersey, busy = state.serverTeams.busy, problem = state.serverTeams.problem,
                         onSave = { viewModel.setJersey(id, it) { leave(Routes.TEAM_JERSEY) } },
-                        onEdit = viewModel::clearTeamProblem, onBack = { viewModel.clearTeamProblem(); nav.popBackStack() },
+                        onEdit = viewModel::clearTeamProblem, onBack = back,
                     )
                 }
             }
             composable(Routes.TEAM_BLOCKED) { entry ->
                 val id = entry.arguments?.getString("id").orEmpty()
                 LaunchedEffect(id) { viewModel.loadBlocked(id) }
+                val back = teamBack { viewModel.clearTeamProblem(); nav.popBackStack() }
                 TeamBlockedScreen(
                     state.serverTeams.blocked?.takeIf { it.teamId == id }, busy = state.serverTeams.busy, problem = state.serverTeams.problem,
                     onUnblock = { viewModel.unblock(id, it) }, onRetry = { viewModel.loadBlocked(id) },
-                    onBack = { viewModel.clearTeamProblem(); nav.popBackStack() },
+                    onBack = back,
                 )
             }
             composable(Routes.TEAM_SEATS) { entry ->
                 val id = entry.arguments?.getString("id").orEmpty()
                 val team = state.serverTeams.teamOf(id)
+                val back = teamBack { viewModel.clearTeamProblem(); nav.popBackStack() }
                 if (team == null || !team.captain) {
                     LaunchedEffect(Unit) { leave(Routes.TEAM_SEATS) }
                 } else {
                     TeamSeatsScreen(
                         team, state.serverTeams.busy, state.serverTeams.problem,
                         onSave = { count, moves -> viewModel.saveSeats(id, count, moves) { leave(Routes.TEAM_SEATS) } },
-                        onEdit = viewModel::clearTeamProblem, onBack = { viewModel.clearTeamProblem(); nav.popBackStack() },
+                        onEdit = viewModel::clearTeamProblem, onBack = back,
                     )
                 }
             }
@@ -808,6 +815,17 @@ fun VolleyStatApp(
 private fun StopAccountCallOnLeave(viewModel: AppViewModel) {
     val activity = LocalActivity.current
     DisposableEffect(Unit) { onDispose { if (activity?.isChangingConfigurations != true) viewModel.cancelAccountCall() } }
+}
+
+/**
+ * A team screen's way back (P7-C2): the system back gesture or key does what the top bar's arrow does. Both clear the
+ * screen's refusal, and Takım Kur's also its logo, so neither shows on the screen the user returns to or on the next form.
+ * A dialog that is open takes the system back first and closes.
+ */
+@Composable
+private fun teamBack(onBack: () -> Unit): () -> Unit {
+    BackHandler(onBack = onBack)
+    return onBack
 }
 
 /** 05 with its system launcher. The picker hands over exactly one video and needs no storage permission. */

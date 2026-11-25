@@ -174,6 +174,59 @@ class TeamFlowTest {
         assertTrue(shown("Ece Yeni"))
     }
 
+    /** A picture file the photo picker could hand the app. */
+    private fun picture(name: String): android.net.Uri {
+        val file = java.io.File(context.cacheDir, name)
+        val bitmap = android.graphics.Bitmap.createBitmap(600, 400, android.graphics.Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.rgb(20, 120, 200)) }
+        file.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+        return android.net.Uri.fromFile(file)
+    }
+
+    /** The system back gesture or key, as Android sends it to the activity. */
+    private fun systemBack() = scenario!!.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+
+    /**
+     * P7-C2: the user picks a logo on Takım Kur, changes their mind and leaves with the system back, the usual Android way
+     * out. The logo goes with the form, as it does with the top bar's arrow, so the next Takım Kur starts without it.
+     */
+    @Test fun theSystemBackLeavesTakimKurWithoutItsLogo() {
+        val viewModel = teamsTab(text(R.string.teams_empty_title))
+        tapText(text(R.string.action_create_team))
+        waitFor(text(R.string.action_pick_logo))
+        scenario!!.onActivity { viewModel.pickDraftLogo(picture("takim-kur.png")) }
+        waitFor(text(R.string.action_remove_logo))
+        until { viewModel.state.value.serverTeams.draftLogo != null && !viewModel.state.value.serverTeams.busy }
+        systemBack()
+        waitFor(text(R.string.teams_empty_title))
+        until { viewModel.state.value.serverTeams.draftLogo == null }
+        tapText(text(R.string.action_create_team))
+        waitFor(text(R.string.action_pick_logo))
+        assertFalse("the new form shows no logo of the one the user left", shown(text(R.string.action_remove_logo)))
+        assertEquals("nothing went to the server", 0, standIn.requests.count { it.first.startsWith("PUT /teams") })
+    }
+
+    /**
+     * P7-C2: the server refuses the logo on Takım Ayarları and the user leaves with the system back. The refusal goes with
+     * the screen, as it does with the arrow, and the team screen does not show it.
+     */
+    @Test fun theSystemBackLeavesTakimAyarlariWithoutItsRefusal() {
+        standIn.teams = JSONArray().put(team("t1", "Kuzey Spor", 0, captain))
+        val viewModel = teamsTab("Kuzey Spor")
+        standIn.answers["GET /teams/t1"] = { ok(team("t1", "Kuzey Spor", 0, captain)) }
+        standIn.answers["PUT /teams/t1/logo"] = { standIn.refuse(422, "LOGO_INVALID", JSONObject().put("image", "large")) }
+        tapText("Kuzey Spor")
+        waitFor(text(R.string.action_team_settings))
+        tapText(text(R.string.action_team_settings))
+        waitFor(text(R.string.action_pick_logo))
+        scenario!!.onActivity { viewModel.setLogo("t1", picture("ayarlar.png")) }
+        waitFor(text(R.string.logo_invalid))
+        systemBack()
+        waitFor(text(R.string.blocked_title))
+        until { !viewModel.state.value.serverTeams.busy }
+        assertFalse("the team screen shows no refusal of Takım Ayarları", shown(text(R.string.logo_invalid)))
+        assertEquals(null, viewModel.state.value.serverTeams.problem)
+    }
+
     /**
      * Plan P7 through the real navigation: Takım Ayarları, Forma Numaran and Çıkarılanlar open from the team screen, each
      * sends its call and goes back, and Takımı Sil ends on the Teams tab without the team.

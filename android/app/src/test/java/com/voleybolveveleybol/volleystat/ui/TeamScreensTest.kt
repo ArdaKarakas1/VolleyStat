@@ -438,6 +438,58 @@ class TeamScreensTest {
         assertTrue("the dialog says why", shown(text(R.string.net_no_answer)))
     }
 
+    /**
+     * P7-C3: a question stays open only while the screen offers the button that asked it. The captain's transfer went
+     * through but its answer was lost; the repeat answers CAPTAIN_ONLY and the list read shows the member view. The
+     * transfer, removal and deletion questions close, and the refusal stays on the screen. Takımdan Ayrıl's question
+     * closes once the account became the captain.
+     */
+    @Test fun aQuestionClosesOnceTheScreenNoLongerOffersItsButton() {
+        val after = listOf(
+            member("u-1", "Deniz", Seat.STARTER, jersey = 7),
+            member("u-2", "Ece", Seat.STARTER, TeamRole.CAPTAIN, jersey = 9),
+            member("u-3", "Fatma", Seat.SUBSTITUTE, jersey = 12),
+        )
+        var opened by mutableStateOf<String?>(null)
+        var memberView by mutableStateOf(true)
+        var dismissed = 0
+        show {
+            val shownTeam = if (memberView) team(role = TeamRole.MEMBER, members = after) else team(members = squad)
+            androidx.compose.runtime.key(opened, memberView) {
+                TeamScreen(
+                    shownTeam, loading = false, problem = null, onSeats = {}, onRetry = {}, onBack = {}, myUserId = me,
+                    actionProblem = if (memberView) TeamProblem.CaptainOnly else null, actions = TeamActions(onDismiss = { dismissed++ }), initialDialog = opened,
+                )
+            }
+        }
+        val questions = mapOf(
+            "transfer:u-2" to text(R.string.transfer_title), "remove:u-3" to text(R.string.member_remove_title, "Fatma"), "delete" to text(R.string.team_delete_title),
+        )
+        questions.forEach { (dialog, question) ->
+            opened = dialog
+            compose.waitForIdle()
+            assertFalse("$dialog: the question is gone", shown(question))
+            listOf(R.string.action_transfer_captain, R.string.action_remove_member, R.string.action_delete_team).forEach {
+                assertTrue("$dialog: no ${text(it)}", compose.onAllNodes(hasClickAction() and hasText(text(it))).fetchSemanticsNodes().isEmpty())
+            }
+            assertEquals("$dialog: the refusal shows once, on the screen", 1, compose.onAllNodesWithText(text(R.string.team_captain_only)).fetchSemanticsNodes().size)
+            assertTrue(shown(text(R.string.action_leave_team)))
+        }
+        assertEquals("closing keeps the refusal", 0, dismissed)
+
+        // A member's Takımdan Ayrıl question closes once the account is the captain.
+        memberView = false
+        opened = "leave"
+        compose.waitForIdle()
+        assertFalse(shown(text(R.string.team_leave_title)))
+        assertFalse(shown(text(R.string.action_leave_team)))
+        // While the button is offered the question stays: the captain's own questions are open.
+        opened = "transfer:u-2"
+        compose.waitForIdle()
+        assertTrue(shown(text(R.string.transfer_title)))
+        assertEquals(0, dismissed)
+    }
+
     @Test fun theTeamScreenOpensFormaNumaranForEveryMember() {
         // The team screen's button opens Forma Numaran, for the captain and for a member.
         var opened = 0

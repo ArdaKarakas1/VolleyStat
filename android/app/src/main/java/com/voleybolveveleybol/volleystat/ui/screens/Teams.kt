@@ -505,7 +505,12 @@ fun TeamScreen(
     if (team == null) return
     val open = dialog ?: return
     val member = team.members.firstOrNull { it.userId == open.substringAfter(':') }
+    // A question stays open only while the screen offers the button that asked it (P7-C3): the captain's questions close
+    // once the account is no captain any more, and Takımdan Ayrıl's once it is the captain. The refusal that came with the
+    // change stays on the screen.
+    val offered = if (open == "leave") !team.captain else team.captain
     when {
+        !offered -> LaunchedEffect(open) { dialog = null }
         open == "leave" -> ConfirmDialog(
             stringResource(R.string.team_leave_title), stringResource(R.string.team_leave_body), stringResource(R.string.action_leave_team),
             busy, actionProblem, onConfirm = actions.onLeave, onDismiss = ::close,

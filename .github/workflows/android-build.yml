@@ -136,7 +136,7 @@ jobs:
           working-directory: android
           script: ./gradlew --no-daemon :app:connectedDebugAndroidTest
       - name: The device tests must have run, not skipped
-        run: python tools/require_tests_ran.py android/app/build/outputs/androidTest-results 3
+        run: python tools/require_tests_ran.py android/app/build/outputs/androidTest-results 4
       # A failed device run is diagnosed from this log: every request the app made and its status.
       - name: Backend log
         if: always()
@@ -153,7 +153,8 @@ jobs:
 
   device-api26:
     # Design 10.5: on API 26 to 29 the app encodes the logo with CompressFormat.WEBP instead of WEBP_LOSSY. This job runs
-    # only LogoDeviceTest on an API 26 emulator, which sends the app's logo to the backend (plan U21).
+    # only LogoDeviceTest on an API 26 emulator, which sends the app's logo to the backend (plan U21) and turns a camera
+    # photo by its EXIF orientation, which BitmapFactory before API 28 does not do by itself (P7-C1).
     name: The team logo on an API 26 emulator
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -192,8 +193,8 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           working-directory: android
           script: ./gradlew --no-daemon :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.voleybolveveleybol.volleystat.LogoDeviceTest
-      - name: The logo test must have run, not skipped
-        run: python tools/require_tests_ran.py android/app/build/outputs/androidTest-results 1
+      - name: The logo tests must have run, not skipped
+        run: python tools/require_tests_ran.py android/app/build/outputs/androidTest-results 2
       - name: Backend log
         if: always()
         run: tail -n 60 "$RUNNER_TEMP/backend.log"
