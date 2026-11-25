@@ -400,7 +400,9 @@ class AppViewModelTeamsTest {
 
     @Test fun aMemberOpeningATeamSendsNoJoinsSeenAndSeesNoProblem() {
         TestAccounts.seed(context)
-        on("GET /teams/t1") { ok(team("t1", role = "MEMBER")) }
+        // The server sends a member no newJoins; the rule is the role's all the same (plan D4), so a member's answer that named
+        // new members would send nothing either.
+        on("GET /teams/t1") { ok(team("t1", role = "MEMBER").put("newJoins", 1)) }
         on("GET /teams/t2") { ok(team("t2", newJoins = 0)) }
         on("POST /teams/t1/joins-seen") { refuse(403, "CAPTAIN_ONLY") }
         on("POST /teams/t2/joins-seen") { MockResponse().setResponseCode(204) }
