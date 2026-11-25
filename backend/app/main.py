@@ -458,6 +458,9 @@ def create_app(storage_root: str | Path | None = None, analyzer: Analyzer | str 
             fail("UPLOAD_INCOMPLETE", "Stored bytes were shorter than recorded; resume the upload", 409, expectedSize=record["expected_size"], nextOffset=resume_from)
 
         def still_ours(db) -> bool:
+            # A sweep pass that moved finalize_started_at back to its own moment (the clock went back while
+            # this verification ran, see sweep._CLAMP) ends the ownership as a takeover does: the request
+            # answers 409 and the next complete verifies the upload again 15 minutes after that pass.
             row = db.execute("SELECT status, finalize_started_at FROM uploads WHERE id=?", (upload_id,)).fetchone()
             return bool(row) and row["status"] == "FINALIZING" and row["finalize_started_at"] == started
 
