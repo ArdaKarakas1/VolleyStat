@@ -278,8 +278,13 @@ def test_deleting_the_logo_answers_404_on_read_and_moves_the_version(client, sto
     team = create_team(client)
     member = as_account(client, storage, "test.uye")
     seed_member(storage, team["id"], "test.uye")
+    # Without a logo the answer is 404 whatever the phone holds: no tag, the tag of the current version 0, or *.
+    # The 304 check comes after the logo check, so no tag makes a missing logo look kept (checker P5-C2).
     for size in ("large", "small"):
-        assert refused_as(read_logo(member, team["id"], size), 404, "LOGO_NOT_FOUND")["details"] == {}
+        for held in (None, '"0"', 'W/"0"', "*"):
+            headers = {} if held is None else {"If-None-Match": held}
+            error = refused_as(read_logo(member, team["id"], size, **headers), 404, "LOGO_NOT_FOUND")
+            assert error["details"] == {}, held
     assert put_logo(client, team["id"]).json() == {"logo": {"version": 1}}
 
     deleted = client.delete(logo_url(team["id"]))
@@ -288,7 +293,9 @@ def test_deleting_the_logo_answers_404_on_read_and_moves_the_version(client, sto
     for caller in (client, member):
         assert caller.get(f"/v1/teams/{team['id']}").json()["logo"] is None
         for size in ("large", "small"):
-            refused_as(read_logo(caller, team["id"], size, **{"If-None-Match": '"1"'}), 404, "LOGO_NOT_FOUND")
+            # The deleted logo's tag, the tag of the version the deletion moved to, and * all find no logo.
+            for held in ('"1"', '"2"', 'W/"2"', '"1", "2"', "*"):
+                refused_as(read_logo(caller, team["id"], size, **{"If-None-Match": held}), 404, "LOGO_NOT_FOUND")
 
     # A repeat finds nothing to delete and changes nothing.
     before = snapshot(storage)
@@ -421,6 +428,42 @@ def test_a_replaced_or_removed_logo_leaves_no_bytes_in_the_database_files(client
     # The other team's logo is still there, so the check did not pass on an emptied file.
     assert b"KALANBUYUKLO" in after and b"KALANKUCUKLO" in after
     assert read_logo(client, kept["id"], "large").content == other[0]
+
+
+def test_a_change_of_one_image_alone_moves_the_version_and_leaves_no_bytes_of_the_old_image(client, storage,
+                                                                                         bystander):
+    """The version moves when either image changes, not only when the large one does (checker P5-C1). Otherwise the
+    new image would be dropped without a word, and every phone would keep the old one through 304."""
+    team = create_team(client, name="LogoTakimi")
+    member = as_account(client, storage, "test.uye")
+    seed_member(storage, team["id"], "test.uye")
+    bystander()
+    large, new_large = marked(LARGE, b"AYNIBUYUKLOG", 20 * KIB), marked(LARGE, b"YENIBUYUKLOG", 10 * KIB)
+    small, new_small = marked(SMALL, b"ILKKUCUKLOGO", 6 * KIB), marked(SMALL, b"YENIKUCUKLOG", 4 * KIB)
+    assert put_logo(client, team["id"], large, small).json() == {"logo": {"version": 1}}
+    assert all(mark in database_bytes(storage) for mark in (b"AYNIBUYUKLOG", b"ILKKUCUKLOGO")), \
+        "the test can not see what it looks for"
+
+    # The same large image with a new small one.
+    assert put_logo(client, team["id"], large, new_small).json() == {"logo": {"version": 2}}
+    assert logo_columns(storage, team["id"]) == {"logo": large, "logo_small": new_small, "logo_version": 2}
+    for size, data in (("large", large), ("small", new_small)):
+        read = read_logo(member, team["id"], size, **{"If-None-Match": '"1"'})
+        assert read.status_code == 200 and read.content == data and read.headers["etag"] == '"2"', size
+    assert member.get(f"/v1/teams/{team['id']}").json()["logo"] == {"version": 2}
+    after = database_bytes(storage)
+    assert b"ILKKUCUKLOGO" not in after
+    assert b"AYNIBUYUKLOG" in after and b"YENIKUCUKLOG" in after
+
+    # A new large image with the same small one.
+    assert put_logo(client, team["id"], new_large, new_small).json() == {"logo": {"version": 3}}
+    assert logo_columns(storage, team["id"]) == {"logo": new_large, "logo_small": new_small, "logo_version": 3}
+    for size, data in (("large", new_large), ("small", new_small)):
+        read = read_logo(member, team["id"], size, **{"If-None-Match": '"2"'})
+        assert read.status_code == 200 and read.content == data and read.headers["etag"] == '"3"', size
+    after = database_bytes(storage)
+    assert b"AYNIBUYUKLOG" not in after
+    assert b"YENIBUYUKLOG" in after and b"YENIKUCUKLOG" in after
 
 
 @pytest.mark.parametrize("how", ["delete", "leave"])
